@@ -1,0 +1,5 @@
+interface:
+  display_name: "初始化时间线项目"
+  short_description: "访谈后安全创建时间线项目、当前状态与双层知识库"
+  default_prompt: "Use $init-project to initialize a new timeline-driven project workspace."
+
