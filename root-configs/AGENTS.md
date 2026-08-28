@@ -1,0 +1,32 @@
+# 工作区 · Agent 入口
+
+本文件是工作区规则控制面。项目入口只补充本项目差异；跨项目规则只在 `.system/rules/` 维护。
+
+元规则：[`.system/rules/元规则.md`](.system/rules/元规则.md)
+
+## 安全边界
+
+- 发送、发布、推送、部署、删除、覆盖或向公共系统写入前，必须取得明确授权。
+- 外发内容、个人信息和医疗相关材料默认先生成草稿。
+- 修改前检查版本库与工作区状态，只触碰本次任务范围。
+- 信息不足时先说明已知、未知与假设；不得把推断写成事实。
+
+## 按需路由
+
+| 任务 | 真源 |
+|---|---|
+| 系统边界、项目索引、交付文件 | `.system/rules/项目运行规则.md` |
+| 开发与验证 | `.system/rules/开发通用规则.md` |
+| Spec、任务状态、Board-Platform / Dashboard 联动 | `.system/rules/开发项目联动规则.md` |
+| 规则、AGENTS 与代码库治理 | `.system/rules/代码库重构与治理规则.md` |
+| 工作区自然语言指令与任务解析 | `.system/rules/工作区指令.md` |
+| 表达与可视化 | `.system/rules/表达文风规则.md` |
+| 对外发布 | `.system/rules/对外发布规则.md` |
+| 知识沉淀 | `.system/rules/知识库规则.md` |
+| Skill 维护 | `.system/rules/Skill规范.md` |
+| Dashboard / Board-Platform / 待办管理 | Skill `internal-board`（`.system/skills/internal-board`） |
+| 会议纪要生成 | Skill `internal-minutes`（`.system/skills/internal-minutes`） |
+| 财务报销与发票归总 | `.system/rules/财务报销规则.md` |
+| 项目注册表（工作区项目索引） | `.data/registry.md` |
+
+进入具体项目后，先读最近的 `AGENTS.md`，再按其中路由读取 README、Spec 或操作文档。仅在任务涉及 Dashboard、Board-Platform、联网、发布或特定工具时加载对应规则或 Skill。

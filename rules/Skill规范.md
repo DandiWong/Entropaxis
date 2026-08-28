@@ -1,12 +1,12 @@
 # Skill 规范
 
-本规则只定义 Internal-Org 工作区维护 Skill 的归属和边界。创建或更新 Skill 时优先使用已提供的 `skill-creator` 指南，不在这里复制运行时格式说明。
+本规则只定义本工作区维护 Skill 的归属和边界。创建或更新 Skill 时优先使用已提供的 `skill-creator` 指南，不在这里复制运行时格式说明。
 
 ## 归属
 
 - 工作区 Skill 真源位于 `.system/skills/<skill-name>/`。
 - 仅供本工作区使用的 Skill 可以引用根规则和系统规则。
-- 需要分发到其他环境的 Skill 必须自包含，不依赖 Internal-Org 私有路径或未随包发布的文件。
+- 需要分发到其他环境的 Skill 必须自包含，不依赖工作区私有路径或未随包发布的文件。
 - 全局安装目录和其他 Agent 目录不是源文件位置；只有明确要求安装或发布时才同步。
 
 ## 内容边界
@@ -23,6 +23,12 @@
 3. 做最小修改；同步更新受影响的脚本、模板或示例。
 4. 运行现有检查或最小可执行验证。
 5. 仅在该 Skill 已采用版本或变更日志时更新它们；发布和安装需另行明确授权。
+
+## 凭证存储
+
+工作区 Skill 使用的 API Token 与凭证统一存入 `.data/credentials/<skill-name>/`（如 `.data/credentials/internal-board/token`）。  
+`.data/` 已由根 `.gitignore` 排除，不会进入版本库。  
+全局安装（脚本运行时检测不到 `.data/` 目录）时降级到 `~/.config/<skill-name>/token`。
 
 ## 安全
 
