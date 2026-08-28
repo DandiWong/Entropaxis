@@ -52,6 +52,21 @@
 
 ---
 
+## 🪟 Windows 安装注意事项（Agent 决策参考）
+
+Windows 环境下存在若干与 macOS/Linux 不同的限制，Agent 遇到以下症状时应直接执行对应策略，不要多轮试错：
+
+| 症状 | Agent 应对策略 |
+|------|--------------|
+| `git clone` 返回 404 或认证失败 | 立即告知用户在**已登录的浏览器**中打开仓库 → Code → Download ZIP；停止尝试其他认证方式 |
+| 需要复用浏览器登录态 | 先用 `netstat -an \| findstr 9222` 确认调试端口已监听；未监听则告知用户以 `--remote-debugging-port=9222` 重启 Chrome，确认后再继续；无法确认则放弃该路径 |
+| PowerShell 返回空输出或报错 | 改用 `cmd /c <命令>` 执行，或用 `Out-File` 将输出写入临时文件再读取 |
+| `.system` / `.data` 在文件管理器中可见 | 执行 `attrib +h +s <路径>\.system` 和 `attrib +h +s <路径>\.data` |
+
+> `bootstrap.py` 在 Windows 下运行完成后会自动打印上述提示。
+
+---
+
 ## 🛠️ 常用开发与治理入口
 
 - **根入口软链自愈**：`python3 .system/tools/bootstrap.py`
