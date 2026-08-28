@@ -1,6 +1,10 @@
-# 智能工作区系统工程（.system）
+# Entropaxis
 
-> **人机协作控制面** · 规则抽象 · 技能生态 · 自动化治理
+> Turns entropy into taxis: a human-AI workspace that routes disorder into structured, executable action.
+
+---
+
+**人机协作控制面** · 规则抽象 · 技能生态 · 自动化治理
 
 ---
 
