@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """
 工作区根入口与系统配置初始化工具 (Bootstrap)
-用于一键恢复工作区根目录的 AGENTS.md / CLAUDE.md 软链接，并自适应引导环境。
+用于一键同步工作区根目录的 AGENTS.md / CLAUDE.md 入口文件，并自适应引导环境。
 """
 import os
 import sys
 import shutil
 from pathlib import Path
 
-def setup_symlinks(verbose: bool = True) -> bool:
+def sync_root_configs(verbose: bool = True) -> bool:
+    """
+    将 .system/root-configs 下的入口配置物理同步至工作区根目录。
+    为避免 Synology Drive / 云同步网盘在跨平台同步时对软链接产生 Conflict 冲突，
+    采用幂等文件复制（shutil.copy2）作为标准同步策略。
+    """
     tools_dir = Path(__file__).resolve().parent
     system_dir = tools_dir.parent
     ws_root = system_dir.parent
@@ -28,33 +33,22 @@ def setup_symlinks(verbose: bool = True) -> bool:
             continue
 
         try:
+            # 如果目标是软链接或已存在文件，直接清理后复制，消除网盘软链接冲突
             if dst.is_symlink() or dst.exists():
                 dst.unlink()
-            # 建立相对路径软链接，保证跨机器迁移路径依然有效
-            dst.symlink_to(Path(".system/root-configs") / filename)
-            # 验证软链接是否真实建立（Windows 无权限时静默失败）
-            if not dst.exists() and not dst.is_symlink():
-                raise OSError("symlink created but not visible, falling back to hard link")
+            shutil.copy2(src, dst)
             if verbose:
-                print(f"✅ 入口链接就绪: {filename} -> .system/root-configs/{filename}")
-        except OSError:
-            # 降级：NTFS 硬链接，同盘无需管理员权限
-            try:
-                os.link(src, dst)
-                if verbose:
-                    print(f"✅ 入口硬链接就绪（symlink 不可用）: {filename}")
-            except Exception:
-                # 最终降级：文件复制（需手动同步）
-                try:
-                    shutil.copy2(src, dst)
-                    if verbose:
-                        print(f"⚠️  入口文件复制就绪（需手动同步更新）: {filename}")
-                except Exception as e3:
-                    if verbose:
-                        print(f"❌ 建立链接失败 ({filename}): {e3}", file=sys.stderr)
-                    success = False
+                print(f"✅ 入口文件同步就绪: {filename} <- .system/root-configs/{filename}")
+        except Exception as e:
+            if verbose:
+                print(f"❌ 入口同步失败 ({filename}): {e}", file=sys.stderr)
+            success = False
 
     return success
+
+
+# 兼容旧接口命名
+setup_symlinks = sync_root_configs
 
 def check_dashboard_token() -> bool:
     """检查看板凭证是否就绪"""

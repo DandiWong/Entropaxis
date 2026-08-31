@@ -24,12 +24,11 @@
 当 AI Agent 接入或初始化本工作区时，请严格遵守以下操作协议：
 
 1. **仓库挂载与初始化**  
-   将本仓库作为 `.system/` 目录置于工作区根目录下，并首先执行软链接挂载工具：
+   将本仓库作为 `.system/` 目录置于工作区根目录下，并首先执行入口配置同步工具：
    ```bash
    python3 .system/tools/bootstrap.py
    ```
-   该工具会自动将 `.system/root-configs/` 下的 `AGENTS.md` 与 `CLAUDE.md` 软链接至工作区根目录，建立全局统一的规则控制面。
-
+   该工具会自动将 `.system/root-configs/` 下的 `AGENTS.md` 与 `CLAUDE.md` 物理同步至工作区根目录，建立全局统一的规则控制面（纯文件复制，杜绝云同步网盘跨平台软链冲突）。
 2. **规则与上下文纪律**  
    - 严格遵循根 `AGENTS.md` 常驻层控制面与 `.system/rules/` 架构规范；
    - 坚持**单一真源（Single Source of Truth）**、**上下文瘦身**与 **YAGNI 原则**，禁止跨层级复制规则或创建冗余文件；
@@ -100,7 +99,7 @@
 
 ## 🛠️ 常用开发与治理入口
 
-- **根入口软链自愈**：`python3 .system/tools/bootstrap.py`
+- **根入口配置同步/自愈**：`python3 .system/tools/bootstrap.py`
 - **通用项目脚手架初始化**：`python3 .system/tools/init_project.py <项目名>`
 - **软件应用脚手架初始化**：`python3 .system/tools/init_app.py <app-name> --target-dir <项目路径>/02_开发`
 - **工作区规则与健康度体检**：`python3 .system/tools/lint_workspace.py`
