@@ -17,20 +17,44 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 
-# 1. 预算与水位线配置
-RESIDENT_MAX_LINES = 50          # 根 AGENTS.md 最大允许行数（薄常驻门禁）
-PROJECT_AGENTS_MAX_LINES = 60    # 项目级 AGENTS.md 最大允许行数
-MAX_CURRENT_STATE_LINES = 120    # _契约/当前状态.md 最大允许行数（避免历史堆积）
-
+# 工作区常驻层预算
+RESIDENT_MAX_LINES = 50
+PROJECT_AGENTS_MAX_LINES = 60
+MAX_CURRENT_STATE_LINES = 120
 
 EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "repo/dify")
 
-# 系统专属 Skill 名称（在对应 skills/<name>/ 内豁免检查）
-SYSTEM_SKILL_NAMES = ("internal-board", "internal-minutes", "internal-deck",
-                      "internal-org-poster", "init-project")
-
 # rules/ 禁用具体业务系统名（检查 rules/ 零系统绑定）
 FORBIDDEN_IN_RULES = ("内部操作手册", "Board-Platform联动规则", "internal-org.dev")
+
+# .system 健康度：控制面可发现、可渲染、可执行的最小契约。
+SYSTEM_REQUIRED_DIRECTORIES = ("root-configs", "rules", "templates", "tools", "skills", "tests")
+SYSTEM_REQUIRED_FILES = (
+    "AGENTS.md",
+    "README.md",
+    "root-configs/AGENTS.md",
+    "root-configs/CLAUDE.md",
+    "tools/bootstrap.py",
+    "tools/init_project.py",
+    "tools/init_app.py",
+    "tools/lint_workspace.py",
+)
+SYSTEM_TEMPLATE_VARIABLES = {
+    "项目名",
+    "开始日期",
+    "用途和目标",
+    "相关人员",
+    "下一关键事件",
+    "已有材料",
+    "项目独有知识",
+    "共享知识",
+    "敏感级别",
+    "Dashboard项目ID",
+    "ROOT_AGENTS_PATH",
+    "应用名",
+    "产品定位与核心价值",
+    "用户与使用场景",
+}
 
 def check_resident_budget(root: Path) -> list[str]:
     """检查常驻层文件行数与体积预算。"""
@@ -230,37 +254,168 @@ def check_dashboard_task_hygiene(root: Path) -> list[str]:
     return issues
 
 
+
+
+def check_system_layout(root: Path) -> list[str]:
+    """检查 .system 控制面所需目录和入口文件。"""
+    system = root / ".system"
+    issues = []
+    for directory in SYSTEM_REQUIRED_DIRECTORIES:
+        if not (system / directory).is_dir():
+            issues.append(f"[系统结构缺失] .system/{directory}/ 不存在。")
+    for filename in SYSTEM_REQUIRED_FILES:
+        if not (system / filename).is_file():
+            issues.append(f"[系统入口缺失] .system/{filename} 不存在。")
+    return issues
+
+
+def check_system_entry_sync(root: Path) -> list[str]:
+    """检查根入口是否与 .system/root-configs 的唯一真源一致。"""
+    system = root / ".system"
+    issues = []
+    for filename in ("AGENTS.md", "CLAUDE.md"):
+        source = system / "root-configs" / filename
+        target = root / filename
+        if not source.is_file() or not target.is_file():
+            continue
+        if target.read_text(encoding="utf-8") != source.read_text(encoding="utf-8"):
+            issues.append(
+                f"[根入口漂移] {filename} 与 .system/root-configs/{filename} 内容不一致；运行 bootstrap.py 恢复。"
+            )
+    return issues
+
+
+def check_system_markdown_links(root: Path) -> list[str]:
+    """检查 .system 内 Markdown 显式本地链接不指向不存在的路径。"""
+    system = root / ".system"
+    issues = []
+    link_pattern = re.compile(r"\[[^\]]*]\(([^)\s]+)(?:\s+[^)]*)?\)")
+    for document in system.rglob("*.md"):
+        for target in link_pattern.findall(document.read_text(encoding="utf-8")):
+            target = target.strip("<>")
+            if not target or target.startswith(("#", "/", "~", "http:", "https:", "mailto:")):
+                continue
+            path = target.split("#", 1)[0]
+            base = root if document.parent == system / "root-configs" else document.parent
+            if path and not (base / path).exists():
+                issues.append(
+                    f"[路由断链] {document.relative_to(root)} → {target} 不存在。"
+                )
+    return issues
+
+
+def check_system_templates(root: Path) -> list[str]:
+    """检查模板完备性与变量契约，保证两个脚手架可独立渲染。"""
+    templates = root / ".system" / "templates"
+    issues = []
+    required = (
+        "AGENTS.template.md",
+        "CLAUDE.template.md",
+        "项目总览.template.md",
+        "当前状态.template.md",
+        "知识库索引.template.md",
+        "DocsIndex.template.md",
+        "Product.template.md",
+        "Tasks.template.md",
+    )
+    for filename in required:
+        template = templates / filename
+        if not template.is_file():
+            issues.append(f"[模板缺失] .system/templates/{filename} 不存在。")
+            continue
+        text = template.read_text(encoding="utf-8")
+        variables = set(re.findall(r"{{([^{}]+)}}", text))
+        unknown = variables - SYSTEM_TEMPLATE_VARIABLES
+        if unknown:
+            issues.append(
+                f"[模板变量未知] .system/templates/{filename} 包含未声明变量：{', '.join(sorted(unknown))}。"
+            )
+        if "{{" in re.sub(r"{{[^{}]+}}", "", text) or "}}" in re.sub(r"{{[^{}]+}}", "", text):
+            issues.append(f"[模板变量失配] .system/templates/{filename} 含未闭合变量标记。")
+    return issues
+
+
+def check_system_skills(root: Path) -> list[str]:
+    """检查每个系统 Skill 的入口与元数据名称。"""
+    skills = root / ".system" / "skills"
+    issues = []
+    if not skills.is_dir():
+        return issues
+    for skill_dir in skills.iterdir():
+        if not skill_dir.is_dir():
+            continue
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_file.is_file():
+            issues.append(f"[Skill入口缺失] {skill_dir.relative_to(root)}/SKILL.md 不存在。")
+            continue
+        text = skill_file.read_text(encoding="utf-8")
+        name = re.search(r"^name:\s*(.+)$", text, re.MULTILINE)
+        description = re.search(r"^description:\s*(.+)$", text, re.MULTILINE)
+        if not name or name.group(1).strip().strip('"') != skill_dir.name:
+            issues.append(
+                f"[Skill名称失配] {skill_file.relative_to(root)} 的 name 必须是 {skill_dir.name}。"
+            )
+        if not description:
+            issues.append(f"[Skill路由缺失] {skill_file.relative_to(root)} 缺少 description 触发描述。")
+    return issues
+
+
+def check_system_tools_compile(root: Path) -> list[str]:
+    """编译 .system/tools 下脚本，阻止控制面工具语法损坏。"""
+    tools = root / ".system" / "tools"
+    issues = []
+    if not tools.is_dir():
+        return issues
+    for tool in tools.glob("*.py"):
+        try:
+            compile(tool.read_text(encoding="utf-8"), str(tool), "exec")
+        except SyntaxError as error:
+            issues.append(
+                f"[工具语法错误] {tool.relative_to(root)}:{error.lineno}: {error.msg}"
+            )
+    return issues
 def main() -> int:
     print(f"🔍 开始对工作区进行健康度与上下文瘦身体检: {ROOT}\n" + "=" * 60)
 
     checks = [
-        ("1. 常驻层 Token 预算检查", check_resident_budget),
-        ("2. 契约状态文件历史堆积检查", check_current_state_bloat),
-        ("3. 规则单一真源去重检查", check_rule_deduplication),
-        ("4. Dashboard 看板任务健康度检查", check_dashboard_task_hygiene),
-        ("5. CLAUDE.md 薄壳纯净度检查", check_claude_md_thin_shell),
-        ("6. rules/ 零系统绑定检查", check_rules_zero_system_binding),
-        ("7. Skill 软链健康度检查", check_skill_symlink_health),
-        ("8. 项目注册表存在性检查", check_registry_exists),
+        ("1. .system 结构完整性检查", check_system_layout, True),
+        ("2. 根入口真源同步检查", check_system_entry_sync, True),
+        ("3. .system 路由链接检查", check_system_markdown_links, True),
+        ("4. 脚手架模板契约检查", check_system_templates, True),
+        ("5. Skill 入口与触发元数据检查", check_system_skills, True),
+        ("6. .system 工具语法检查", check_system_tools_compile, True),
+        ("7. 常驻层 Token 预算检查", check_resident_budget, False),
+        ("8. 契约状态文件历史堆积检查", check_current_state_bloat, False),
+        ("9. 规则单一真源去重检查", check_rule_deduplication, False),
+        ("10. Dashboard 看板任务健康度检查", check_dashboard_task_hygiene, False),
+        ("11. CLAUDE.md 薄壳纯净度检查", check_claude_md_thin_shell, False),
+        ("12. rules/ 零系统绑定检查", check_rules_zero_system_binding, False),
+        ("13. Skill 软链健康度检查", check_skill_symlink_health, False),
+        ("14. 项目注册表存在性检查", check_registry_exists, False),
     ]
 
     all_issues = []
-    for title, fn in checks:
+    blocking_issues = []
+    for title, fn, blocking in checks:
         issues = fn(ROOT)
-        status = "✅ 正常" if not issues else f"⚠️ 发现 {len(issues)} 项建议"
+        status = "✅ 正常" if not issues else f"{'❌ 阻断' if blocking else '⚠️ 建议'} {len(issues)} 项"
         print(f"{title}: {status}")
-        for iss in issues:
-            print(f"   • {iss}")
-            all_issues.append(iss)
+        for issue in issues:
+            print(f"   • {issue}")
+            all_issues.append(issue)
+            if blocking:
+                blocking_issues.append(issue)
         print()
 
     print("=" * 60)
+    if blocking_issues:
+        print(f"❌ 体检失败：{len(blocking_issues)} 项 .system 控制面契约未满足。")
+        return 1
     if not all_issues:
-        print("🎉 工作区体检完毕：所有规则严格符合单一真源、薄常驻与上下文瘦身规范！")
-        return 0
+        print("🎉 工作区体检完毕：所有控制面与治理规则均符合要求！")
     else:
-        print(f"💡 体检完成：共发现 {len(all_issues)} 项优化建议，请按需维护调整。")
-        return 0
+        print(f"💡 体检完成：共发现 {len(all_issues)} 项治理优化建议，请按需维护调整。")
+    return 0
 
 
 if __name__ == "__main__":

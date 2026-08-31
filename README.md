@@ -50,6 +50,22 @@
 
 > 📌 **数据隔离说明**：工作区实例数据（业务项目注册表、内部战略、凭据）独立存放于 `.data/`（与 `.system/` 同级），严禁提交至公共系统仓库。
 
+## 🩺 `.system` 健康度指标
+
+健康度是可执行门禁，不做主观打分。`python3 .system/tools/lint_workspace.py` 在既有工作区体检前先检查控制面。
+
+| 指标 | 检查规则 | 失败后的修复动作 |
+|---|---|---|
+| **结构完整性** | `root-configs/`、`rules/`、`templates/`、`tools/`、`skills/`、`tests/` 及关键入口均存在 | 从仓库恢复缺失文件，不以项目文件替代系统真源 |
+| **根入口同步** | 工作区 `AGENTS.md`、`CLAUDE.md` 内容与 `root-configs/` 一致 | 运行 `bootstrap.py` 恢复入口 |
+| **路由完整性** | `.system` 内显式 Markdown 本地链接均可解析 | 修正链接或补齐唯一真源 |
+| **模板契约** | 通用项目与软件应用脚手架所需模板齐全；变量闭合且属于声明集合 | 修复模板变量，避免生成未渲染文件 |
+| **Skill 可发现性** | 每个 Skill 有 `SKILL.md`，`name` 与目录名一致，包含 `description` 触发描述 | 补齐入口或修正元数据 |
+| **工具可执行性** | `tools/*.py` 均能通过 Python 编译 | 修复语法错误后再发布系统改动 |
+| **治理卫生** | 保留既有薄常驻、契约水位、规则去重、零系统绑定、软链与注册表检查 | 按诊断将事实下沉至唯一真源或运行指定修复工具 |
+
+前六项属于**阻断项**：任一失败，命令以退出码 `1` 结束；治理卫生属于**建议项**：保留诊断但不阻断使用。指标只检查可客观验证的控制面契约；业务内容质量、项目进度和 Dashboard 数据完整性不以此工具裁决。
+
 ---
 
 ## 🪟 Windows 安装常见问题（人类须知！！！）
@@ -85,7 +101,8 @@
 ## 🛠️ 常用开发与治理入口
 
 - **根入口软链自愈**：`python3 .system/tools/bootstrap.py`
-- **新项目脚手架初始化**：`python3 .system/tools/init_project.py <项目路径>`
+- **通用项目脚手架初始化**：`python3 .system/tools/init_project.py <项目名>`
+- **软件应用脚手架初始化**：`python3 .system/tools/init_app.py <app-name> --target-dir <项目路径>/02_开发`
 - **工作区规则与健康度体检**：`python3 .system/tools/lint_workspace.py`
 - **核心开发与联动规则**：
   - [`.system/rules/开发通用规则.md`](rules/开发通用规则.md)

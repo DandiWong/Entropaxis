@@ -1,8 +1,8 @@
 ---
 name: init-project
-description: "v1.0.0. 通过简短访谈，在系统工程同级安全初始化时间线驱动的独立项目，建立项目总览、当前状态、知识归档，并关联或创建 Dashboard 项目；开发或文档密集型项目可同时初始化分类 docs 布局。用户要求新建、初始化或 init 项目工作区时使用；拒绝覆盖已有目录。"
+description: "v1.1.0. 通过简短访谈安全初始化时间线驱动的通用业务/综合项目（5 域 + 2 契约 + RawInput）；需要代码工程时，改在 02_开发/<app>/ 以独立软件应用脚手架初始化 PRODUCT、tasks、src、test 与 docs。用户要求新建、初始化或 init 项目/应用工作区时使用；拒绝覆盖已有目录。"
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # 初始化项目
@@ -18,7 +18,7 @@ metadata:
 7. 是否涉及内部敏感、个人或医疗数据、拟对外发布？
 8. Dashboard 要关联现有项目、创建新项目，还是暂不关联？
 
-项目明显包含代码仓库或需要长期维护大量产品/架构文档时，再确认是否启用分类 `docs/` 布局；普通时间线项目不增加这项追问，也不创建空 `docs/`。
+通用项目始终初始化标准 5 域结构；软件工程代码库只在用户明确需要时，以独立应用脚手架创建在 `02_开发/<app>/`，不在项目根创建 `docs/`。
 
 信息不足时允许填写“待补充”，但项目名称必须明确。
 
@@ -33,7 +33,7 @@ metadata:
 
 Dashboard 不可用时不要直接改 SQLite；完成目录初始化但明确报告尚未关联。
 
-从 `.system` 根目录调用：
+从 `.system` 根目录调用（初始化通用业务/综合项目）：
 
 ```bash
 python3 tools/init_project.py "<项目名>" \
@@ -47,15 +47,14 @@ python3 tools/init_project.py "<项目名>" \
   --dashboard-project-id "<Dashboard返回或确认的项目ID>"
 ```
 
-开发或文档密集型项目在命令末尾增加：
+该命令创建标准的通用项目分层结构（`_契约/`、`RawInput/`、`00_材料/`、`01_项目/`、`02_开发/`、`03_交付/`、`Archive/` 以及 `_项目总览.md`、`_契约/当前状态.md`、`AGENTS.md`、`CLAUDE.md`）。
+
+当项目需要在 `02_开发/<app>/` 下初始化独立软件工程代码仓库时，调用软件工程脚手架：
 
 ```bash
-python3 tools/init_project.py "<项目名>" [其余参数] --docs-layout
+python3 tools/init_app.py "<app-name>" --target-dir "<项目路径>/02_开发" --purpose "<定位与价值>"
 ```
 
-该选项创建 `docs/README.md` 以及 `00_project/`、`01_research/`、`02_product/`、`03_design/mockups/`、`04_architecture/specs/`、`05_reports/`、`06_archive/`。`docs/README.md` 说明真源顺序与命名规范：独立交付物用 `YYYYMMDD_PascalCaseTopic.ext`；task spec 用 `TaskID_PascalCaseTopic.md`（不带日期前缀，日期在档头 `generated.at`）。本 skill 可能单独分发，此处保留自包含表述；上游真源：交付物命名在 `.system/rules/项目运行规则.md`，task spec 命名在 `.system/rules/开发通用规则.md`，规范更新时同步本段。测试或开发过程不自动生成报告；仅在用户明确要求时创建并按日期命名。
+该命令独立创建代码工程骨架（`PRODUCT.md`、`tasks.md`、`src/`、`test/` 以及 `docs/00_project ~ 06_archive` 分类规范）。
 
-默认在系统工程同级创建项目。只有用户明确指定其他位置时才传 `--workspace`；回溯建档时才传 `--start YYYYMMDD`。
-
-完成后读取项目总览和 Dashboard 项目详情，确认 ID 与
-`workspace_path` 一致，再报告绝对路径、创建内容和关联结果。除用户确认的 `--docs-layout` 分类目录外，不创建空事件目录、阶段目录、节点目录或空业务文档。目标已存在时停止，不覆盖、不合并、不自动换名。
+完成后读取项目总览和 Dashboard 项目详情，确认 ID 与 `workspace_path` 一致，再报告绝对路径、创建内容和关联结果。目标已存在时停止，不覆盖、不合并、不自动换名。

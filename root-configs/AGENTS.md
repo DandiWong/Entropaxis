@@ -4,6 +4,11 @@
 
 元规则：[`.system/rules/元规则.md`](.system/rules/元规则.md)
 
+## 工具
+
+- 搜索用 `grep`/`find` 内置工具，多OR词用一次 `multi_grep`；必须走bash 时用 `rg`，不用 `grep`
+- 定位后用 `read` 的offset/limit 只读命中附近；工作区外已知文件直接read
+
 ## 安全边界
 
 - 发送、发布、推送、部署、删除、覆盖或向公共系统写入前，必须取得明确授权。

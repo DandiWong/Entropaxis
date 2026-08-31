@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""安全初始化时间线驱动的独立项目。"""
+"""安全初始化通用业务/综合项目（标准 5 域 + 2 契约 + RawInput 架构）。"""
 
 from __future__ import annotations
 
@@ -22,16 +22,22 @@ TEMPLATE_FILES = {
     "知识库索引.template.md": "_知识库/index.md",
 }
 
-DOCS_INDEX_TEMPLATE = "DocsIndex.template.md"
-DOCS_DIRECTORIES = (
-    "00_project",
-    "01_research",
-    "02_product",
-    "03_design/mockups",
-    "04_architecture/specs",
-    "05_reports",
-    "06_archive",
+# 标准 5 域子目录架构
+DOMAIN_DIRECTORIES = (
+    "00_材料/基础数据底册",
+    "00_材料/合作与协议",
+    "00_材料/业务凭据",
+    "01_项目/01_立项与规划",
+    "01_项目/02_会议与决策",
+    "01_项目/03_调研与分析",
+    "01_项目/04_方案与设计",
+    "02_开发",
+    "03_交付/汇报与展示",
+    "03_交付/评审与验收",
+    "03_交付/正式发布包",
+    "Archive",
 )
+
 
 
 def _validate_name(name: str) -> str:
@@ -86,7 +92,6 @@ def init_project(
     sensitivity: str = "普通内部",
     dashboard_project_id: str = "未关联",
     start: str | None = None,
-    docs_layout: bool = False,
 ) -> Path:
     name = _validate_name(name)
     start = _validate_date(start)
@@ -103,7 +108,7 @@ def init_project(
     if target.exists():
         raise ProjectInitError(f"项目目录已存在，拒绝覆盖: {target}")
 
-    # 动态计算从项目目录到工作区根的相对深度（目前 init 始终在 workspace/name，固定 1 级）
+    # 动态计算从项目目录到工作区根的相对深度
     depth = len((workspace / name).relative_to(workspace).parts)
     root_agents_path = "../" * depth + "AGENTS.md"
 
@@ -124,19 +129,21 @@ def init_project(
         destination: _render(templates / source, values)
         for source, destination in TEMPLATE_FILES.items()
     }
-    if docs_layout:
-        rendered["docs/README.md"] = _render(
-            templates / DOCS_INDEX_TEMPLATE,
-            values,
-        )
 
     with tempfile.TemporaryDirectory(prefix=".project-init-", dir=workspace) as temporary:
         staging = Path(temporary) / name
+        # 1. 契约与暂存投递箱
         (staging / "_契约").mkdir(parents=True)
         (staging / "_知识库" / "项目资料").mkdir(parents=True)
-        if docs_layout:
-            for directory in DOCS_DIRECTORIES:
-                (staging / "docs" / directory).mkdir(parents=True)
+        (staging / "RawInput").mkdir(parents=True)
+        (staging / "RawInput" / ".gitkeep").write_text("", encoding="utf-8")
+
+        # 2. 标准 5 域目录
+        for directory in DOMAIN_DIRECTORIES:
+            (staging / directory).mkdir(parents=True, exist_ok=True)
+
+
+        # 4. 写入渲染模板
         for destination, content in rendered.items():
             path = staging / destination
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -148,7 +155,7 @@ def init_project(
 
 def _parser() -> argparse.ArgumentParser:
     system_root = Path(__file__).resolve().parent.parent
-    parser = argparse.ArgumentParser(description="初始化独立的时间线项目")
+    parser = argparse.ArgumentParser(description="初始化通用业务/综合项目工作区（5 域 + 2 契约 + RawInput）")
     parser.add_argument("name", help="项目目录名")
     parser.add_argument(
         "--workspace",
@@ -169,11 +176,6 @@ def _parser() -> argparse.ArgumentParser:
         help="已确认的 Dashboard 项目 ID；不关联时省略",
     )
     parser.add_argument("--start", help="开始日期 YYYYMMDD")
-    parser.add_argument(
-        "--docs-layout",
-        action="store_true",
-        help="初始化分类 docs 布局（开发或文档密集型项目）",
-    )
     return parser
 
 
@@ -195,7 +197,6 @@ def main() -> None:
             sensitivity=args.sensitivity,
             dashboard_project_id=args.dashboard_project_id,
             start=args.start,
-            docs_layout=args.docs_layout,
         )
     except ProjectInitError as error:
         parser.error(str(error))
