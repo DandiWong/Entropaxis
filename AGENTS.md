@@ -20,6 +20,7 @@
 3. **双重体检门禁（必须通过）**：
    - 单元测试：`python3 -m unittest discover -s tests`（在 `.system` 目录下）
    - 工作区体检：`python3 tools/lint_workspace.py`（14 项指标全部 100% 绿灯）
-4. **受控 Git 交付**：
-   - 精确 `git add <file>`，严禁 `git add .` 盲目卷入未授权文件；
-   - 经用户明确授权后，提交并推送至 `origin/main`。
+4. **五维架构评估**：每次系统自迭代完成后，必须对照完备性、通用性、安全性、健壮性与可移植性进行评估并输出结论。
+5. **自动 Git 交付与同步**：
+   - 精确 `git add <file>` 暂存变更文件；
+   - 五维评估通过且无问题时，自动执行 `git commit`，并在具备权限时自动 `git push` 至远程。

@@ -1,6 +1,6 @@
 ---
 name: init-project
-description: "v1.1.0. 通过简短访谈安全初始化时间线驱动的通用业务/综合项目（5 域 + 2 契约 + RawInput）；需要代码工程时，改在 02_开发/<app>/ 以独立软件应用脚手架初始化 PRODUCT、tasks、src、test 与 docs。用户要求新建、初始化或 init 项目/应用工作区时使用；拒绝覆盖已有目录。"
+description: "v1.2.0. 通过简短访谈安全初始化时间线驱动的通用业务/综合项目（4 域 + 2 契约 + RawInput + Archive）；需要代码工程时，改在 03_工程研发/<app>/ 以独立软件应用脚手架初始化 PRODUCT、tasks、src、test 与 docs。用户要求新建、初始化或 init 项目/应用工作区时使用；拒绝覆盖已有目录。"
 metadata:
   version: "1.1.0"
 ---
@@ -18,7 +18,7 @@ metadata:
 7. 是否涉及内部敏感、个人或医疗数据、拟对外发布？
 8. Dashboard 要关联现有项目、创建新项目，还是暂不关联？
 
-通用项目始终初始化标准 5 域结构；软件工程代码库只在用户明确需要时，以独立应用脚手架创建在 `02_开发/<app>/`，不在项目根创建 `docs/`。
+通用项目始终初始化标准 4 域结构（`01_项目管理`、`02_产品设计`、`03_工程研发`、`04_运营增长`）；软件工程代码库只在用户明确需要时，以独立应用脚手架创建在 `03_工程研发/<app>/`，不在项目根创建 `docs/`。
 
 信息不足时允许填写“待补充”，但项目名称必须明确。
 
@@ -47,12 +47,12 @@ python3 tools/init_project.py "<项目名>" \
   --dashboard-project-id "<Dashboard返回或确认的项目ID>"
 ```
 
-该命令创建标准的通用项目分层结构（`_契约/`、`RawInput/`、`00_材料/`、`01_项目/`、`02_开发/`、`03_交付/`、`Archive/` 以及 `_项目总览.md`、`_契约/当前状态.md`、`AGENTS.md`、`CLAUDE.md`）。
+该命令创建标准的通用项目分层结构（`RawInput/`、`01_项目管理/`、`02_产品设计/`、`03_工程研发/`、`04_运营增长/`、`Archive/` 以及 `README.md`、`01_项目管理/DECISIONS.md`、`AGENTS.md`、`CLAUDE.md`、`04_运营增长/01_上线发布/ReleaseNote.md`）。
 
-当项目需要在 `02_开发/<app>/` 下初始化独立软件工程代码仓库时，调用软件工程脚手架：
+当项目需要在 `03_工程研发/<app>/` 下初始化独立软件工程代码仓库时，调用软件工程脚手架：
 
 ```bash
-python3 tools/init_app.py "<app-name>" --target-dir "<项目路径>/02_开发" --purpose "<定位与价值>"
+python3 tools/init_app.py "<app-name>" --target-dir "<项目路径>/03_工程研发" --purpose "<定位与价值>"
 ```
 
 该命令独立创建代码工程骨架（`PRODUCT.md`、`tasks.md`、`src/`、`test/` 以及 `docs/00_project ~ 06_archive` 分类规范）。

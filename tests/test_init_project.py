@@ -58,37 +58,47 @@ class InitProjectTests(TestCase):
                 start="20260728",
             )
 
-            # 1. 契约与入口
+            # 1. 根文件、知识库与暂存投递箱
             self.assertTrue((target / "AGENTS.md").is_file())
-            self.assertTrue((target / "_项目总览.md").is_file())
-            self.assertTrue((target / "_契约" / "当前状态.md").is_file())
+            self.assertTrue((target / "CLAUDE.md").is_file())
+            self.assertTrue((target / "README.md").is_file())
+            self.assertTrue((target / "01_项目管理" / "DECISIONS.md").is_file())
+            self.assertFalse((target / "DECISIONS.md").exists())
             self.assertTrue((target / "_知识库" / "index.md").is_file())
             self.assertTrue((target / "_知识库" / "项目资料").is_dir())
             self.assertTrue((target / "RawInput").is_dir())
             self.assertTrue((target / "RawInput" / ".gitkeep").is_file())
-
-            # 2. 标准 5 域子目录
-            self.assertTrue((target / "00_材料" / "基础数据底册").is_dir())
-            self.assertTrue((target / "00_材料" / "合作与协议").is_dir())
-            self.assertTrue((target / "00_材料" / "业务凭据").is_dir())
-            self.assertTrue((target / "01_项目" / "01_立项与规划").is_dir())
-            self.assertTrue((target / "01_项目" / "02_会议与决策").is_dir())
-            self.assertTrue((target / "01_项目" / "03_调研与分析").is_dir())
-            self.assertTrue((target / "01_项目" / "04_方案与设计").is_dir())
-            self.assertTrue((target / "02_开发").is_dir())
-            self.assertTrue((target / "03_交付" / "汇报与展示").is_dir())
-            self.assertTrue((target / "03_交付" / "评审与验收").is_dir())
-            self.assertTrue((target / "03_交付" / "正式发布包").is_dir())
+            self.assertFalse((target / "_契约").exists())
+            self.assertFalse((target / "01_项目管理" / "ChangeLog.md").exists())
+            self.assertTrue((target / "04_运营增长" / "01_上线发布" / "ReleaseNote.md").is_file())
+            # 2. 标准 4 域子目录
+            self.assertTrue((target / "01_项目管理" / "01_资料").is_dir())
+            self.assertTrue((target / "01_项目管理" / "02_调研评估").is_dir())
+            self.assertTrue((target / "01_项目管理" / "03_会议决策").is_dir())
+            self.assertTrue((target / "01_项目管理" / "04_价值回收").is_dir())
+            self.assertFalse((target / "01_项目管理" / "03_方案规划").exists())
+            self.assertTrue((target / "02_产品设计" / "01_需求清单").is_dir())
+            self.assertTrue((target / "02_产品设计" / "02_原型Demo").is_dir())
+            self.assertTrue((target / "02_产品设计" / "03_设计规范").is_dir())
+            self.assertTrue((target / "03_工程研发").is_dir())
+            self.assertTrue((target / "04_运营增长" / "01_上线发布").is_dir())
+            self.assertTrue((target / "04_运营增长" / "02_培训").is_dir())
+            self.assertTrue((target / "04_运营增长" / "03_营销推广").is_dir())
+            self.assertTrue((target / "04_运营增长" / "04_数据").is_dir())
+            self.assertTrue((target / "04_运营增长" / "05_用户反馈").is_dir())
             self.assertTrue((target / "Archive").is_dir())
-
             self.assertFalse((target / "docs").exists())
             self.assertIn(
                 "../01公司资料",
                 (target / "_知识库" / "index.md").read_text(encoding="utf-8"),
             )
             self.assertIn(
-                "Dashboard 项目 ID：`enablement`",
-                (target / "_项目总览.md").read_text(encoding="utf-8"),
+                "**Dashboard 项目 ID**：`enablement`",
+                (target / "README.md").read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "产品迭代与培训",
+                (target / "01_项目管理" / "DECISIONS.md").read_text(encoding="utf-8"),
             )
             agent_rules = (target / "AGENTS.md").read_text(encoding="utf-8")
             self.assertIn("本文件只记录项目特殊规则", agent_rules)
@@ -110,7 +120,8 @@ class InitProjectTests(TestCase):
             )
 
             self.assertTrue((target / "PRODUCT.md").is_file())
-            self.assertTrue((target / "tasks.md").is_file())
+            self.assertTrue((target / "Tasks.md").is_file())
+            self.assertTrue((target / "docs" / "00_project" / "ChangeLog.md").is_file())
             self.assertTrue((target / "src").is_dir())
             self.assertTrue((target / "test").is_dir())
             self.assertTrue((target / "docs" / "README.md").is_file())
@@ -129,8 +140,7 @@ class InitProjectTests(TestCase):
             product_doc = (target / "PRODUCT.md").read_text(encoding="utf-8")
             self.assertIn("demo-app", product_doc)
             self.assertIn("智能方案审阅引擎", product_doc)
-
-            tasks_doc = (target / "tasks.md").read_text(encoding="utf-8")
+            tasks_doc = (target / "Tasks.md").read_text(encoding="utf-8")
             self.assertIn("demo-app", tasks_doc)
 
     def test_system_control_plane_health_checks_pass(self) -> None:

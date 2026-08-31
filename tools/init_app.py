@@ -104,9 +104,14 @@ def init_app(
         (staging / "PRODUCT.md").write_text(
             _render(templates / PRODUCT_TEMPLATE, values), encoding="utf-8"
         )
-        (staging / "tasks.md").write_text(
+        (staging / "Tasks.md").write_text(
             _render(templates / TASKS_TEMPLATE, values), encoding="utf-8"
         )
+        changelog_tpl = templates / "ChangeLog.template.md"
+        if changelog_tpl.exists():
+            (staging / "docs" / "00_project" / "ChangeLog.md").write_text(
+                _render(changelog_tpl, values), encoding="utf-8"
+            )
 
         if app_path.exists():
             for item in staging.iterdir():

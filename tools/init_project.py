@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""安全初始化通用业务/综合项目（标准 5 域 + 2 契约 + RawInput 架构）。"""
+"""安全初始化通用业务/综合项目（标准 4 域 + 2 契约 + RawInput + Archive 架构）。"""
 
 from __future__ import annotations
 
@@ -17,24 +17,27 @@ class ProjectInitError(Exception):
 TEMPLATE_FILES = {
     "AGENTS.template.md": "AGENTS.md",
     "CLAUDE.template.md": "CLAUDE.md",
-    "项目总览.template.md": "_项目总览.md",
-    "当前状态.template.md": "_契约/当前状态.md",
+    "README.template.md": "README.md",
+    "DECISIONS.template.md": "01_项目管理/DECISIONS.md",
     "知识库索引.template.md": "_知识库/index.md",
+    "ReleaseNote.template.md": "04_运营增长/01_上线发布/ReleaseNote.md",
 }
 
-# 标准 5 域子目录架构
+# 标准 4 域子目录架构
 DOMAIN_DIRECTORIES = (
-    "00_材料/基础数据底册",
-    "00_材料/合作与协议",
-    "00_材料/业务凭据",
-    "01_项目/01_立项与规划",
-    "01_项目/02_会议与决策",
-    "01_项目/03_调研与分析",
-    "01_项目/04_方案与设计",
-    "02_开发",
-    "03_交付/汇报与展示",
-    "03_交付/评审与验收",
-    "03_交付/正式发布包",
+    "01_项目管理/01_资料",
+    "01_项目管理/02_调研评估",
+    "01_项目管理/03_会议决策",
+    "01_项目管理/04_价值回收",
+    "02_产品设计/01_需求清单",
+    "02_产品设计/02_原型Demo",
+    "02_产品设计/03_设计规范",
+    "03_工程研发",
+    "04_运营增长/01_上线发布",
+    "04_运营增长/02_培训",
+    "04_运营增长/03_营销推广",
+    "04_运营增长/04_数据",
+    "04_运营增长/05_用户反馈",
     "Archive",
 )
 
@@ -132,13 +135,12 @@ def init_project(
 
     with tempfile.TemporaryDirectory(prefix=".project-init-", dir=workspace) as temporary:
         staging = Path(temporary) / name
-        # 1. 契约与暂存投递箱
-        (staging / "_契约").mkdir(parents=True)
+        # 1. 知识库与暂存投递箱
         (staging / "_知识库" / "项目资料").mkdir(parents=True)
         (staging / "RawInput").mkdir(parents=True)
         (staging / "RawInput" / ".gitkeep").write_text("", encoding="utf-8")
 
-        # 2. 标准 5 域目录
+        # 2. 标准 4 域目录
         for directory in DOMAIN_DIRECTORIES:
             (staging / directory).mkdir(parents=True, exist_ok=True)
 

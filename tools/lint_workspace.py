@@ -88,19 +88,20 @@ def check_resident_budget(root: Path) -> list[str]:
     return issues
 
 def check_current_state_bloat(root: Path) -> list[str]:
-    """检查各项目 _契约/当前状态.md 是否堆积历史。"""
+    """检查各项目 DECISIONS.md 或 _契约/当前状态.md 是否堆积历史。"""
     issues = []
-    for cs in root.glob("**/_契约/当前状态.md"):
-        if "Archive" in str(cs):
-            continue
-        try:
-            lines = cs.read_text(encoding="utf-8").splitlines()
-            if len(lines) > MAX_CURRENT_STATE_LINES:
-                issues.append(
-                    f"[状态文件堆积] {cs.relative_to(root)} 共 {len(lines)} 行（建议 $\\le {MAX_CURRENT_STATE_LINES}$ 行）。请检查是否有未归档历史结论，新结论应直接覆盖旧结论。"
-                )
-        except Exception:
-            pass
+    for pattern in ("**/DECISIONS.md", "**/_契约/当前状态.md"):
+        for cs in root.glob(pattern):
+            if "Archive" in str(cs) or ".system" in str(cs):
+                continue
+            try:
+                lines = cs.read_text(encoding="utf-8").splitlines()
+                if len(lines) > MAX_CURRENT_STATE_LINES:
+                    issues.append(
+                        f"[决策底册堆积] {cs.relative_to(root)} 共 {len(lines)} 行（建议 $\\le {MAX_CURRENT_STATE_LINES}$ 行）。请检查是否有未归档历史结论，新结论应直接覆盖旧结论。"
+                    )
+            except Exception:
+                pass
     return issues
 
 
@@ -311,8 +312,10 @@ def check_system_templates(root: Path) -> list[str]:
     required = (
         "AGENTS.template.md",
         "CLAUDE.template.md",
-        "项目总览.template.md",
-        "当前状态.template.md",
+        "README.template.md",
+        "DECISIONS.template.md",
+        "ChangeLog.template.md",
+        "ReleaseNote.template.md",
         "知识库索引.template.md",
         "DocsIndex.template.md",
         "Product.template.md",
