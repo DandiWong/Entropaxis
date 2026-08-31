@@ -2,7 +2,7 @@
 
 本文件是工作区规则控制面。项目入口只补充本项目差异；跨项目规则只在 `.system/rules/` 维护。
 
-元规则：[`.system/rules/元规则.md`](.system/rules/元规则.md)
+元规则：[`.system/rules/00_宪法-元规则.md`](.system/rules/00_宪法-元规则.md)
 
 ## 工具
 
@@ -23,7 +23,7 @@
 | 系统边界、项目索引、交付文件 | `.system/rules/项目运行规则.md` |
 | 开发与验证 | `.system/rules/开发通用规则.md` |
 | Spec、任务状态、Board-Platform / Dashboard 联动 | `.system/rules/开发项目联动规则.md` |
-| 根系统、AGENTS 与元规则治理 | `.system/rules/根系统与元规则治理.md` |
+| 根系统、AGENTS 与元规则治理 | `.system/rules/01_程序法-根系统治理.md` |
 | 工作区自然语言指令与任务解析 | `.system/rules/工作区指令.md` |
 | 表达与可视化 | `.system/rules/表达文风规则.md` |
 | 对外发布 | `.system/rules/对外发布规则.md` |
