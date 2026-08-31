@@ -107,6 +107,6 @@
 - **核心开发与联动规则**：
   - [`.system/rules/开发通用规则.md`](rules/开发通用规则.md)
   - [`.system/rules/开发项目联动规则.md`](rules/开发项目联动规则.md)
-  - [`.system/rules/代码库重构与治理规则.md`](rules/代码库重构与治理规则.md)
+  - [`.system/rules/根系统与元规则治理.md`](rules/根系统与元规则治理.md)
 
 修改系统规则前请先阅读本目录 `AGENTS.md`；业务项目实现细节应沉淀于项目自身的 README、Spec 或产物中，不反向污染系统抽象层。
