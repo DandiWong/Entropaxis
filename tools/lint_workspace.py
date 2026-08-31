@@ -22,7 +22,7 @@ RESIDENT_MAX_LINES = 50
 PROJECT_AGENTS_MAX_LINES = 60
 MAX_CURRENT_STATE_LINES = 120
 
-EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "repo/dify")
+EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "repo/dify", "graphify-out")
 
 # rules/ 禁用具体业务系统名（检查 rules/ 零系统绑定）
 FORBIDDEN_IN_RULES = ("内部操作手册", "Board-Platform联动规则", "internal-org.dev")
