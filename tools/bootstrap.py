@@ -43,10 +43,16 @@ def setup_symlinks(verbose: bool = True) -> bool:
                 os.link(src, dst)
                 if verbose:
                     print(f"✅ 入口硬链接就绪（symlink 不可用）: {filename}")
-            except Exception as e2:
-                if verbose:
-                    print(f"❌ 建立链接失败 ({filename}): {e2}", file=sys.stderr)
-                success = False
+            except Exception:
+                # 最终降级：文件复制（需手动同步）
+                try:
+                    shutil.copy2(src, dst)
+                    if verbose:
+                        print(f"⚠️  入口文件复制就绪（需手动同步更新）: {filename}")
+                except Exception as e3:
+                    if verbose:
+                        print(f"❌ 建立链接失败 ({filename}): {e3}", file=sys.stderr)
+                    success = False
 
     return success
 
