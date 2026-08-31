@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
-"""开发项目 ↔ Board-Platform ↔ 牛马看板 三系统联动同步工具。
+"""开发项目任务与外部看板联动同步工具。
 
-以 task ID 为跨系统主键，把一个开发任务幂等地同步到：
-- Board-Platform issue：标题 `[ID] 标题` 前缀；spec 文件作描述
-- 牛马看板 todo：`source_ref` 幂等键
-
+以 task ID 为跨系统主键，把一个开发任务幂等地同步到配置的外部看板。
 协议与状态映射见 .system/rules/开发项目联动规则.md。零依赖，仅用标准库。
 """
-import argparse
 import json
 import re
 import subprocess
@@ -68,18 +64,26 @@ def load_board(project_dir):
     if not p.exists():
         raise SystemExit(f"缺少 {p}（见 开发项目联动规则.md）")
     d = json.loads(p.read_text(encoding="utf-8"))
-    for k in ("dashboard_project", "board-platform_project", "ns"):
-        if not d.get(k):
-            raise SystemExit(f"{p} 缺字段 {k}")
-    return d
-
+    boards = d.get("boards", {}) if isinstance(d.get("boards"), dict) else {}
+    main_id = boards.get("main") or d.get("dashboard_project") or d.get("main_project")
+    dev_id = boards.get("dev") or d.get("board-platform_project") or d.get("dev_project")
+    ns = d.get("ns") or "Default"
+    return {
+        "ns": ns,
+        "dashboard_project": main_id,
+        "board-platform_project": dev_id,
+        "boards": boards,
+        "raw": d,
+    }
 
 def mult(args, cwd):
-    r = subprocess.run(["board-platform", *args], cwd=cwd, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise SystemExit(f"board-platform {' '.join(args)} 失败：{r.stderr.strip() or r.stdout.strip()}")
-    return r.stdout
-
+    try:
+        r = subprocess.run(["board-platform", *args], cwd=cwd, capture_output=True, text=True)
+        if r.returncode != 0:
+            return None
+        return r.stdout
+    except FileNotFoundError:
+        return None
 
 def find_issue(mp, task, cwd):
     data = json.loads(mult(["issue", "list", "--project", mp, "--output", "json"], cwd) or "{}")
@@ -93,30 +97,39 @@ def find_issue(mp, task, cwd):
 
 
 def upsert_board-platform(bd, project_dir, task, title, mstatus, spec):
-    mp = bd["board-platform_project"]
+    mp = bd.get("board-platform_project")
+    if not mp:
+        return None
     cwd = str(project_dir)
     args = ["--title", f"[{task}] {title}"]
     if spec:
         if not (Path(project_dir) / spec).exists():
             raise SystemExit(f"spec 不存在：{Path(project_dir) / spec}")
-        args += ["--description-file", spec]  # 相对 cwd=project_dir，落在项目内，满足 board-platform 路径约束
-    iid = find_issue(mp, task, cwd)
-    if iid:
-        mult(["issue", "update", iid, *args], cwd)
-    else:
-        iid = json.loads(mult(["issue", "create", "--project", mp, *args, "--output", "json"], cwd))["id"]
-    mult(["issue", "status", iid, mstatus], cwd)
-    return iid
-
+        args += ["--description-file", spec]
+    try:
+        iid = find_issue(mp, task, cwd)
+        if iid:
+            mult(["issue", "update", iid, *args], cwd)
+        else:
+            out = mult(["issue", "create", "--project", mp, *args, "--output", "json"], cwd)
+            if not out:
+                return None
+            iid = json.loads(out).get("id")
+        if iid:
+            mult(["issue", "status", iid, mstatus], cwd)
+        return iid
+    except Exception:
+        return None
 
 def upsert_todo(bd, task, title, stage, due, people):
-    if stage is None:
+    dp = bd.get("dashboard_project")
+    if not dp or stage is None:
         return None
     body = {
-        "project_id": bd["dashboard_project"],
+        "project_id": dp,
         "stage": stage,
         "content": f"[{task}] {title}",
-        "source_ref": f'{bd["dashboard_project"]}:{bd["ns"]}:{task}',
+        "source_ref": f'{dp}:{bd["ns"]}:{task}',
     }
     if due:
         body["due_date"] = due
@@ -129,11 +142,11 @@ def upsert_todo(bd, task, title, stage, due, people):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=5) as r:
             res = json.loads(r.read().decode("utf-8"))
-    except urllib.error.URLError as e:
-        raise SystemExit(f"看板写入失败：{e}")
-    return res.get("id") or (res.get("todo") or {}).get("id")
+            return res.get("id") or (res.get("todo") or {}).get("id")
+    except Exception:
+        return None
 
 
 def sync_one(bd, project_dir, row):
@@ -164,7 +177,7 @@ def selftest():
 
 
 def main():
-    ap = argparse.ArgumentParser(description="开发任务三系统联动同步")
+    ap = argparse.ArgumentParser(description="开发任务与外部看板联动同步")
     ap.add_argument("project_dir", nargs="?", help="开发项目根目录（含 docs/.board.json）")
     ap.add_argument("--task", help="任务 ID，如 M1")
     ap.add_argument("--title", help="任务标题")

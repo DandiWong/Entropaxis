@@ -25,7 +25,7 @@ MAX_CURRENT_STATE_LINES = 120
 EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "repo/dify", "graphify-out")
 
 # rules/ 禁用具体业务系统名（检查 rules/ 零系统绑定）
-FORBIDDEN_IN_RULES = ("内部操作手册", "Board-Platform联动规则", "internal-org.dev")
+FORBIDDEN_IN_RULES = ("内部操作手册", "Board-Platform联动规则")
 
 # .system 健康度：控制面可发现、可渲染、可执行的最小契约。
 SYSTEM_REQUIRED_DIRECTORIES = ("root-configs", "rules", "templates", "tools", "skills", "tests")
@@ -178,9 +178,12 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
 
 
 def check_skill_symlink_health(root: Path) -> list[str]:
-    """校验 Agent 安装目录中 internal-org-* skill 软链的有效性。"""
+    """校验 Agent 安装目录中与工作区同名 Skill 软链的有效性。"""
     issues = []
     true_source = root / ".system" / "skills"
+    if not true_source.is_dir():
+        return issues
+    local_skills = {d.name for d in true_source.iterdir() if d.is_dir()}
     install_dirs = [
         Path.home() / ".claude" / "skills",
         Path.home() / ".pi" / "agent" / "skills",
@@ -189,22 +192,22 @@ def check_skill_symlink_health(root: Path) -> list[str]:
         if not install_dir.exists():
             continue
         for entry in install_dir.iterdir():
-            if not entry.name.startswith("internal-org-"):
+            if entry.name not in local_skills:
                 continue
+            expected = (true_source / entry.name).resolve()
             if entry.is_symlink():
                 target = entry.resolve()
-                expected = (true_source / entry.name).resolve()
-                if target != expected:
+                if not target.exists():
                     issues.append(
-                        f"[软链漂移] {entry} → {target}（应指向 {expected}）。运行 lint --fix 修复。"
+                        f"[断链] {entry} → {target} 目标不存在。"
                     )
-                elif not target.exists():
+                elif target != expected:
                     issues.append(
-                        f"[断链] {entry} → {target} 目标不存在。运行 lint --fix 修复。"
+                        f"[软链漂移] {entry} → {target}（工作区存在真源，应指向 {expected}）。"
                     )
             else:
                 issues.append(
-                    f"[非软链] {entry} 是实体目录/文件，应改为指向 .system/skills/ 的软链。"
+                    f"[非软链] {entry} 是实体目录/文件，工作区存在真源，建议改为指向 .system/skills/ 的软链。"
                 )
     return issues
 

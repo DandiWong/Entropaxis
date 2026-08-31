@@ -26,7 +26,7 @@
 
 ## 凭证存储
 
-工作区 Skill 使用的 API Token 与凭证统一存入 `.data/credentials/<skill-name>/`（如 `.data/credentials/internal-board/token`）。  
+工作区 Skill 使用的 API Token 与凭证统一存入 `.data/credentials/<skill-name>/`（如 `.data/credentials/<skill-name>/token`）。  
 `.data/` 已由根 `.gitignore` 排除，不会进入版本库。  
 全局安装（脚本运行时检测不到 `.data/` 目录）时降级到 `~/.config/<skill-name>/token`。
 

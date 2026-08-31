@@ -52,9 +52,17 @@ setup_symlinks = sync_root_configs
 
 def check_dashboard_token() -> bool:
     """检查看板凭证是否就绪"""
-    config_path = Path.home() / ".config" / "internal-board" / "token"
-    return config_path.exists() and len(config_path.read_text(encoding="utf-8").strip()) > 10
-
+    ws_cred = Path(__file__).resolve().parent.parent.parent / ".data" / "credentials"
+    if ws_cred.is_dir():
+        for p in ws_cred.glob("*/token"):
+            if p.is_file() and len(p.read_text(encoding="utf-8").strip()) > 10:
+                return True
+    config_dir = Path.home() / ".config"
+    if config_dir.is_dir():
+        for p in config_dir.glob("*dashboard*/token"):
+            if p.is_file() and len(p.read_text(encoding="utf-8").strip()) > 10:
+                return True
+    return False
 def print_windows_hints() -> None:
     print("""
 ⚠️  Windows 环境已知限制（Agent 决策参考）：
@@ -71,7 +79,7 @@ def print_windows_hints() -> None:
 """)
 
 if __name__ == "__main__":
-    print("🚀 开始初始化/自愈 Internal-Org 工作区配置...")
+    print("🚀 开始初始化/自愈工作区配置...")
     if setup_symlinks(verbose=True):
         token_ready = check_dashboard_token()
         if token_ready:

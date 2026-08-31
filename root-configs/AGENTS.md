@@ -23,16 +23,16 @@
 |---|---|
 | 系统边界、项目索引、交付文件 | `.system/rules/项目运行规则.md` |
 | 开发与验证 | `.system/rules/开发通用规则.md` |
-| Spec、任务状态、Board-Platform / Dashboard 联动 | `.system/rules/开发项目联动规则.md` |
+| Spec、任务状态与外部看板联动 | `.system/rules/开发项目联动规则.md` |
 | 根系统、AGENTS 与元规则治理 | `.system/rules/01_程序法-根系统治理.md` |
 | 工作区自然语言指令与任务解析 | `.system/rules/工作区指令.md` |
 | 表达与可视化 | `.system/rules/表达文风规则.md` |
 | 对外发布 | `.system/rules/对外发布规则.md` |
 | 知识沉淀 | `.system/rules/知识库规则.md` |
 | Skill 维护 | `.system/rules/Skill规范.md` |
-| Dashboard / Board-Platform / 待办管理 | Skill `internal-board`（`.system/skills/internal-board`） |
-| 会议纪要生成 | Skill `internal-minutes`（`.system/skills/internal-minutes`） |
+| 任务看板 / 待办管理 | `.system/rules/开发项目联动规则.md`（按需调用看板 Skill 或本地适配器） |
+| 会议纪要生成 | `.system/rules/工作区指令.md`（按需调用会议纪要 Skill） |
 | 财务报销与发票归总 | `.system/rules/财务报销规则.md` |
 | 项目注册表（工作区项目索引） | `.data/registry.md` |
 
-进入具体项目后，先读最近的 `AGENTS.md`，再按其中路由读取 README、Spec 或操作文档。仅在任务涉及 Dashboard、Board-Platform、联网、发布或特定工具时加载对应规则或 Skill。
+进入具体项目后，先读最近的 `AGENTS.md`，再按其中路由读取 README、Spec 或操作文档。仅在任务涉及外部看板、联网、发布或特定工具时加载对应规则或 Skill。
