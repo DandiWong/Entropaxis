@@ -2,8 +2,9 @@
 """开发项目任务与外部看板联动同步工具。
 
 以 task ID 为跨系统主键，把一个开发任务幂等地同步到配置的外部看板。
-协议与状态映射见 .system/rules/开发项目联动规则.md。零依赖，仅用标准库。
+协议与状态映射见 .system/rules/任务看板联动.md。零依赖，仅用标准库。
 """
+import argparse
 import json
 import re
 import subprocess
@@ -62,7 +63,7 @@ def read_frontmatter(path):
 def load_board(project_dir):
     p = Path(project_dir) / "docs" / ".board.json"
     if not p.exists():
-        raise SystemExit(f"缺少 {p}（见 开发项目联动规则.md）")
+        raise SystemExit(f"缺少 {p}（见 任务看板联动.md）")
     d = json.loads(p.read_text(encoding="utf-8"))
     boards = d.get("boards", {}) if isinstance(d.get("boards"), dict) else {}
     main_id = boards.get("main") or d.get("dashboard_project") or d.get("main_project")

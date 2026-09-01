@@ -317,7 +317,7 @@ def check_system_templates(root: Path) -> list[str]:
         "CLAUDE.template.md",
         "README.template.md",
         "DECISIONS.template.md",
-        "ChangeLog.template.md",
+        "Changelog.template.md",
         "ReleaseNote.template.md",
         "知识库索引.template.md",
         "DocsIndex.template.md",

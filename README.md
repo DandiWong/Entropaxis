@@ -106,7 +106,7 @@
 - **核心开发与联动规则**：
   - [`.system/rules/00_宪法-元规则.md`](rules/00_宪法-元规则.md)
   - [`.system/rules/01_程序法-根系统治理.md`](rules/01_程序法-根系统治理.md)
-  - [`.system/rules/开发通用规则.md`](rules/开发通用规则.md)
-  - [`.system/rules/开发项目联动规则.md`](rules/开发项目联动规则.md)
+  - [`.system/rules/软件工程规范.md`](rules/软件工程规范.md)
+  - [`.system/rules/任务看板联动.md`](rules/任务看板联动.md)
 
 修改系统规则前请先阅读本目录 `AGENTS.md`；业务项目实现细节应沉淀于项目自身的 README、Spec 或产物中，不反向污染系统抽象层。

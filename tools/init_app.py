@@ -16,6 +16,7 @@ class AppInitError(Exception):
 DOCS_INDEX_TEMPLATE = "DocsIndex.template.md"
 PRODUCT_TEMPLATE = "Product.template.md"
 TASKS_TEMPLATE = "Tasks.template.md"
+CHANGELOG_TEMPLATE = "Changelog.template.md"
 
 DOCS_DIRECTORIES = (
     "00_project",
@@ -107,9 +108,9 @@ def init_app(
         (staging / "Tasks.md").write_text(
             _render(templates / TASKS_TEMPLATE, values), encoding="utf-8"
         )
-        changelog_tpl = templates / "ChangeLog.template.md"
+        changelog_tpl = templates / CHANGELOG_TEMPLATE
         if changelog_tpl.exists():
-            (staging / "docs" / "00_project" / "ChangeLog.md").write_text(
+            (staging / "docs" / "00_project" / "Changelog.md").write_text(
                 _render(changelog_tpl, values), encoding="utf-8"
             )
 
