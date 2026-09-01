@@ -26,6 +26,8 @@ EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "r
 
 # rules/ 禁用具体业务系统名（检查 rules/ 零系统绑定）
 FORBIDDEN_IN_RULES = ("内部操作手册", "Board-Platform联动规则")
+# 控制面禁止硬编码本地调试端点：外部系统交互必须经声明外置的看板/服务 CLI
+FORBIDDEN_HOST_PATTERN = re.compile(r"127\.0\.0\.1|localhost")
 
 # .system 健康度：控制面可发现、可渲染、可执行的最小契约。
 SYSTEM_REQUIRED_DIRECTORIES = ("root-configs", "rules", "templates", "tools", "skills", "tests")
@@ -159,21 +161,41 @@ def check_claude_md_thin_shell(root: Path) -> list[str]:
 
 
 def check_rules_zero_system_binding(root: Path) -> list[str]:
-    """rules/ 不得出现具体业务系统绑定文件名或已删除文件的遗留引用。"""
+    """rules/、tools/、skills/*/SKILL.md 不得出现具体业务系统绑定文件名、遗留引用；tools/skills 的可执行内容额外禁止硬编码本地端点。"""
     issues = []
-    rules_dir = root / ".system" / "rules"
-    if not rules_dir.exists():
-        return issues
-    for rf in rules_dir.glob("*.md"):
+    system = root / ".system"
+    binding_targets = []
+    if (system / "rules").exists():
+        binding_targets += list((system / "rules").glob("*.md"))
+    # 排除自身：本文件的检测常量定义天然包含被检测的关键词/正则字面量
+    operational_targets = []
+    if (system / "tools").exists():
+        operational_targets += [p for p in (system / "tools").glob("*.py") if p.name != "lint_workspace.py"]
+    if (system / "skills").exists():
+        operational_targets += list((system / "skills").glob("*/SKILL.md"))
+    binding_targets += operational_targets
+
+    for rf in binding_targets:
         try:
             content = rf.read_text(encoding="utf-8")
-            for keyword in FORBIDDEN_IN_RULES:
-                if keyword in content:
-                    issues.append(
-                        f"[规则系统绑定] {rf.name} 含禁用关键词「{keyword}」；rules/ 应为零系统绑定。"
-                    )
         except Exception:
-            pass
+            continue
+        for keyword in FORBIDDEN_IN_RULES:
+            if keyword in content:
+                issues.append(
+                    f"[规则系统绑定] {rf.relative_to(root)} 含禁用关键词「{keyword}」；应为零系统绑定。"
+                )
+    for rf in operational_targets:
+        try:
+            content = rf.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        # rules/ 允许在说明文本里举例引用本地端点写法，仅对 tools/skills 的可执行内容做硬拦截
+        if FORBIDDEN_HOST_PATTERN.search(content):
+            issues.append(
+                f"[硬编码本地端点] {rf.relative_to(root)} 出现 127.0.0.1/localhost；"
+                "外部系统交互必须经声明外置的看板/服务 CLI，不得硬编码本地调试地址。"
+            )
     return issues
 
 

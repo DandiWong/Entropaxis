@@ -1,11 +1,17 @@
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
+
+SYSTEM_ROOT = Path(__file__).resolve().parent.parent
+if str(SYSTEM_ROOT) not in sys.path:
+    sys.path.insert(0, str(SYSTEM_ROOT))
 
 from tools.backfill_frontmatter import classify
 from tools.init_app import AppInitError, init_app
 from tools.init_project import ProjectInitError, init_project
 from tools.lint_workspace import (
+    check_rules_zero_system_binding,
     check_system_entry_sync,
     check_system_layout,
     check_system_markdown_links,
@@ -15,7 +21,6 @@ from tools.lint_workspace import (
 )
 
 
-SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = SYSTEM_ROOT / "templates"
 
 
@@ -69,7 +74,7 @@ class InitProjectTests(TestCase):
             self.assertTrue((target / "RawInput").is_dir())
             self.assertTrue((target / "RawInput" / ".gitkeep").is_file())
             self.assertFalse((target / "_契约").exists())
-            self.assertFalse((target / "01_项目管理" / "ChangeLog.md").exists())
+            self.assertFalse((target / "01_项目管理" / "Changelog.md").exists())
             self.assertTrue((target / "04_运营增长" / "01_上线发布" / "ReleaseNote.md").is_file())
             # 2. 标准 4 域子目录
             self.assertTrue((target / "01_项目管理" / "01_资料").is_dir())
@@ -121,7 +126,7 @@ class InitProjectTests(TestCase):
 
             self.assertTrue((target / "PRODUCT.md").is_file())
             self.assertTrue((target / "Tasks.md").is_file())
-            self.assertTrue((target / "docs" / "00_project" / "ChangeLog.md").is_file())
+            self.assertTrue((target / "docs" / "00_project" / "Changelog.md").is_file())
             self.assertTrue((target / "src").is_dir())
             self.assertTrue((target / "test").is_dir())
             self.assertTrue((target / "docs" / "README.md").is_file())
@@ -154,6 +159,18 @@ class InitProjectTests(TestCase):
             check_system_tools_compile,
         ):
             self.assertEqual(check(workspace), [], check.__name__)
+
+    def test_zero_system_binding_flags_hardcoded_local_endpoint(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            tools_dir = workspace / ".system" / "tools"
+            tools_dir.mkdir(parents=True)
+            (tools_dir / "demo.py").write_text('URL = "http://127.0.0.1:9000"\n', encoding="utf-8")
+            issues = check_rules_zero_system_binding(workspace)
+            self.assertTrue(any("硬编码本地端点" in issue for issue in issues), issues)
+
+    def test_zero_system_binding_passes_on_real_workspace(self) -> None:
+        self.assertEqual(check_rules_zero_system_binding(SYSTEM_ROOT.parent), [])
 
     def test_app_initializer_refuses_to_overwrite_nonempty_target(self) -> None:
         with TemporaryDirectory() as temporary:

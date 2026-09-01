@@ -2,18 +2,16 @@
 """开发项目任务与外部看板联动同步工具。
 
 以 task ID 为跨系统主键，把一个开发任务幂等地同步到配置的外部看板。
-协议与状态映射见 .system/rules/任务看板联动.md。零依赖，仅用标准库。
+协议与状态映射见 .system/rules/看板联动.md。零依赖，仅用标准库。
 """
 import argparse
 import json
 import re
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
-DASHBOARD = "http://127.0.0.1:8799"
+DASH_SCRIPT = Path(__file__).resolve().parent.parent / "skills" / "internal-board" / "scripts" / "dash.py"
 
 # 单一 --status 输入 → (board-platform status, 看板 stage；stage=None 表示不进看板)
 STATUS_MAP = {
@@ -63,7 +61,7 @@ def read_frontmatter(path):
 def load_board(project_dir):
     p = Path(project_dir) / "docs" / ".board.json"
     if not p.exists():
-        raise SystemExit(f"缺少 {p}（见 任务看板联动.md）")
+        raise SystemExit(f"缺少 {p}（见 看板联动.md）")
     d = json.loads(p.read_text(encoding="utf-8"))
     boards = d.get("boards", {}) if isinstance(d.get("boards"), dict) else {}
     main_id = boards.get("main") or d.get("dashboard_project") or d.get("main_project")
@@ -122,32 +120,35 @@ def upsert_board-platform(bd, project_dir, task, title, mstatus, spec):
     except Exception:
         return None
 
+def dash(args):
+    """经由 internal-board Skill 的 dash.py CLI 调用看板（复用其 URL/Token/幂等逻辑），不直连端点。"""
+    if not DASH_SCRIPT.is_file():
+        return None
+    try:
+        r = subprocess.run(
+            [sys.executable, str(DASH_SCRIPT), *args], capture_output=True, text=True, timeout=30
+        )
+        if r.returncode != 0 or not r.stdout:
+            return None
+        return json.loads(r.stdout)
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        return None
+
+
 def upsert_todo(bd, task, title, stage, due, people):
     dp = bd.get("dashboard_project")
     if not dp or stage is None:
         return None
-    body = {
-        "project_id": dp,
-        "stage": stage,
-        "content": f"[{task}] {title}",
-        "source_ref": f'{dp}:{bd["ns"]}:{task}',
-    }
+    args = [
+        "todo", "add", "--project", dp, "--content", f"[{task}] {title}",
+        "--stage", stage, "--source-ref", f'{dp}:{bd["ns"]}:{task}',
+    ]
     if due:
-        body["due_date"] = due
+        args += ["--due", due]
     if people:
-        body["people"] = people
-    req = urllib.request.Request(
-        f"{DASHBOARD}/api/todos",
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=5) as r:
-            res = json.loads(r.read().decode("utf-8"))
-            return res.get("id") or (res.get("todo") or {}).get("id")
-    except Exception:
-        return None
+        args += ["--people", people]
+    res = dash(args)
+    return res.get("id") if res else None
 
 
 def sync_one(bd, project_dir, row):

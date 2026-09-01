@@ -104,9 +104,9 @@
 - **软件应用脚手架初始化**：`python3 .system/tools/init_app.py <app-name> --target-dir <项目路径>/02_开发`
 - **工作区规则与健康度体检**：`python3 .system/tools/lint_workspace.py`
 - **核心开发与联动规则**：
-  - [`.system/rules/00_宪法-元规则.md`](rules/00_宪法-元规则.md)
-  - [`.system/rules/01_程序法-根系统治理.md`](rules/01_程序法-根系统治理.md)
-  - [`.system/rules/软件工程规范.md`](rules/软件工程规范.md)
-  - [`.system/rules/任务看板联动.md`](rules/任务看板联动.md)
+  - [`.system/rules/00_元规则.md`](rules/00_元规则.md)
+  - [`.system/rules/01_根系统治理.md`](rules/01_根系统治理.md)
+  - [`.system/rules/软件工程.md`](rules/软件工程.md)
+  - [`.system/rules/看板联动.md`](rules/看板联动.md)
 
 修改系统规则前请先阅读本目录 `AGENTS.md`；业务项目实现细节应沉淀于项目自身的 README、Spec 或产物中，不反向污染系统抽象层。

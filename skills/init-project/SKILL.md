@@ -22,16 +22,13 @@ metadata:
 
 信息不足时允许填写“待补充”，但项目名称必须明确。
 
-初始化前先确认目标目录不存在，并读取
-`http://127.0.0.1:8799/api/board`：
+初始化前先确认目标目录不存在，并按 `internal-board` Skill 的约定经 `dash.py` 关联或创建 Dashboard 项目（不手写 HTTP 请求，不走本地端口）：
 
-- 关联现有项目：确认项目 ID 后，PATCH `/api/projects/{id}` 写入
-  `workspace_path`。
-- 创建新项目：POST `/api/projects`，至少传 `name` 和预期的
-  `workspace_path`；使用响应中的项目 ID。
+- 关联现有项目：`dash.py project get <id>` 确认项目存在，把项目 ID 写入本项目 `docs/.board.json`（结构见《看板联动.md》）。
+- 创建新项目：`dash.py project add --name "<项目名>"`，取响应中的项目 ID 写入 `docs/.board.json`。
 - 暂不关联：使用“未关联”，不调用 Dashboard 写接口。
 
-Dashboard 不可用时不要直接改 SQLite；完成目录初始化但明确报告尚未关联。
+Dashboard 不可用或未安装 `internal-board` Skill 时不要直接改 SQLite；完成目录初始化但明确报告尚未关联，优雅降级为纯本地离线初始化。
 
 从 `.system` 根目录调用（初始化通用业务/综合项目）：
 
@@ -57,4 +54,4 @@ python3 tools/init_app.py "<app-name>" --target-dir "<项目路径>/03_工程研
 
 该命令独立创建代码工程骨架（`PRODUCT.md`、`tasks.md`、`src/`、`test/` 以及 `docs/00_project ~ 06_archive` 分类规范）。
 
-完成后读取项目总览和 Dashboard 项目详情，确认 ID 与 `workspace_path` 一致，再报告绝对路径、创建内容和关联结果。目标已存在时停止，不覆盖、不合并、不自动换名。
+完成后核对 `docs/.board.json` 中记录的项目 ID 与 `dash.py project get <id>` 返回一致，再报告绝对路径、创建内容和关联结果。目标已存在时停止，不覆盖、不合并、不自动换名。
