@@ -131,3 +131,13 @@ metadata:
 ```bash
 python3 .system/skills/ppt-design/templates/generate_deck.py --output "output/my_presentation.pptx"
 ```
+
+---
+
+## 7. 交付收尾刚性门禁 (Mandatory Delivery Gate)
+
+遵循 [`.system/rules/文件交付与落盘规则.md`](../../rules/文件交付与落盘规则.md)：
+* **落盘后必开文件夹**：生成 `.pptx` 文件及相关配图后，在任务结束交付前，必须调用系统文件管理器打开产物所在目录：
+  * macOS：`open "<dir>"`
+  * Windows：`explorer "<dir>"`
+  * Linux：`xdg-open "<dir>"`

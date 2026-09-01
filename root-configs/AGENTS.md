@@ -19,17 +19,18 @@
 
 ## 按需路由
 
-| 任务 | 真源 |
+| 任务 / 触发行为 | 真源 |
 |---|---|
-| 系统边界、项目索引、交付文件 | `.system/rules/项目运行规则.md` |
-| 开发与验证 | `.system/rules/开发通用规则.md` |
+| 新建/修改/生成/导出通用文件（PPTX/DOCX/XLSX/PDF/图片/独立文档） | `.system/rules/文件交付与落盘规则.md` |
+| 系统边界、项目目录结构与组织命名 | `.system/rules/项目运行规则.md` |
+| 代码开发、调试与自动化验证 | `.system/rules/开发通用规则.md` |
 | Spec、任务状态与外部看板联动 | `.system/rules/开发项目联动规则.md` |
 | 根系统、AGENTS 与元规则治理 | `.system/rules/01_程序法-根系统治理.md` |
 | 工作区自然语言指令与任务解析 | `.system/rules/工作区指令.md` |
-| 表达与可视化 | `.system/rules/表达文风规则.md` |
-| 对外发布 | `.system/rules/对外发布规则.md` |
-| 知识沉淀 | `.system/rules/知识库规则.md` |
-| Skill 维护 | `.system/rules/Skill规范.md` |
+| 表达文风与可视化 | `.system/rules/表达文风规则.md` |
+| 对外发布与审批 | `.system/rules/对外发布规则.md` |
+| 知识沉淀与 Wiki 录入 | `.system/rules/知识库规则.md` |
+| Skill 规范与维护 | `.system/rules/Skill规范.md` |
 | 任务看板 / 待办管理 | `.system/rules/开发项目联动规则.md`（按需调用看板 Skill 或本地适配器） |
 | 会议纪要生成 | `.system/rules/工作区指令.md`（按需调用会议纪要 Skill） |
 | 财务报销与发票归总 | `.system/rules/财务报销规则.md` |
