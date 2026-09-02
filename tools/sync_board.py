@@ -3,6 +3,8 @@
 
 以 task ID 为跨系统主键，把一个开发任务幂等地同步到配置的外部看板。
 协议与状态映射见 .system/rules/看板联动.md。零依赖，仅用标准库。
+看板 Provider CLI 由工作区实例声明 .data/board_config.json 外置（角色 main/dev），
+本工具零具体系统名；未声明或 CLI 不可用时自动降级为纯本地。
 """
 import argparse
 import json
@@ -11,9 +13,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-DASH_SCRIPT = Path(__file__).resolve().parent.parent / "skills" / "internal-board" / "scripts" / "dash.py"
+# ponytail: 角色固定为 main/dev 两个，命令语法随所选 CLI；更换异语法看板时需在 Provider 声明层扩展适配
+PROVIDERS_FILE = Path(__file__).resolve().parent.parent.parent / ".data" / "board_config.json"
 
-# 单一 --status 输入 → (board-platform status, 看板 stage；stage=None 表示不进看板)
+# 单一 --status 输入 → (dev 看板状态, 主看板 stage；stage=None 表示不进主看板)
 STATUS_MAP = {
     "plan":        ("todo",        "plan"),
     "todo":        ("todo",        "plan"),
@@ -58,34 +61,66 @@ def read_frontmatter(path):
     return _parse_fm(Path(path).read_text(encoding="utf-8"))
 
 
+def load_providers():
+    """读取工作区级看板 Provider 声明（.data/board_config.json），返回 {role: {"cli": [...]}}。
+    声明缺失或损坏时返回 {}，全部联动自动降级为纯本地。"""
+    try:
+        d = json.loads(PROVIDERS_FILE.read_text(encoding="utf-8"))
+        provs = d.get("providers", d)
+        return provs if isinstance(provs, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _provider_cli(role):
+    spec = load_providers().get(role)
+    cli = spec.get("cli") if isinstance(spec, dict) else None
+    return [str(c) for c in cli] if isinstance(cli, list) and cli else None
+
+
 def load_board(project_dir):
     p = Path(project_dir) / "docs" / ".board.json"
     if not p.exists():
         raise SystemExit(f"缺少 {p}（见 看板联动.md）")
     d = json.loads(p.read_text(encoding="utf-8"))
     boards = d.get("boards", {}) if isinstance(d.get("boards"), dict) else {}
-    main_id = boards.get("main") or d.get("dashboard_project") or d.get("main_project")
-    dev_id = boards.get("dev") or d.get("board-platform_project") or d.get("dev_project")
+    main_id = boards.get("main") or d.get("main_project")
+    dev_id = boards.get("dev") or d.get("dev_project")
     ns = d.get("ns") or "Default"
     return {
         "ns": ns,
-        "dashboard_project": main_id,
-        "board-platform_project": dev_id,
+        "main_id": main_id,
+        "dev_id": dev_id,
         "boards": boards,
         "raw": d,
     }
 
-def mult(args, cwd):
+def run_role_text(role, args, cwd):
+    """按角色执行已声明 Provider CLI，返回 stdout；未声明或失败返回 None。"""
+    cli = _provider_cli(role)
+    if not cli:
+        return None
     try:
-        r = subprocess.run(["board-platform", *args], cwd=cwd, capture_output=True, text=True)
-        if r.returncode != 0:
+        r = subprocess.run([*cli, *args], cwd=cwd, capture_output=True, text=True, timeout=60)
+        return r.stdout if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+def run_role_json(role, args):
+    """按角色执行已声明 Provider CLI 并解析 JSON 输出；未声明或失败返回 None。"""
+    cli = _provider_cli(role)
+    if not cli:
+        return None
+    try:
+        r = subprocess.run([*cli, *args], capture_output=True, text=True, timeout=30)
+        if r.returncode != 0 or not r.stdout:
             return None
-        return r.stdout
-    except FileNotFoundError:
+        return json.loads(r.stdout)
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
         return None
 
 def find_issue(mp, task, cwd):
-    data = json.loads(mult(["issue", "list", "--project", mp, "--output", "json"], cwd) or "{}")
+    data = json.loads(run_role_text("dev", ["issue", "list", "--project", mp, "--output", "json"], cwd) or "{}")
     issues = data.get("issues", []) if isinstance(data, dict) else data
     pat = re.compile(r"^\[" + re.escape(task) + r"\]")
     for it in issues or []:
@@ -95,8 +130,8 @@ def find_issue(mp, task, cwd):
     # ponytail: issue list 取单页，单项目 issue 超一页再加分页
 
 
-def upsert_board-platform(bd, project_dir, task, title, mstatus, spec):
-    mp = bd.get("board-platform_project")
+def upsert_dev(bd, project_dir, task, title, mstatus, spec):
+    mp = bd.get("dev_id")
     if not mp:
         return None
     cwd = str(project_dir)
@@ -108,35 +143,20 @@ def upsert_board-platform(bd, project_dir, task, title, mstatus, spec):
     try:
         iid = find_issue(mp, task, cwd)
         if iid:
-            mult(["issue", "update", iid, *args], cwd)
+            run_role_text("dev", ["issue", "update", iid, *args], cwd)
         else:
-            out = mult(["issue", "create", "--project", mp, *args, "--output", "json"], cwd)
+            out = run_role_text("dev", ["issue", "create", "--project", mp, *args, "--output", "json"], cwd)
             if not out:
                 return None
             iid = json.loads(out).get("id")
         if iid:
-            mult(["issue", "status", iid, mstatus], cwd)
+            run_role_text("dev", ["issue", "status", iid, mstatus], cwd)
         return iid
     except Exception:
         return None
 
-def dash(args):
-    """经由 internal-board Skill 的 dash.py CLI 调用看板（复用其 URL/Token/幂等逻辑），不直连端点。"""
-    if not DASH_SCRIPT.is_file():
-        return None
-    try:
-        r = subprocess.run(
-            [sys.executable, str(DASH_SCRIPT), *args], capture_output=True, text=True, timeout=30
-        )
-        if r.returncode != 0 or not r.stdout:
-            return None
-        return json.loads(r.stdout)
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
-        return None
-
-
 def upsert_todo(bd, task, title, stage, due, people):
-    dp = bd.get("dashboard_project")
+    dp = bd.get("main_id")
     if not dp or stage is None:
         return None
     args = [
@@ -147,7 +167,7 @@ def upsert_todo(bd, task, title, stage, due, people):
         args += ["--due", due]
     if people:
         args += ["--people", people]
-    res = dash(args)
+    res = run_role_json("main", args)
     return res.get("id") if res else None
 
 
@@ -160,9 +180,9 @@ def sync_one(bd, project_dir, row):
         raise SystemExit(f"缺 task（--task 或 spec 档头 id）：{row}")
     status = norm_status(row.get("status", "plan"))
     mstatus, stage = STATUS_MAP[status]
-    iid = upsert_board-platform(bd, project_dir, task, title, mstatus, row.get("spec"))
+    iid = upsert_dev(bd, project_dir, task, title, mstatus, row.get("spec"))
     tid = upsert_todo(bd, task, title, stage, row.get("due"), row.get("people"))
-    print(f"{task}\tboard-platform={(iid or '')[:8]}\ttodo={tid or '-'}\tstatus={status}")
+    print(f"{task}\tdev={(iid or '')[:8]}\tmain={tid or '-'}\tstatus={status}")
 
 
 def selftest():
