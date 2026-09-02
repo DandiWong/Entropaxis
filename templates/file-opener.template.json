@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "本机文件打开器与应用程序关联配置模板 (File Opener Association Template)",
+  "version": "1.0.0",
+  "default_mode": "auto",
+  "formats": {
+    "word": {
+      "name": "Word文档",
+      "extensions": [".docx", ".doc"],
+      "command": "",
+      "candidates": [
+        {"name": "Microsoft Word", "cmd_macos": "open -a \"Microsoft Word\"", "cmd_windows": "start winword", "cmd_linux": "wps"},
+        {"name": "WPS Office", "cmd_macos": "open -a \"wpsoffice\"", "cmd_windows": "start wps", "cmd_linux": "wps"},
+        {"name": "Pages", "cmd_macos": "open -a \"Pages\"", "cmd_windows": "", "cmd_linux": ""}
+      ]
+    },
+    "excel": {
+      "name": "Excel表格",
+      "extensions": [".xlsx", ".xls", ".csv"],
+      "command": "",
+      "candidates": [
+        {"name": "Microsoft Excel", "cmd_macos": "open -a \"Microsoft Excel\"", "cmd_windows": "start excel", "cmd_linux": "et"},
+        {"name": "WPS Office", "cmd_macos": "open -a \"wpsoffice\"", "cmd_windows": "start et", "cmd_linux": "et"},
+        {"name": "Numbers", "cmd_macos": "open -a \"Numbers\"", "cmd_windows": "", "cmd_linux": ""}
+      ]
+    },
+    "ppt": {
+      "name": "PPT演示文稿",
+      "extensions": [".pptx", ".ppt"],
+      "command": "",
+      "candidates": [
+        {"name": "Microsoft PowerPoint", "cmd_macos": "open -a \"Microsoft PowerPoint\"", "cmd_windows": "start powerpnt", "cmd_linux": "wpp"},
+        {"name": "WPS Office", "cmd_macos": "open -a \"wpsoffice\"", "cmd_windows": "start wpp", "cmd_linux": "wpp"},
+        {"name": "Keynote", "cmd_macos": "open -a \"Keynote\"", "cmd_windows": "", "cmd_linux": ""}
+      ]
+    },
+    "pdf": {
+      "name": "PDF文档",
+      "extensions": [".pdf"],
+      "command": "",
+      "candidates": [
+        {"name": "系统预览 (Preview)", "cmd_macos": "open -a \"Preview\"", "cmd_windows": "", "cmd_linux": "evince"},
+        {"name": "Adobe Acrobat", "cmd_macos": "open -a \"Adobe Acrobat\"", "cmd_windows": "start acrobat", "cmd_linux": ""},
+        {"name": "WPS PDF", "cmd_macos": "open -a \"wpsoffice\"", "cmd_windows": "start wpspdf", "cmd_linux": "wpspdf"}
+      ]
+    },
+    "image": {
+      "name": "图片与矢量图",
+      "extensions": [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"],
+      "command": "",
+      "candidates": [
+        {"name": "系统预览/默认图片查看器", "cmd_macos": "open", "cmd_windows": "start", "cmd_linux": "xdg-open"}
+      ]
+    },
+    "markdown": {
+      "name": "Markdown与标记文档",
+      "extensions": [".md", ".markdown", ".asciidoc", ".adoc"],
+      "command": "",
+      "candidates": [
+        {"name": "Google Chrome", "cmd_macos": "open -a \"Google Chrome\"", "cmd_windows": "start chrome", "cmd_linux": "google-chrome"},
+        {"name": "Typora", "cmd_macos": "open -a \"Typora\"", "cmd_windows": "start typora", "cmd_linux": "typora"},
+        {"name": "Visual Studio Code", "cmd_macos": "open -a \"Visual Studio Code\"", "cmd_windows": "code", "cmd_linux": "code"},
+        {"name": "Cursor", "cmd_macos": "open -a \"Cursor\"", "cmd_windows": "cursor", "cmd_linux": "cursor"}
+      ]
+    },
+    "html": {
+      "name": "HTML原型与网页",
+      "extensions": [".html", ".htm"],
+      "command": "",
+      "candidates": [
+        {"name": "Google Chrome", "cmd_macos": "open -a \"Google Chrome\"", "cmd_windows": "start chrome", "cmd_linux": "google-chrome"},
+        {"name": "Microsoft Edge", "cmd_macos": "open -a \"Microsoft Edge\"", "cmd_windows": "start msedge", "cmd_linux": "microsoft-edge"},
+        {"name": "Safari", "cmd_macos": "open -a \"Safari\"", "cmd_windows": "", "cmd_linux": ""}
+      ]
+    },
+    "code_data": {
+      "name": "结构化数据与配置",
+      "extensions": [".yaml", ".yml", ".json"],
+      "command": "",
+      "candidates": [
+        {"name": "Visual Studio Code", "cmd_macos": "open -a \"Visual Studio Code\"", "cmd_windows": "code", "cmd_linux": "code"},
+        {"name": "Cursor", "cmd_macos": "open -a \"Cursor\"", "cmd_windows": "cursor", "cmd_linux": "cursor"}
+      ]
+    }
+  }
+}

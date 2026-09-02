@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
 工作区根入口与系统配置初始化工具 (Bootstrap)
-用于一键同步工作区根目录的 AGENTS.md / CLAUDE.md 入口文件，并自适应引导环境。
+用于一键同步工作区根目录的 AGENTS.md / CLAUDE.md 入口文件，自动检测宿主机安装的应用程序，
+生成/维护各类文件格式的默认打开器关联配置 (.data/file-opener.json)，并自适应引导环境。
 """
 import os
 import sys
+import json
 import shutil
 from pathlib import Path
 
@@ -63,6 +65,188 @@ def check_dashboard_token() -> bool:
             if p.is_file() and len(p.read_text(encoding="utf-8").strip()) > 10:
                 return True
     return False
+
+def detect_host_apps() -> set[str]:
+    """检测宿主机已安装的应用程序"""
+    detected = set()
+    if sys.platform == "darwin":
+        app_dirs = [Path("/Applications"), Path("/System/Applications"), Path.home() / "Applications"]
+        for adir in app_dirs:
+            if adir.is_dir():
+                for p in adir.glob("*.app"):
+                    detected.add(p.stem.lower())
+                for p in adir.glob("*/*.app"):
+                    detected.add(p.stem.lower())
+    elif sys.platform == "win32":
+        prog_dirs = [
+            Path(os.environ.get("ProgramFiles", "C:\\Program Files")),
+            Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")),
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs"
+        ]
+        for pdir in prog_dirs:
+            if pdir.is_dir():
+                try:
+                    for p in pdir.glob("**/*.exe"):
+                        detected.add(p.stem.lower())
+                except Exception:
+                    pass
+    else:  # linux
+        for pdir in [Path("/usr/share/applications"), Path.home() / ".local/share/applications"]:
+            if pdir.is_dir():
+                for p in pdir.glob("*.desktop"):
+                    detected.add(p.stem.lower())
+    return detected
+
+def init_file_opener(verbose: bool = True, force_rescan: bool = False) -> dict:
+    """
+    初始化或自愈本机文件打开器关联配置 (.data/file-opener.json)。
+    基于 .system/templates/file-opener.template.json 检测本机安装软件并生成配置。
+    """
+    tools_dir = Path(__file__).resolve().parent
+    system_dir = tools_dir.parent
+    ws_root = system_dir.parent
+    data_dir = ws_root / ".data"
+    template_file = system_dir / "templates" / "file-opener.template.json"
+    target_file = data_dir / "file-opener.json"
+
+    if not template_file.exists():
+        if verbose:
+            print(f"⚠️ 未找到文件打开器模板: {template_file}", file=sys.stderr)
+        return {}
+
+    if target_file.exists() and not force_rescan:
+        try:
+            with open(target_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            if verbose:
+                print("✅ 本机文件打开器配置已就绪 (.data/file-opener.json)")
+            return cfg
+        except Exception:
+            pass
+
+    # 读取模板并自动扫描本机软件
+    try:
+        with open(template_file, "r", encoding="utf-8") as f:
+            tpl_data = json.load(f)
+    except Exception as e:
+        if verbose:
+            print(f"❌ 读取模板失败: {e}", file=sys.stderr)
+        return {}
+
+    detected_apps = detect_host_apps()
+    cmd_key = "cmd_macos" if sys.platform == "darwin" else ("cmd_windows" if sys.platform == "win32" else "cmd_linux")
+
+    config = {
+        "version": tpl_data.get("version", "1.0.0"),
+        "platform": sys.platform,
+        "associations": {}
+    }
+
+    if verbose:
+        print("🔍 正在检测本机安装的应用程序以配置默认打开程序...")
+
+    for fmt_id, fmt_info in tpl_data.get("formats", {}).items():
+        selected_cmd = ""
+        selected_app_name = ""
+        matched_candidates = []
+
+        for cand in fmt_info.get("candidates", []):
+            cand_name = cand["name"]
+            cand_cmd = cand.get(cmd_key, "")
+            if not cand_cmd:
+                continue
+
+            cand_lower = cand_name.lower().replace(" ", "").replace("office", "")
+            is_installed = False
+            for dapp in detected_apps:
+                dapp_clean = dapp.replace(" ", "").replace("office", "")
+                if cand_lower in dapp_clean or dapp_clean in cand_lower:
+                    is_installed = True
+                    break
+
+            if is_installed or "默认" in cand_name or "系统" in cand_name:
+                matched_candidates.append({
+                    "name": cand_name,
+                    "command": cand_cmd,
+                    "is_installed": is_installed
+                })
+                if not selected_cmd and is_installed:
+                    selected_cmd = cand_cmd
+                    selected_app_name = cand_name
+
+        if not selected_cmd:
+            if sys.platform == "darwin":
+                selected_cmd = "open"
+            elif sys.platform == "win32":
+                selected_cmd = "start \"\""
+            else:
+                selected_cmd = "xdg-open"
+            selected_app_name = "系统默认关联程序"
+
+        config["associations"][fmt_id] = {
+            "name": fmt_info["name"],
+            "extensions": fmt_info["extensions"],
+            "selected_app": selected_app_name,
+            "command": selected_cmd,
+            "available_candidates": [c["name"] for c in matched_candidates if c["is_installed"]]
+        }
+        if verbose:
+            cands_str = f" (可选候选: {', '.join(config['associations'][fmt_id]['available_candidates'])})" if config['associations'][fmt_id]['available_candidates'] else ""
+            print(f"  • {fmt_info['name']} ({', '.join(fmt_info['extensions'])}): 匹配打开程序 -> [{selected_app_name}]{cands_str}")
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(target_file, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        if verbose:
+            print(f"✅ 已成功生成本机打开器配置: .data/file-opener.json")
+    except Exception as e:
+        if verbose:
+            print(f"❌ 写入 .data/file-opener.json 失败: {e}", file=sys.stderr)
+
+    return config
+
+def get_open_command(file_path: str, root: Path | None = None) -> str:
+    """
+    根据文件路径或格式获取本机打开命令。
+    优先读取 .data/file-opener.json 中的配置；缺失时优雅降级为系统默认命令。
+    """
+    path_obj = Path(file_path)
+    if path_obj.is_dir() or not path_obj.suffix:
+        if sys.platform == "darwin":
+            return f'open "{file_path}"'
+        elif sys.platform == "win32":
+            return f'explorer "{file_path}"'
+        else:
+            return f'xdg-open "{file_path}"'
+
+    ext = path_obj.suffix.lower()
+
+    if root is None:
+        tools_dir = Path(__file__).resolve().parent
+        root = tools_dir.parent.parent
+
+    config_file = root / ".data" / "file-opener.json"
+    if config_file.is_file():
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            for _, assoc in cfg.get("associations", {}).items():
+                if ext in assoc.get("extensions", []):
+                    cmd = assoc.get("command", "")
+                    if cmd:
+                        return f'{cmd} "{file_path}"'
+        except Exception:
+            pass
+
+    # 默认兜底
+    if sys.platform == "darwin":
+        return f'open "{file_path}"'
+    elif sys.platform == "win32":
+        return f'start "" "{file_path}"'
+    else:
+        return f'xdg-open "{file_path}"'
+
 def print_windows_hints() -> None:
     print("""
 ⚠️  Windows 环境已知限制（Agent 决策参考）：
@@ -86,6 +270,7 @@ if __name__ == "__main__":
             print("✅ 看板 API Token 已就绪。")
         else:
             print("ℹ️ 看板尚未配置 Token（可直接对 Agent 说「配置看板 Token」或让 Agent 执行 init.py）。")
+        init_file_opener(verbose=True, force_rescan=True)
         print("\n✨ 工作区初始化与自愈完成！")
         if sys.platform == "win32":
             print_windows_hints()
