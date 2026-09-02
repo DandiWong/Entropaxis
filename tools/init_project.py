@@ -20,7 +20,6 @@ TEMPLATE_FILES = {
     "README.template.md": "README.md",
     "DECISIONS.template.md": "01_项目管理/DECISIONS.md",
     "知识库索引.template.md": "_知识库/index.md",
-    "ReleaseNote.template.md": "04_运营增长/01_上线发布/ReleaseNote.md",
 }
 
 # 标准 4 域子目录架构

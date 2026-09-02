@@ -184,7 +184,7 @@ def main():
     ap.add_argument("--task", help="任务 ID，如 M1")
     ap.add_argument("--title", help="任务标题")
     ap.add_argument("--status", default="plan", help="plan/active/review/done/backlog 或 emoji")
-    ap.add_argument("--spec", help="spec 文件相对路径，如 docs/04_architecture/specs/M1_PubMedOnly.md")
+    ap.add_argument("--spec", help="spec 文件相对路径，如 docs/20260902_主题/Spec_M1_主题方案.md")
     ap.add_argument("--due", help="截止日 YYYY-MM-DD")
     ap.add_argument("--people", help="相关方")
     ap.add_argument("--stdin", action="store_true", help="从 stdin 读 JSON 数组批量同步")

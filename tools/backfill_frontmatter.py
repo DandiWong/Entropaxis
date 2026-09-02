@@ -18,6 +18,11 @@ from pathlib import Path
 def classify(path: Path):
     """返回 (type, id) 或 None（不处理）。"""
     name = path.name
+    if name.startswith("Spec_"):
+        parts = path.stem.split("_", 2)
+        if len(parts) >= 3 and parts[1]:
+            return "Spec", parts[1]
+        return None
     if path.parent.name == "specs" or "/specs/" in str(path):
         dated = re.match(r"^\d{8}_([^_]+)_[A-Za-z0-9]+$", path.stem)  # 旧带日期格式兼容
         if dated:
@@ -25,7 +30,7 @@ def classify(path: Path):
         if "_" in path.stem:  # TaskID_PascalCaseTopic → TaskID（TaskID 可含连字符，如 Bug-28）
             return "Spec", path.stem.split("_")[0]
         return "Spec", path.stem.split("-")[0]  # 旧 kebab 命名兼容
-    if name == "tasks.md":
+    if name.lower() == "tasks.md":
         return "Tasks", "tasks"
     if name == "todo.md":
         return "Backlog", "todo"

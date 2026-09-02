@@ -27,22 +27,22 @@ TEMPLATES = SYSTEM_ROOT / "templates"
 class InitProjectTests(TestCase):
     def test_undated_spec_filename_preserves_task_id(self) -> None:
         self.assertEqual(
-            classify(Path("docs/04_architecture/specs/Bug-28_StageLogLost.md")),
-            ("Spec", "Bug-28"),
+            classify(Path("docs/20260902_权限分层/Spec_Tech-19_权限分层方案.md")),
+            ("Spec", "Tech-19"),
         )
         self.assertEqual(
-            classify(Path("docs/04_architecture/specs/Req-3h_ExampleTopic.md")),
+            classify(Path("docs/20260902_权限分层/Spec_Req-3h_权限分层方案.md")),
             ("Spec", "Req-3h"),
         )
-
+        self.assertEqual(classify(Path("docs/Tasks.md")), ("Tasks", "tasks"))
     def test_legacy_dated_and_kebab_spec_filenames_still_parse(self) -> None:
         # 旧带日期前缀与旧 kebab 命名的历史文件仍可解析
         self.assertEqual(
-            classify(Path("docs/04_architecture/specs/20260821_Bug-28_StageLogLost.md")),
+            classify(Path("docs/specs/20260821_Bug-28_StageLogLost.md")),
             ("Spec", "Bug-28"),
         )
         self.assertEqual(
-            classify(Path("docs/04_architecture/specs/req-2a-token-metrics.md")),
+            classify(Path("docs/specs/req-2a-token-metrics.md")),
             ("Spec", "req"),
         )
 
@@ -75,7 +75,7 @@ class InitProjectTests(TestCase):
             self.assertTrue((target / "RawInput" / ".gitkeep").is_file())
             self.assertFalse((target / "_契约").exists())
             self.assertFalse((target / "01_项目管理" / "Changelog.md").exists())
-            self.assertTrue((target / "04_运营增长" / "01_上线发布" / "ReleaseNote.md").is_file())
+            self.assertFalse((target / "04_运营增长" / "01_上线发布" / "ReleaseNote.md").exists())
             # 2. 标准 4 域子目录
             self.assertTrue((target / "01_项目管理" / "01_资料").is_dir())
             self.assertTrue((target / "01_项目管理" / "02_调研评估").is_dir())
@@ -125,27 +125,20 @@ class InitProjectTests(TestCase):
             )
 
             self.assertTrue((target / "PRODUCT.md").is_file())
-            self.assertTrue((target / "Tasks.md").is_file())
-            self.assertTrue((target / "docs" / "00_project" / "Changelog.md").is_file())
             self.assertTrue((target / "src").is_dir())
             self.assertTrue((target / "test").is_dir())
             self.assertTrue((target / "docs" / "README.md").is_file())
-
-            for directory in (
-                "00_project",
-                "01_research",
-                "02_product",
-                "03_design/mockups",
-                "04_architecture/specs",
-                "05_reports",
-                "06_archive",
-            ):
-                self.assertTrue((target / "docs" / directory).is_dir())
+            self.assertTrue((target / "docs" / "Tasks.md").is_file())
+            self.assertTrue((target / "docs" / "Changelog.md").is_file())
+            self.assertTrue((target / "docs" / "Benchmark.md").is_file())
+            self.assertTrue((target / "docs" / "ReleaseNote.md").is_file())
+            self.assertFalse((target / "docs" / "specs").exists())
+            self.assertFalse((target / "docs" / "audit-reports").exists())
 
             product_doc = (target / "PRODUCT.md").read_text(encoding="utf-8")
             self.assertIn("demo-app", product_doc)
             self.assertIn("智能方案审阅引擎", product_doc)
-            tasks_doc = (target / "Tasks.md").read_text(encoding="utf-8")
+            tasks_doc = (target / "docs" / "Tasks.md").read_text(encoding="utf-8")
             self.assertIn("demo-app", tasks_doc)
 
     def test_system_control_plane_health_checks_pass(self) -> None:

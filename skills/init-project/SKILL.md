@@ -44,7 +44,7 @@ python3 tools/init_project.py "<项目名>" \
   --dashboard-project-id "<Dashboard返回或确认的项目ID>"
 ```
 
-该命令创建标准的通用项目分层结构（`RawInput/`、`01_项目管理/`、`02_产品设计/`、`03_工程研发/`、`04_运营增长/`、`Archive/` 以及 `README.md`、`01_项目管理/DECISIONS.md`、`AGENTS.md`、`CLAUDE.md`、`04_运营增长/01_上线发布/ReleaseNote.md`）。
+该命令创建标准的通用项目分层结构（`RawInput/`、`01_项目管理/`、`02_产品设计/`、`03_工程研发/`、`04_运营增长/`、`Archive/` 以及 `README.md`、`01_项目管理/DECISIONS.md`、`AGENTS.md`、`CLAUDE.md`）。
 
 当项目需要在 `03_工程研发/<app>/` 下初始化独立软件工程代码仓库时，调用软件工程脚手架：
 
@@ -52,6 +52,6 @@ python3 tools/init_project.py "<项目名>" \
 python3 tools/init_app.py "<app-name>" --target-dir "<项目路径>/03_工程研发" --purpose "<定位与价值>"
 ```
 
-该命令独立创建代码工程骨架（`PRODUCT.md`、`tasks.md`、`src/`、`test/` 以及 `docs/00_project ~ 06_archive` 分类规范）。
+该命令独立创建代码工程骨架（`PRODUCT.md`、`src/`、`test/`、`docs/Tasks.md`、`docs/Changelog.md`、`docs/Benchmark.md`、`docs/ReleaseNote.md`；工程事项按 `docs/YYYYMMDD_主题/` 容器落盘）。
 
 完成后核对 `docs/.board.json` 中记录的项目 ID 与 `dash.py project get <id>` 返回一致，再报告绝对路径、创建内容和关联结果。目标已存在时停止，不覆盖、不合并、不自动换名。

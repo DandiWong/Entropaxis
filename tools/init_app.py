@@ -17,17 +17,8 @@ DOCS_INDEX_TEMPLATE = "DocsIndex.template.md"
 PRODUCT_TEMPLATE = "Product.template.md"
 TASKS_TEMPLATE = "Tasks.template.md"
 CHANGELOG_TEMPLATE = "Changelog.template.md"
-
-DOCS_DIRECTORIES = (
-    "00_project",
-    "01_research",
-    "02_product",
-    "03_design/mockups",
-    "04_architecture/specs",
-    "05_reports",
-    "06_archive",
-)
-
+BENCHMARK_TEMPLATE = "Benchmark.template.md"
+RELEASE_NOTE_TEMPLATE = "ReleaseNote.template.md"
 
 def _validate_name(name: str) -> str:
     if (
@@ -94,10 +85,9 @@ def init_app(
         staging.mkdir(parents=True)
         (staging / "src").mkdir()
         (staging / "test").mkdir()
+        (staging / "docs").mkdir()
 
-        # 初始化分类 docs/ 布局
-        for directory in DOCS_DIRECTORIES:
-            (staging / "docs" / directory).mkdir(parents=True)
+        # `docs/` 从此处按实际工程事项创建 YYYYMMDD_主题 容器。
 
         (staging / "docs" / "README.md").write_text(
             _render(templates / DOCS_INDEX_TEMPLATE, values), encoding="utf-8"
@@ -105,13 +95,16 @@ def init_app(
         (staging / "PRODUCT.md").write_text(
             _render(templates / PRODUCT_TEMPLATE, values), encoding="utf-8"
         )
-        (staging / "Tasks.md").write_text(
+        (staging / "docs" / "Tasks.md").write_text(
             _render(templates / TASKS_TEMPLATE, values), encoding="utf-8"
         )
-        changelog_tpl = templates / CHANGELOG_TEMPLATE
-        if changelog_tpl.exists():
-            (staging / "docs" / "00_project" / "Changelog.md").write_text(
-                _render(changelog_tpl, values), encoding="utf-8"
+        for template, filename in (
+            (CHANGELOG_TEMPLATE, "Changelog.md"),
+            (BENCHMARK_TEMPLATE, "Benchmark.md"),
+            (RELEASE_NOTE_TEMPLATE, "ReleaseNote.md"),
+        ):
+            (staging / "docs" / filename).write_text(
+                _render(templates / template, values), encoding="utf-8"
             )
 
         if app_path.exists():

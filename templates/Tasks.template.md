@@ -1,6 +1,6 @@
 # Tasks · {{应用名}}
 
-> 本地任务状态唯一真源。与 docs/04_architecture/specs/<ID>_<Topic>.md 及 Board 联动。
+> 本地任务状态唯一真源。实施规格位于 `docs/YYYYMMDD_主题/Spec_<ID>_主题方案.md`，并与 Board 联动。
 
 ## Active
 
