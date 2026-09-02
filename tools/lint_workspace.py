@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -24,8 +25,8 @@ MAX_CURRENT_STATE_LINES = 120
 
 EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "repo/dify", "graphify-out")
 
-# rules/ 禁用具体业务系统名（检查 rules/ 零系统绑定）
-FORBIDDEN_IN_RULES = ("内部操作手册", "Board-Platform联动规则")
+# 控制面零系统绑定/零真实实体禁词（小写匹配；lint 自身因定义检测常量而豁免）
+FORBIDDEN_BINDINGS = ("internal-org", "board-platform", "dev-platform", "研发协作平台", "某集团", "某医院", "内部操作手册")
 # 控制面禁止硬编码本地调试端点：外部系统交互必须经声明外置的看板/服务 CLI
 FORBIDDEN_HOST_PATTERN = re.compile(r"127\.0\.0\.1|localhost")
 
@@ -160,27 +161,54 @@ def check_claude_md_thin_shell(root: Path) -> list[str]:
     return issues
 
 
+def _tracked_files(system: Path) -> set[Path] | None:
+    """返回版本库跟踪文件集合；非 git 环境返回 None（退化为全文件扫描）。
+    业务私有 Skill 等由 .gitignore 声明豁免，不参与零绑定检查。
+    """
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(system), "ls-files"], capture_output=True, text=True, timeout=10
+        )
+        if r.returncode != 0:
+            return None
+        return {system / line.strip() for line in r.stdout.splitlines() if line.strip()}
+    except Exception:
+        return None
+
+
 def check_rules_zero_system_binding(root: Path) -> list[str]:
-    """rules/、tools/、skills/*/SKILL.md 不得出现具体业务系统绑定文件名、遗留引用；tools/skills 的可执行内容额外禁止硬编码本地端点。"""
+    """控制面（rules/、root-configs/、templates/、tools/、tests/、skills/*/SKILL.md）
+    不得出现具体业务系统绑定或真实实体；tools/skills/tests 可执行内容额外禁止硬编码本地端点。
+    仅检查版本库跟踪文件（非 git 环境退化全扫），业务私有 Skill 依 .gitignore 豁免。"""
     issues = []
     system = root / ".system"
-    binding_targets = []
-    if (system / "rules").exists():
-        binding_targets += list((system / "rules").glob("*.md"))
-    # 排除自身：本文件的检测常量定义天然包含被检测的关键词/正则字面量
-    operational_targets = []
-    if (system / "tools").exists():
-        operational_targets += [p for p in (system / "tools").glob("*.py") if p.name != "lint_workspace.py"]
-    if (system / "skills").exists():
-        operational_targets += list((system / "skills").glob("*/SKILL.md"))
+    tracked = _tracked_files(system)
+
+    def _glob(base: Path, pattern: str) -> list[Path]:
+        if not base.exists():
+            return []
+        files = [p for p in base.glob(pattern) if p.is_file()]
+        if tracked is not None:
+            files = [p for p in files if p in tracked]
+        return files
+
+    binding_targets: list[Path] = []
+    binding_targets += _glob(system / "rules", "*.md")
+    binding_targets += _glob(system / "root-configs", "*.md")
+    binding_targets += _glob(system / "templates", "*")
+    operational_targets: list[Path] = [
+        p for p in _glob(system / "tools", "*.py") if p.name != "lint_workspace.py"
+    ]
+    operational_targets += _glob(system / "skills", "*/SKILL.md")
+    operational_targets += _glob(system / "tests", "*.py")
     binding_targets += operational_targets
 
     for rf in binding_targets:
         try:
-            content = rf.read_text(encoding="utf-8")
+            content = rf.read_text(encoding="utf-8").lower()
         except Exception:
             continue
-        for keyword in FORBIDDEN_IN_RULES:
+        for keyword in FORBIDDEN_BINDINGS:
             if keyword in content:
                 issues.append(
                     f"[规则系统绑定] {rf.relative_to(root)} 含禁用关键词「{keyword}」；应为零系统绑定。"
@@ -190,7 +218,7 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
             content = rf.read_text(encoding="utf-8")
         except Exception:
             continue
-        # rules/ 允许在说明文本里举例引用本地端点写法，仅对 tools/skills 的可执行内容做硬拦截
+        # rules/ 允许在说明文本里举例引用本地端点写法，仅对可执行内容做硬拦截
         if FORBIDDEN_HOST_PATTERN.search(content):
             issues.append(
                 f"[硬编码本地端点] {rf.relative_to(root)} 出现 127.0.0.1/localhost；"

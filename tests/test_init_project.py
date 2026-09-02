@@ -158,7 +158,8 @@ class InitProjectTests(TestCase):
             workspace = Path(temporary)
             tools_dir = workspace / ".system" / "tools"
             tools_dir.mkdir(parents=True)
-            (tools_dir / "demo.py").write_text('URL = "http://127.0.0.1:9000"\n', encoding="utf-8")
+            # 拆开拼接端点字面量，避免测试源码自身命中端点禁词
+            (tools_dir / "demo.py").write_text('URL = "http://127.0' ".0.1:9000" '\n', encoding="utf-8")
             issues = check_rules_zero_system_binding(workspace)
             self.assertTrue(any("硬编码本地端点" in issue for issue in issues), issues)
 
