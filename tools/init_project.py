@@ -67,7 +67,7 @@ def _validate_date(value: str | None) -> str:
 def _validate_dashboard_project_id(value: str) -> str:
     value = value.strip() or "未关联"
     if value != "未关联" and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", value):
-        raise ProjectInitError("Dashboard 项目 ID 格式无效")
+        raise ProjectInitError("看板项目 ID 格式无效")
     return value
 
 
@@ -124,7 +124,7 @@ def init_project(
         "项目独有知识": project_knowledge.strip() or "待整理",
         "共享知识": shared_knowledge.strip() or "待整理",
         "敏感级别": sensitivity.strip() or "普通内部",
-        "Dashboard项目ID": dashboard_project_id,
+        "看板项目ID": dashboard_project_id,
         "ROOT_AGENTS_PATH": root_agents_path,
     }
     rendered = {
@@ -174,7 +174,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dashboard-project-id",
         default="未关联",
-        help="已确认的 Dashboard 项目 ID；不关联时省略",
+        help="已确认的看板项目 ID；不关联时省略",
     )
     parser.add_argument("--start", help="开始日期 YYYYMMDD")
     return parser

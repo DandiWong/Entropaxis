@@ -98,7 +98,7 @@ class InitProjectTests(TestCase):
                 (target / "_知识库" / "index.md").read_text(encoding="utf-8"),
             )
             self.assertIn(
-                "**Dashboard 项目 ID**：`enablement`",
+                "**看板项目 ID**：`enablement`",
                 (target / "README.md").read_text(encoding="utf-8"),
             )
             self.assertIn(

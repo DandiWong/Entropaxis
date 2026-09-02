@@ -51,7 +51,7 @@ SYSTEM_TEMPLATE_VARIABLES = {
     "项目独有知识",
     "共享知识",
     "敏感级别",
-    "Dashboard项目ID",
+    "看板项目ID",
     "ROOT_AGENTS_PATH",
     "应用名",
     "产品定位与核心价值",
