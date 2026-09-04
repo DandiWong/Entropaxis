@@ -10,6 +10,97 @@ import json
 import shutil
 from pathlib import Path
 
+def render_instance_configs(verbose: bool = True) -> bool:
+    """从 .system/templates/*.template.{json,md} 首次渲染到 .data/。
+
+    - 仅在 .data/ 目标文件完全缺失时写入；存在即不动（避免覆盖用户已填内容）
+    - 占位符 {{XXX}} 替换为工作区目录名兜底（无脑填充，明示待填）
+    - 不阻断、不抛错；模板文件缺失时跳过
+    - 写入用 tempfile + replace 实现原子替换
+    """
+    import tempfile
+
+    tools_dir = Path(__file__).resolve().parent
+    system_dir = tools_dir.parent
+    ws_root = system_dir.parent
+    templates_dir = system_dir / "templates"
+    data_dir = ws_root / ".data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    if not templates_dir.exists():
+        return True
+
+
+    # 仅渲染真正属于 .data/ 的实例模板；templates/ 目录下还有项目级脚手架模板（README/AGENTS 等），由 init_project / init_app 走，不在此处处理
+    DATA_INSTANCE_TEMPLATES = {"board_config.template.json", "workspace-config.template.md"}
+
+    ws_name = ws_root.name or "workspace"
+    success = True
+    rendered = 0
+
+
+    for tpl in sorted(templates_dir.glob("*.template.json")):
+        if tpl.name not in DATA_INSTANCE_TEMPLATES:
+            continue
+        target_name = tpl.name.replace(".template.json", ".json")
+        target = data_dir / target_name
+        if target.exists():
+            continue
+        try:
+            tpl_data = json.loads(tpl.read_text(encoding="utf-8"))
+            target.write_text(
+                json.dumps(tpl_data, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            rendered += 1
+            if verbose:
+                print(f"✅ 已从模板渲染 .data/{target_name}（首次，空 providers）")
+        except Exception as exc:
+            if verbose:
+                print(f"❌ 渲染 {target_name} 失败: {exc}", file=sys.stderr)
+            success = False
+    for tpl in sorted(templates_dir.glob("*.template.md")):
+        if tpl.name not in DATA_INSTANCE_TEMPLATES:
+            continue
+
+
+        target_name = tpl.name.replace(".template.md", ".md")
+        target = data_dir / target_name
+        if target.exists():
+            continue
+        try:
+            content = tpl.read_text(encoding="utf-8")
+            # 占位符替换为工作区目录名兜底（明示待填）
+            rendered_content = content.replace("{{ORG_FULL_NAME}}", f"{ws_name}（待填：组织完整名称）")
+            rendered_content = rendered_content.replace("{{ORG_FORBIDDEN_ABBR}}", f"{ws_name}-abbr（待填：禁用缩写）")
+            rendered_content = rendered_content.replace("{{ORG_REVIEWER_CLI}}", "omp（待填：reviewer CLI）")
+            rendered_content = rendered_content.replace("{{ORG_REVIEWER_CMD}}", "omp --model <待填>（待填：启动命令）")
+            rendered_content = rendered_content.replace("{{ORG_SHARED_DIR_1}}", "01公司资料（待填：共享资料目录1）")
+            rendered_content = rendered_content.replace("{{ORG_SHARED_PURPOSE_1}}", "待填：用途")
+            rendered_content = rendered_content.replace("{{ORG_SHARED_DIR_2}}", "02部门资料（待填：共享资料目录2）")
+            rendered_content = rendered_content.replace("{{ORG_SHARED_PURPOSE_2}}", "待填：用途")
+            rendered_content = rendered_content.replace("{{ORG_SHARED_DIR_3}}", "03个人资料（待填：共享资料目录3）")
+            rendered_content = rendered_content.replace("{{ORG_SHARED_PURPOSE_3}}", "待填：用途")
+            # 原子写入
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", delete=False, dir=str(data_dir), prefix=f".{target_name}.tmp."
+            ) as tmp:
+                tmp.write(rendered_content)
+                tmp_path = Path(tmp.name)
+            tmp_path.replace(target)
+            rendered += 1
+            if verbose:
+                print(f"✅ 已从模板渲染 .data/{target_name}（首次，占位符已替换为目录名兜底）")
+        except Exception as exc:
+            if verbose:
+                print(f"❌ 渲染 {target_name} 失败: {exc}", file=sys.stderr)
+            success = False
+
+    if verbose and rendered == 0:
+        print("ℹ️ .data/ 实例模板无需渲染（目标文件已全部存在）")
+    return success
+
+
 def sync_root_configs(verbose: bool = True) -> bool:
     """
     将 .system/root-configs 下的入口配置物理同步至工作区根目录。
@@ -264,12 +355,16 @@ def print_windows_hints() -> None:
 
 if __name__ == "__main__":
     print("🚀 开始初始化/自愈工作区配置...")
+
+
+
     if setup_symlinks(verbose=True):
         token_ready = check_dashboard_token()
         if token_ready:
             print("✅ 看板 API Token 已就绪。")
         else:
             print("ℹ️ 看板尚未配置 Token（可直接对 Agent 说「配置看板 Token」或让 Agent 执行 init.py）。")
+        render_instance_configs(verbose=True)
         init_file_opener(verbose=True, force_rescan=True)
         print("\n✨ 工作区初始化与自愈完成！")
         if sys.platform == "win32":
