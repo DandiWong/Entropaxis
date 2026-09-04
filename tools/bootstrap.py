@@ -9,34 +9,42 @@ import sys
 import json
 import shutil
 from pathlib import Path
-
-def render_instance_configs(verbose: bool = True) -> bool:
+def render_instance_configs(
+    verbose: bool = True,
+    *,
+    templates_dir: Path | None = None,
+    data_dir: Path | None = None,
+    ws_name: str | None = None,
+) -> bool:
     """从 .system/templates/*.template.{json,md} 首次渲染到 .data/。
 
     - 仅在 .data/ 目标文件完全缺失时写入；存在即不动（避免覆盖用户已填内容）
     - 占位符 {{XXX}} 替换为工作区目录名兜底（无脑填充，明示待填）
     - 不阻断、不抛错；模板文件缺失时跳过
     - 写入用 tempfile + replace 实现原子替换
+    - 三个路径/名称参数均可由测试覆写；生产调用全部传 None，从 __file__ 派生
     """
     import tempfile
 
-    tools_dir = Path(__file__).resolve().parent
-    system_dir = tools_dir.parent
-    ws_root = system_dir.parent
-    templates_dir = system_dir / "templates"
-    data_dir = ws_root / ".data"
+    if templates_dir is None or data_dir is None:
+        tools_dir = Path(__file__).resolve().parent
+        system_dir = tools_dir.parent
+        ws_root = system_dir.parent
+        if templates_dir is None:
+            templates_dir = system_dir / "templates"
+        if data_dir is None:
+            data_dir = ws_root / ".data"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    if not templates_dir.exists():
-        return True
+    if ws_name is None:
+        ws_name = data_dir.parent.name or "workspace"
+
+    success = True
+    rendered = 0
 
 
     # 仅渲染真正属于 .data/ 的实例模板；templates/ 目录下还有项目级脚手架模板（README/AGENTS 等），由 init_project / init_app 走，不在此处处理
     DATA_INSTANCE_TEMPLATES = {"board_config.template.json", "workspace-config.template.md"}
-
-    ws_name = ws_root.name or "workspace"
-    success = True
-    rendered = 0
 
 
     for tpl in sorted(templates_dir.glob("*.template.json")):
