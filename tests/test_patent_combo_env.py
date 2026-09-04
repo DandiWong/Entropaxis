@@ -2,6 +2,7 @@ import importlib.util
 import json
 import shutil
 import sys
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest import TestCase
@@ -15,7 +16,13 @@ _spec = importlib.util.spec_from_file_location("patent_combo_check_env", _SCRIPT
 check_env = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(check_env)
 
+_FINALIZER = SYSTEM_ROOT / "skills" / "patent-combo" / "scripts" / "finalize_outputs.py"
+_finalizer_spec = importlib.util.spec_from_file_location("patent_combo_finalize_outputs", _FINALIZER)
+finalize_outputs = importlib.util.module_from_spec(_finalizer_spec)
+_finalizer_spec.loader.exec_module(finalize_outputs)
+
 CORE_FILES = [
+    "scripts/finalize_outputs.py",
     "references/disclosure/skills/patent-disclosure/SKILL.md",
     "references/disclosure/skills/patent-disclosure/prompts/invention/disclosure_builder.md",
     "references/disclosure/skills/patent-disclosure/tools/md_to_docx.py",
@@ -60,9 +67,9 @@ class PatentComboEnvTests(TestCase):
     def test_missing_optional_deps_yield_degradation_plans(self) -> None:
         report = check_env.build_report(
             self.skill_dir, self.config, fix=False,
-            importable_fn=_missing, which_fn=lambda name: None, env={},
+            importable_fn=lambda module: module != "playwright", which_fn=lambda name: None, env={},
         )
-        self.assertTrue(report["core_ok"])  # 增量依赖缺失不阻断核心阶段
+        self.assertTrue(report["core_ok"])  # Word 导出就绪时，Stage 4 降级不阻断核心阶段
         self.assertIn("Stage 4 CNIPA 路（人工检索包）", report["degraded_stages"])
         self.assertIn("Stage 4 dev-tool 路（搜索级/未执行）", report["degraded_stages"])
         by_id = {c["id"]: c for c in report["checks"]}
@@ -80,6 +87,18 @@ class PatentComboEnvTests(TestCase):
         )
         self.assertFalse(report["core_ok"])
         self.assertEqual(report["ready_stages"], [])
+
+    def test_missing_word_export_dependency_blocks(self) -> None:
+        report = check_env.build_report(
+            self.skill_dir, self.config, fix=False,
+            importable_fn=lambda module: module not in {"docx", "latex2mathml", "yaml"},
+            which_fn=lambda name: f"/usr/bin/{name}",
+            env={},
+        )
+        self.assertFalse(report["core_ok"])
+        word_export = next(c for c in report["checks"] if c["id"] == "word_export")
+        self.assertEqual(word_export["status"], "missing")
+        self.assertIn("python-docx", word_export["fix"])
 
     def test_fix_installs_playwright(self) -> None:
         calls: list[list[str]] = []
@@ -133,3 +152,78 @@ class PatentComboEnvTests(TestCase):
         )
         legacy = next(c for c in report["checks"] if c["id"] == "legacy_overrides")
         self.assertIn("legacy", legacy["detail"].lower())
+
+
+class PatentComboFinalizerTests(TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="patent-combo-finalize-"))
+        self.case_dir = self.tmp / "case"
+        self.case_dir.mkdir()
+        self.candidate = self.case_dir / "01_候选清单.md"
+        self.disclosure = self.case_dir / "交底书工作稿.md"
+        self.claims = self.case_dir / "权利要求工作稿.md"
+        self.report = self.case_dir / "查新报告工作稿.md"
+        self.candidate.write_text("# 候选清单\n", encoding="utf-8")
+        self.disclosure.write_text("# 交底书\n", encoding="utf-8")
+        self.claims.write_text("# 权利要求\n", encoding="utf-8")
+        self.report.write_text(
+            "# 查新报告\n\n前言\n\n## 命中专利列表\n\n专利 A\n\n## 相似度判断\n\n低\n\n## 人工检索式清单\n\n不应交付\n",
+            encoding="utf-8",
+        )
+        self.converter = self.tmp / "md_to_docx.py"
+        self.converter.write_text("# placeholder\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_extract_report_section_excludes_manual_queries(self) -> None:
+        section = finalize_outputs.extract_report_section(self.report.read_text(encoding="utf-8"))
+        self.assertTrue(section.startswith("## 命中专利列表"))
+        self.assertIn("## 相似度判断", section)
+        self.assertNotIn("人工检索式清单", section)
+
+    def test_finalize_writes_named_docx_and_cleans_sources(self) -> None:
+        commands: list[list[str]] = []
+
+        def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+            commands.append(command)
+            Path(command[command.index("--output") + 1]).touch()
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        outputs = finalize_outputs.finalize(
+            case_dir=self.case_dir,
+            case_name="一种调度方法",
+            candidate_md=self.candidate,
+            disclosure_md=self.disclosure,
+            claims_md=self.claims,
+            report_md=self.report,
+            converter=self.converter,
+            runner=runner,
+        )
+
+        self.assertEqual(
+            [p.name for p in outputs],
+            ["01_交底书_一种调度方法.docx", "02_权利要求_一种调度方法.docx", "03_查新报告.docx"],
+        )
+        self.assertEqual(len(commands), 3)
+        self.assertFalse(any(p.exists() for p in (self.candidate, self.disclosure, self.claims, self.report)))
+
+    def test_failed_export_preserves_sources(self) -> None:
+        def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(command, 1, "", "conversion failed")
+
+        with self.assertRaisesRegex(RuntimeError, "conversion failed"):
+            finalize_outputs.finalize(
+                case_dir=self.case_dir,
+                case_name="一种调度方法",
+                candidate_md=self.candidate,
+                disclosure_md=self.disclosure,
+                claims_md=self.claims,
+                report_md=self.report,
+                converter=self.converter,
+                runner=runner,
+            )
+
+        self.assertTrue(self.disclosure.exists())
+        self.assertTrue(self.claims.exists())
+        self.assertTrue(self.report.exists())

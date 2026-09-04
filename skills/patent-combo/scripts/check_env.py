@@ -5,11 +5,13 @@
   python3 scripts/check_env.py [--fix] [--json] [--skill-dir <path>] [--config <path>]
 
 行为:
-  1. 核心资产（内置三件套）缺失 => 阻断（exit 2），不猜测替代路径。
+  1. 核心资产（内置三件套与最终交付收敛器）缺失 => 阻断（exit 2），不猜测替代路径。
   2. 增量依赖逐项探测: playwright 可导入、系统浏览器、prior-art CLI、verdict 后端。
   3. --fix: 仅尝试两类安全安装——pip 安装 playwright、cargo 安装 patent（均需对应
      工具链本机存在；任何安装失败不抛异常，转入降级矩阵）。
-  4. 每个失败项输出 ❌ 原因 + 👉 修复建议 + 降级方案；--json 输出结构化报告。
+  4. 最终 DOCX 交付由内置收敛器调用随包 md_to_docx 工具；转换失败时保留底稿并阻断收尾，
+     不得以 Markdown 替代。
+  5. 每个失败项输出 ❌ 原因 + 👉 修复建议 + 降级方案；--json 输出结构化报告。
 
 退出码: 0 = 核心阶段(Stage 0-3)可用; 2 = 核心资产缺失（阻断）。
 """
@@ -78,6 +80,7 @@ def check_core_assets(skill_dir: Path) -> list[dict]:
         "cnipa_crawl": "references/disclosure/skills/patent-disclosure/tools/crawl/cnipa_epub_search.py",
         "claims_guide": "references/claims-guide/PATENT_SKILL.md",
         "mining_rubric": "references/mining-rubric.md",
+        "output_finalizer": "scripts/finalize_outputs.py",
     }
     checks = []
     for cid, rel in required.items():
@@ -113,6 +116,20 @@ def check_output_root(config: dict, fix: bool) -> dict:
     return {"id": "output_root", "status": "degraded", "detail": f"{p} 不存在",
             "fix": f"👉 mkdir -p \"{p}\" 或带 --fix 重跑",
             "degrade": "产物仅在会话中交付，不落盘"}
+
+def check_word_export(importable_fn: Callable[[str], bool] = _importable) -> dict:
+    required = {"docx": "python-docx", "latex2mathml": "latex2mathml", "yaml": "PyYAML"}
+    missing = [package for module, package in required.items() if not importable_fn(module)]
+    if not missing:
+        return {"id": "word_export", "status": "ok", "detail": "DOCX 导出依赖可用", "fix": None, "degrade": None}
+    packages = " ".join(missing)
+    return {
+        "id": "word_export",
+        "status": "missing",
+        "detail": f"DOCX 导出依赖缺失: {', '.join(missing)}",
+        "fix": f"👉 pip install {packages} 后重跑环境自检",
+        "degrade": "最终 DOCX 交付阻断；保留阶段 Markdown 底稿，不得以其替代交付",
+    }
 
 def check_playwright(fix: bool, importable_fn: Callable[[str], bool] = _importable,
                      installer: Callable[[list[str]], tuple[bool, str]] | None = None) -> dict:
@@ -186,14 +203,14 @@ def build_report(skill_dir: Path, config: dict, fix: bool,
     checks.append(check_playwright(fix, importable_fn, installer))
     checks.append(check_browser())
     checks.append(check_priorart_cli(str(config.get("priorart_cli") or "patent"), fix, which_fn, installer))
+    checks.append(check_word_export(importable_fn))
     checks.append(check_verdict_backend(which_fn, env))
     checks.append(check_legacy_overrides(config))
 
-    core_missing = [c for c in checks if c["id"].startswith(("disclosure", "md_to_docx", "cnipa", "claims", "mining")) and c["status"] == "missing"]
-    degradations = [c for c in checks if c["status"] in ("missing", "degraded") and c["id"] not in ("output_root",) and c not in core_missing]
+    core_missing = [c for c in checks if c["id"].startswith(("disclosure", "md_to_docx", "cnipa", "claims", "mining", "output_finalizer", "word_export")) and c["status"] == "missing"]
     return {
         "skill": "patent-combo",
-        "version": "1.2.0",
+        "version": "1.4.0",
         "core_ok": not core_missing,
         "ready_stages": ["Stage 0 脱敏门禁", "Stage 1 挖点", "Stage 2 交底书", "Stage 3 权利要求"] if not core_missing else [],
         "degraded_stages": (["Stage 4 CNIPA 路（人工检索包）"] if any(c["id"] in ("playwright", "system_browser") and c["status"] != "ok" for c in checks) else []) +
