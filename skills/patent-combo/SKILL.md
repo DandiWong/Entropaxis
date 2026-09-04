@@ -1,9 +1,9 @@
 ---
 name: patent-combo
-description: "v1.4.1. 专利组合拳（代码专利挖掘自包含技能包）：内置交底技能、权利要求撰写指南与 CNIPA 检索脚本三件套，对本地代码库执行「脱敏门禁→评分挖点→交底书生成→权利要求撰写→CNIPA+开发者工具源双路查新」流水线，最终仅交付 01_交底书_案件名.docx、02_权利要求_案件名.docx 与 03_查新报告.docx。当用户说「组合拳」「专利组合拳」「挖专利」「专利挖掘」「从代码挖专利」「patent-combo」并指向某个本地代码库/仓库时触发。启动前先运行 scripts/check_env.py 自检依赖（--fix 自动安装），安装失败自动进入降级矩阵（人工检索包/搜索级查新），不阻断核心阶段。"
+description: "v1.4.2. 专利组合拳（代码专利挖掘自包含技能包）：内置交底技能、权利要求撰写指南与 CNIPA 检索脚本三件套，对本地代码库执行「脱敏门禁→评分挖点→交底书生成→权利要求撰写→CNIPA+开发者工具源双路查新」流水线，直接交付 01_交底书_案件名.docx、02_权利要求_案件名.docx 与 03_查新报告.docx；Markdown 仅作未打开、未人工审阅的瞬态转换底稿。当用户说「组合拳」「专利组合拳」「挖专利」「专利挖掘」「从代码挖专利」「patent-combo」并指向某个本地代码库/仓库时触发。启动前先运行 scripts/check_env.py 自检依赖（--fix 自动安装），安装失败自动进入降级矩阵（人工检索包/搜索级查新），不阻断核心阶段。"
 compatibility: "Python 3.10+；核心流程（Stage 0-3）零第三方依赖；CNIPA 查新需 playwright+系统 Chrome/Edge，DOCX 最终交付需 python-docx/latex2mathml/PyYAML；转换器依赖缺失或导出失败时阻断收尾，不得以 Markdown 替代"
 metadata:
-  version: "1.4.1"
+  version: "1.4.2"
 ---
 
 # 代码专利挖掘组合拳 (patent-combo)
@@ -56,18 +56,18 @@ cat "<工作区根>/.data/patent_combo_config.json"
 
 ## Stage 2 · 交底书
 
-读 `<skill-dir>/references/disclosure/skills/patent-disclosure/SKILL.md`（路径映射：该文档内所有 `skills/patent-disclosure/` 前缀对应 `<skill-dir>/references/disclosure/skills/patent-disclosure/`），从其 Step 3（挖点深化）衔接：已有候选清单时跳过 intake/project_scan 重复采集，直接按 `prompts/invention/`（或 utility_model/design）深化 → `disclosure_preview` → `disclosure_builder` → `disclosure_self_check`。写入案件目录 `交底书工作稿.md`，作为后续权利要求与查新的内部底稿；不得单独向用户交付该 Markdown。
+读 `<skill-dir>/references/disclosure/skills/patent-disclosure/SKILL.md`（路径映射：该文档内所有 `skills/patent-disclosure/` 前缀对应 `<skill-dir>/references/disclosure/skills/patent-disclosure/`），从其 Step 3（挖点深化）衔接：已有候选清单时跳过 intake/project_scan 重复采集，直接按 `prompts/invention/`（或 utility_model/design）深化 → `disclosure_preview` → `disclosure_builder` → `disclosure_self_check`。内部生成 `交底书工作稿.md` 后直接流转至后续阶段和收敛器；**严禁打开、向用户展示或要求人工审阅该 Markdown**，`disclosure_self_check` 仍作为内部自动质量门禁执行。
 
 ## Stage 3 · 权利要求
 
-读 `<skill-dir>/references/claims-guide/PATENT_SKILL.md`「八、权利要求书」及实施方式章节，对每份交底：先独权（必要技术特征、最宽合理范围）→ 再从权（层层递进布局）→ 与交底书技术方案交叉核对支撑性。写入 `权利要求工作稿.md`，作为内部底稿；不得单独向用户交付该 Markdown。
+读 `<skill-dir>/references/claims-guide/PATENT_SKILL.md`「八、权利要求书」及实施方式章节，对每份交底：先独权（必要技术特征、最宽合理范围）→ 再从权（层层递进布局）→ 与交底书技术方案交叉核对支撑性。内部生成 `权利要求工作稿.md` 后直接流转至收敛器；**严禁打开、向用户展示或要求人工审阅该 Markdown**。
 
 ## Stage 4 · 双路查新
 
 1. **CNIPA**：`python3 "<skill-dir>/references/disclosure/skills/patent-disclosure/tools/crawl/cnipa_epub_search.py" [--type invention|utility_model|design] [--class CODE] <关键词...>`（两段式：关键词 → IPC 分类号回补，不足 4 条同分类号补第一轮）；Playwright 走系统 Chrome。**降级**：环境自检标记缺失时不出脚本，改产人工检索包。
 2. **dev-tool prior art**：`<priorart_cli> "<用一句话概括的候选点子>"`（19 源语义查重，Open/Crowded/Saturated）。verdict 后端缺失时自动追加 `--fast --keyword-only`；首次运行需下载 ~80MB 本地嵌入模型，耗时长属预期。
 
-写入 `查新报告工作稿.md`。报告必须包含同级章节「命中专利列表」与其后的「人工检索式清单」；最终交付仅保留二者之间的内容（含前者、不含后者）。
+内部生成 `查新报告工作稿.md`。报告必须包含同级章节「命中专利列表」与其后的「人工检索式清单」；直接由收敛器截取前者至后者前的内容生成 DOCX，**严禁打开、向用户展示或要求人工审阅该 Markdown**。
 
 ## Task Progress（复制到对话逐项打勾）
 
@@ -79,7 +79,7 @@ Task Progress:
 - [ ] Stage 2: 交底书生成（含 self_check）
 - [ ] Stage 3: 权利要求撰写
 - [ ] Stage 4: 双路查新报告
-- [ ] 收尾: 收敛三份 DOCX 并清理全部阶段 Markdown
+- [ ] 收尾: 不打开 Markdown，直接生成三份 DOCX 并清理阶段底稿
 ```
 
 ## 收尾
@@ -88,7 +88,7 @@ Task Progress:
 
 > 本草稿为 AI 辅助挖掘结果，非查新/FTO/法律意见，正式申报前须经专利代理人复核。
 
-全部阶段完成后，使用内置收敛器一次性导出并清理阶段底稿：
+全部阶段完成后，**不打开、不展示、不要求人工审阅任何阶段 Markdown**，立即使用内置收敛器生成最终 DOCX 并清理阶段底稿：
 
 ```bash
 python3 "<skill-dir>/scripts/finalize_outputs.py" \
@@ -106,7 +106,7 @@ python3 "<skill-dir>/scripts/finalize_outputs.py" \
 - `02_权利要求_<案件名称>.docx`
 - `03_查新报告.docx`（内容从「命中专利列表」开始，到「人工检索式清单」之前结束）
 
-收敛器拒绝覆盖已有最终文件；任一 DOCX 导出失败时保留所有 Markdown 底稿并阻断收尾，向用户明示失败原因，严禁以 Markdown 替代交付。成功后逐一调用系统默认程序打开三份 DOCX，再报告输出目录、文件清单与降级情况（若有）。
+收敛器拒绝覆盖已有最终文件；任一 DOCX 导出失败时保留所有 Markdown 底稿并阻断收尾，向用户明示失败原因，严禁以 Markdown 替代交付。成功后仅逐一调用系统默认程序打开三份 DOCX，再报告输出目录、文件清单与降级情况（若有）。
 
 ## 内置资产出处
 
