@@ -1,6 +1,6 @@
-# 工作区 · Agent 入口
+# 工作区 · Agent 入口 (Entropaxis)
 
-本文件是工作区规则控制面。项目入口只补充本项目差异；跨项目规则只在 `.system/rules/` 维护。
+本文件是 Entropaxis 人机协作规则控制面。项目入口只补充本项目差异；跨项目规则只在 `.system/rules/` 维护。
 
 元规则：[`.system/rules/00_元规则.md`](.system/rules/00_元规则.md)
 
@@ -37,7 +37,7 @@
 | 表达文风与可视化 | `.system/rules/表达文风.md` |
 | 对外发布与审批 | `.system/rules/对外发布.md` |
 | 知识沉淀与 Wiki 录入 | `.system/rules/知识沉淀.md` |
-| Skill 规范与维护 | `.system/rules/技能维护.md` |
+| Tool 与 Skill 的开发、治理与维护 | `.system/rules/工具技能.md` |
 | 任务看板 / 待办管理 | `.system/rules/看板联动.md`（按需调用看板 Skill 或本地适配器） |
 | 会议纪要生成 | `.system/rules/指令解析.md`（按需调用会议纪要 Skill） |
 | 财务报销与发票归总 | `.system/rules/财务报销.md` |
