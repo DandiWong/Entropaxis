@@ -318,6 +318,126 @@
         "报销归总"
       ],
       "note": "「报了」非「报销」"
+    },
+    {
+      "kind": "positive",
+      "instruction": "做个调研",
+      "expect": [
+        "交付物落盘"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "写调研报告",
+      "expect": [
+        "交付物落盘"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "帮我出个方案",
+      "expect": [
+        "交付物落盘"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "设计方案",
+      "expect": [
+        "交付物落盘"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "出份报告给我",
+      "expect": [
+        "交付物落盘"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "生成报告",
+      "expect": [
+        "交付物落盘"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "这次的双周报整理一下",
+      "expect": [
+        "交付物落盘"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "写周报",
+      "expect": [
+        "交付物落盘"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "把这个流程落成skill",
+      "expect": [
+        "落为Skill"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "封装成skill",
+      "expect": [
+        "落为Skill"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "落盘",
+      "expect": [
+        "交付物落盘"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "这个结论落档吧",
+      "expect": [
+        "交付物落盘"
+      ]
+    },
+    {
+      "kind": "negative",
+      "instruction": "讨论一下方案怎么设计",
+      "expect": [],
+      "note": "方案探索属对话交互，文件交付 §1 明确不落盘"
+    },
+    {
+      "kind": "negative",
+      "instruction": "这个方案不错",
+      "expect": [],
+      "note": "裸词「方案」不构成产出意图"
+    },
+    {
+      "kind": "negative",
+      "instruction": "评审方案",
+      "expect": [
+        "审计"
+      ],
+      "note": "含「方案」但属审计机制，由交付物落盘的 exclude 抑制"
+    },
+    {
+      "kind": "paraphrase",
+      "instruction": "把这些整理成一份东西发我",
+      "expect": [
+        "交付物落盘"
+      ],
+      "note": "未用任何标准类型词"
+    },
+    {
+      "kind": "paraphrase",
+      "instruction": "这个能不能做成一个技能",
+      "expect": [
+        "落为Skill"
+      ],
+      "note": "「技能」非「skill」"
     }
   ]
 }
