@@ -209,7 +209,7 @@ def build_report(skill_dir: Path, config: dict, fix: bool,
 
     core_missing = [c for c in checks if c["id"].startswith(("disclosure", "md_to_docx", "cnipa", "claims", "mining", "output_finalizer", "word_export")) and c["status"] == "missing"]
     return {
-        "version": "1.4.4",
+        "version": "1.4.5",
         "core_ok": not core_missing,
         "ready_stages": ["Stage 0 脱敏门禁", "Stage 1 挖点", "Stage 2 交底书", "Stage 3 权利要求"] if not core_missing else [],
         "degraded_stages": (["Stage 4 CNIPA 路（人工检索包）"] if any(c["id"] in ("playwright", "system_browser") and c["status"] != "ok" for c in checks) else []) +

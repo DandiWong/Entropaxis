@@ -175,7 +175,13 @@ class PatentComboFinalizerTests(TestCase):
         self.claims = self.case_dir / "权利要求工作稿.md"
         self.report = self.case_dir / "查新报告工作稿.md"
         self.candidate.write_text("# 候选清单\n", encoding="utf-8")
-        self.disclosure.write_text("# 交底书\n", encoding="utf-8")
+        self.disclosure.write_text(
+            "# 交底书\n\n**专利类型**：发明\n\n"
+            "## 3.2 系统框图\n\n```mermaid\nflowchart LR\nA-->B\n```\n\n"
+            "## 3.4 系统流程说明\n\n```mermaid\nflowchart TD\nS1-->S2\n```\n\n"
+            "## 3.6 关键实现代码\n\n```python\ndef route(prompt):\n    return prompt\n```\n",
+            encoding="utf-8",
+        )
         self.claims.write_text("# 权利要求\n", encoding="utf-8")
         self.report.write_text(
             "# 查新报告\n\n前言\n\n## 命中专利列表\n\n专利 A\n\n## 相似度判断\n\n低\n\n## 人工检索式清单\n\n不应交付\n",
@@ -183,6 +189,8 @@ class PatentComboFinalizerTests(TestCase):
         )
         self.converter = self.tmp / "md_to_docx.py"
         self.converter.write_text("# placeholder\n", encoding="utf-8")
+        self.renderer = self.tmp / "mermaid_render.py"
+        self.renderer.write_text("# placeholder\n", encoding="utf-8")
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -198,7 +206,21 @@ class PatentComboFinalizerTests(TestCase):
 
         def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
             commands.append(command)
-            Path(command[command.index("--output") + 1]).touch()
+            if "--no-docx" in command:
+                source = Path(command[command.index("--input") + 1])
+                rendered = Path(command[command.index("--output") + 1])
+                figures = rendered.parent / "mermaid_figures"
+                figures.mkdir()
+                (figures / "fig_001.png").touch()
+                (figures / "fig_002.png").touch()
+                rendered.write_text(
+                    source.read_text(encoding="utf-8")
+                    + "\n<!-- ![图示 1](mermaid_figures/fig_001.png) -->\n"
+                    + "<!-- ![图示 2](mermaid_figures/fig_002.png) -->\n",
+                    encoding="utf-8",
+                )
+            else:
+                Path(command[command.index("--output") + 1]).touch()
             return subprocess.CompletedProcess(command, 0, "", "")
 
         outputs = finalize_outputs.finalize(
@@ -209,6 +231,7 @@ class PatentComboFinalizerTests(TestCase):
             claims_md=self.claims,
             report_md=self.report,
             converter=self.converter,
+            renderer=self.renderer,
             runner=runner,
         )
 
@@ -216,7 +239,8 @@ class PatentComboFinalizerTests(TestCase):
             [p.name for p in outputs],
             ["01_交底书_一种调度方法.docx", "02_权利要求_一种调度方法.docx", "03_查新报告.docx"],
         )
-        self.assertEqual(len(commands), 3)
+        self.assertEqual(len(commands), 4)
+        self.assertIn("--no-docx", commands[0])
         self.assertFalse(any(p.exists() for p in (self.candidate, self.disclosure, self.claims, self.report)))
 
     def test_failed_export_preserves_sources(self) -> None:
@@ -233,8 +257,49 @@ class PatentComboFinalizerTests(TestCase):
                 report_md=self.report,
                 converter=self.converter,
                 runner=runner,
+                renderer=self.renderer,
             )
 
         self.assertTrue(self.disclosure.exists())
         self.assertTrue(self.claims.exists())
         self.assertTrue(self.report.exists())
+
+    def test_invention_without_two_diagrams_is_rejected(self) -> None:
+        self.disclosure.write_text(
+            "# 交底书\n\n**专利类型**：发明\n\n"
+            "```mermaid\nflowchart LR\nA-->B\n```\n\n"
+            "## 关键实现代码\n\n```python\nreturn True\n```\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ValueError, "至少两张 Mermaid"):
+            finalize_outputs.finalize(
+                case_dir=self.case_dir,
+                case_name="一种调度方法",
+                candidate_md=self.candidate,
+                disclosure_md=self.disclosure,
+                claims_md=self.claims,
+                report_md=self.report,
+                converter=self.converter,
+                renderer=self.renderer,
+            )
+
+    def test_invention_without_code_excerpt_is_rejected(self) -> None:
+        self.disclosure.write_text(
+            "# 交底书\n\n**专利类型**：发明\n\n"
+            "```mermaid\nflowchart LR\nA-->B\n```\n\n"
+            "```mermaid\nflowchart TD\nS1-->S2\n```\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ValueError, "关键实现代码"):
+            finalize_outputs.finalize(
+                case_dir=self.case_dir,
+                case_name="一种调度方法",
+                candidate_md=self.candidate,
+                disclosure_md=self.disclosure,
+                claims_md=self.claims,
+                report_md=self.report,
+                converter=self.converter,
+                renderer=self.renderer,
+            )

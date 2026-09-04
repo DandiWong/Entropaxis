@@ -1,9 +1,9 @@
 ---
 name: patent-combo
-description: "v1.4.4. 专利组合拳（代码专利挖掘自包含技能包）：内置交底技能、权利要求撰写指南与 CNIPA 检索脚本三件套，对本地代码库执行全自动「脱敏→评分挖点→交底书→权利要求→CNIPA+开发者工具源查新」流水线；内置 rubric 得分 ≥10 的候选自动进入撰写并直接交付 DOCX，不等待人工候选裁决。仅 STEP 解析安装、公式 PNG 安装及外观分案保留人工确认。当用户说「组合拳」「专利组合拳」「挖专利」「专利挖掘」「从代码挖专利」「patent-combo」并指向某个本地代码库/仓库时触发。"
+description: "v1.4.5. 专利组合拳（代码专利挖掘自包含技能包）：内置交底技能、权利要求撰写指南与 CNIPA 检索脚本三件套，对本地代码库执行全自动「脱敏→评分挖点→交底书→权利要求→CNIPA+开发者工具源查新」流水线；内置 rubric 得分 ≥10 的候选自动进入撰写并直接交付 DOCX，不等待人工候选裁决。发明交底强制包含系统框图、流程图及脱敏关键实现代码。仅 STEP 解析安装、公式 PNG 安装及外观分案保留人工确认。当用户说「组合拳」「专利组合拳」「挖专利」「专利挖掘」「从代码挖专利」「patent-combo」并指向某个本地代码库/仓库时触发。"
 compatibility: "Python 3.10+；核心流程（Stage 0-3）零第三方依赖；CNIPA 查新需 playwright+系统 Chrome/Edge，DOCX 最终交付需 python-docx/latex2mathml/PyYAML；转换器依赖缺失或导出失败时阻断收尾，不得以 Markdown 替代"
 metadata:
-  version: "1.4.4"
+  version: "1.4.5"
 ---
 
 # 代码专利挖掘组合拳 (patent-combo)
@@ -56,7 +56,7 @@ cat "<工作区根>/.data/patent_combo_config.json"
 
 ## Stage 2 · 交底书
 
-读 `<skill-dir>/references/disclosure/skills/patent-disclosure/SKILL.md`（路径映射：该文档内所有 `skills/patent-disclosure/` 前缀对应 `<skill-dir>/references/disclosure/skills/patent-disclosure/`），从其 Step 3（挖点深化）衔接：已有候选清单时跳过 intake/project_scan 重复采集，直接按 `prompts/invention/`（或 utility_model/design）深化 → `disclosure_preview`（内部自动预览）→ `disclosure_builder` → `disclosure_self_check`。内部生成 `交底书工作稿.md` 后直接流转至后续阶段和收敛器；**严禁打开、向用户展示或要求人工审阅该 Markdown**，`disclosure_self_check` 仍作为内部自动质量门禁执行。
+读 `<skill-dir>/references/disclosure/skills/patent-disclosure/SKILL.md`（路径映射：该文档内所有 `skills/patent-disclosure/` 前缀对应 `<skill-dir>/references/disclosure/skills/patent-disclosure/`），从其 Step 3（挖点深化）衔接：已有候选清单时跳过 intake/project_scan 重复采集，直接按 `prompts/invention/`（或 utility_model/design）深化 → `disclosure_preview`（内部自动预览）→ `disclosure_builder` → `disclosure_self_check`。发明交底必须按 builder 生成至少两张 fenced Mermaid 图（3.2 系统框图、3.4 系统流程图），并设置“关键实现代码”章节，放入至少一个来自候选代码证据的脱敏代码或伪代码块；每段不超过 50 行，保留决定技术机制的分支、状态转换或数据结构，删除凭证、内部名称、绝对路径与无关样板代码。仅列文件路径不算代码摘录。内部生成 `交底书工作稿.md` 后直接流转至后续阶段和收敛器；**严禁打开、向用户展示或要求人工审阅该 Markdown**，`disclosure_self_check` 仍作为内部自动质量门禁执行。
 
 ## Stage 3 · 权利要求
 
@@ -76,7 +76,7 @@ Task Progress:
 - [ ] 环境自检（check_env --fix）与降级确认
 - [ ] Stage 0: 自动敏感内容隔离与检索词净化
 - [ ] Stage 1: 按 rubric 自动筛选 ≥10 分候选
-- [ ] Stage 2: 交底书生成（含 self_check）
+- [ ] Stage 2: 交底书生成（发明含两张 Mermaid 图、脱敏关键实现代码及 self_check）
 - [ ] Stage 3: 权利要求撰写
 - [ ] Stage 4: 双路查新报告
 - [ ] 收尾: 不打开 Markdown，直接生成三份 DOCX 并清理阶段底稿
@@ -88,7 +88,7 @@ Task Progress:
 
 > 本草稿为 AI 辅助挖掘结果，非查新/FTO/法律意见，正式申报前须经专利代理人复核。
 
-每个入选候选完成 Stage 4 后，**不打开、不展示、不要求人工审阅任何阶段 Markdown**，立即在其事件目录使用内置收敛器生成最终 DOCX 并清理阶段底稿：
+每个入选候选完成 Stage 4 后，**不打开、不展示、不要求人工审阅任何阶段 Markdown**，立即在其事件目录使用内置收敛器生成最终 DOCX 并清理阶段底稿。发明交底的收敛器会机械检查两张 Mermaid 图与“关键实现代码”代码块，先调用 `mermaid_render.py` 生成 PNG，再转换 Word；缺项、渲染失败或 PNG 缺失均阻断收尾并保留全部底稿：
 
 ```bash
 python3 "<skill-dir>/scripts/finalize_outputs.py" \
