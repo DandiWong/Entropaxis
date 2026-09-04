@@ -6,7 +6,7 @@
   2. 成本花在哪——每个场景从常驻层到规则读取，逐步消耗多少上下文？
 
 真源：
-  路由表   .system/rules/route_map.json
+  路由表   .system/config/route_map.json
   测试集   .system/tests/fixtures/instruction_cases.json
 
 执行方式:
@@ -25,7 +25,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SYSTEM_ROOT = HERE.parent
 WORKSPACE_ROOT = SYSTEM_ROOT.parent
-ROUTE_MAP_PATH = SYSTEM_ROOT / "rules" / "route_map.json"
+ROUTE_MAP_PATH = SYSTEM_ROOT / "config" / "route_map.json"
 CASES_PATH = SYSTEM_ROOT / "tests" / "fixtures" / "instruction_cases.json"
 
 # 常驻层：每轮会话无条件进入上下文，与是否命中路由无关

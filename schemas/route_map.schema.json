@@ -1,7 +1,7 @@
 {
   "$comment": "确定性路由映射表的字段契约。此前 exclude/match_type 等字段无任何声明，拼错字段名不会报错。真源消费方：tools/hook_route_match.py、tools/audit_routing.py、lint_workspace.py 第 16 项。",
   "title": "route_map",
-  "target": ".system/rules/route_map.json",
+  "target": ".system/config/route_map.json",
   "type": "object",
   "required": ["_meta", "routes"],
   "additionalProperties": false,

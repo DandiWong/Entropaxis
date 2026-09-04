@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """确定性关键词路由前置注入 (UserPromptSubmit Hook).
 
-对用户原始输入做字面关键词匹配，命中 .system/rules/route_map.json 中登记的机制时，
+对用户原始输入做字面关键词匹配，命中 .system/config/route_map.json 中登记的机制时，
 通过 additionalContext 强制提示模型在执行前先读取对应真源规则文件，
 把"要不要读规则"从模型自行判断的概率事件，改为 harness 侧的确定性前置动作。
 
@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ROUTE_MAP_PATH = HERE.parent / "rules" / "route_map.json"
+ROUTE_MAP_PATH = HERE.parent / "config" / "route_map.json"
 
 
 def load_routes(path: Path = ROUTE_MAP_PATH) -> list[dict]:

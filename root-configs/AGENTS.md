@@ -37,8 +37,7 @@
 | 系统治理动作指令（审计/修正/自检/新迭代/工具化/Skill）| `.system/rules/治理指令.md` |
 | 表达文风与可视化 | `.system/rules/表达文风.md` |
 | 对外发布与审批 | `.system/rules/对外发布.md` |
-| 知识沉淀与 Wiki 录入 | `.system/rules/知识沉淀.md` |
-| 能力形态判定与共同合规红线 | `.system/rules/工具技能.md` |
+| 知识沉淀、Wiki 录入与能力形态判定 | `.system/rules/知识沉淀.md` |
 | Tool 准入判据与 ApX 工程契约 | `.system/rules/工具设计.md` |
 | Skill 设计、渐进披露与元数据 | `.system/rules/技能设计.md` |
 | 分发 / 打包 Skill | `.system/rules/技能设计.md`（分发包契约）与 `.system/rules/文件交付.md`（打开 ZIP 所在目录） |

@@ -41,7 +41,7 @@ FORBIDDEN_BINDINGS = ("internal-org", "board-platform", "dev-platform", "研发�
 FORBIDDEN_HOST_PATTERN = re.compile(r"127\.0\.0\.1|localhost")
 
 # .system 健康度：控制面可发现、可渲染、可执行的最小契约。
-SYSTEM_REQUIRED_DIRECTORIES = ("root-configs", "rules", "templates", "tools", "skills", "tests")
+SYSTEM_REQUIRED_DIRECTORIES = ("root-configs", "rules", "config", "schemas", "templates", "tools", "skills", "tests")
 SYSTEM_REQUIRED_FILES = (
     "AGENTS.md",
     "README.md",
@@ -777,7 +777,7 @@ def check_route_map_integrity(root: Path) -> list[str]:
     import json as _json
 
     issues = []
-    route_map = root / ".system" / "rules" / "route_map.json"
+    route_map = root / ".system" / "config" / "route_map.json"
     if not route_map.is_file():
         return issues
     try:
