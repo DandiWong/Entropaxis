@@ -43,6 +43,9 @@ class SchemaValidatorTests(TestCase):
     def test_live_route_map_conforms(self) -> None:
         self.assertEqual(VS.check_route_map(), [])
 
+    def test_missing_route_map_fails_closed(self) -> None:
+        self.assertTrue(VS.check_route_map(Path("/nonexistent/route_map.json")))
+
     def test_audit_schema_selftest(self) -> None:
         self.assertEqual(VS.check_audit_report_schema_selftest(), [])
 

@@ -53,6 +53,13 @@
     },
     {
       "kind": "positive",
+      "instruction": "帮我整理今天的会议纪要",
+      "expect": [
+        "会议纪要"
+      ]
+    },
+    {
+      "kind": "positive",
       "instruction": "对当前方案做一次审计",
       "expect": [
         "审计"

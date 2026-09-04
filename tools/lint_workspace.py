@@ -41,12 +41,12 @@ FORBIDDEN_BINDINGS = ("internal-org", "board-platform", "dev-platform", "研发�
 FORBIDDEN_HOST_PATTERN = re.compile(r"127\.0\.0\.1|localhost")
 
 # .system 健康度：控制面可发现、可渲染、可执行的最小契约。
-SYSTEM_REQUIRED_DIRECTORIES = ("root-configs", "rules", "config", "schemas", "templates", "tools", "skills", "tests")
+SYSTEM_REQUIRED_DIRECTORIES = ("entrypoints", "rules", "config", "schemas", "templates", "tools", "skills", "tests")
 SYSTEM_REQUIRED_FILES = (
     "AGENTS.md",
     "README.md",
-    "root-configs/AGENTS.md",
-    "root-configs/CLAUDE.md",
+    "entrypoints/AGENTS.md",
+    "entrypoints/CLAUDE.md",
     "tools/bootstrap.py",
     "tools/init_project.py",
     "tools/init_app.py",
@@ -449,7 +449,7 @@ def _tracked_files(system: Path) -> set[Path] | None:
 
 
 def check_rules_zero_system_binding(root: Path) -> list[str]:
-    """控制面（rules/、root-configs/、templates/、tools/、tests/、skills/*/SKILL.md）
+    """控制面（rules/、entrypoints/、templates/、tools/、tests/、skills/*/SKILL.md）
     不得出现具体业务系统绑定或真实实体；tools/skills/tests 可执行内容额外禁止硬编码本地端点。
     仅检查版本库跟踪文件（非 git 环境退化全扫），业务私有 Skill 依 .gitignore 豁免。"""
     issues = []
@@ -466,7 +466,7 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
 
     binding_targets: list[Path] = []
     binding_targets += _glob(system / "rules", "*.md")
-    binding_targets += _glob(system / "root-configs", "*.md")
+    binding_targets += _glob(system / "entrypoints", "*.md")
     binding_targets += _glob(system / "templates", "**/*")
     operational_targets: list[Path] = [
         p for p in _glob(system / "tools", "*.py") if p.name != "lint_workspace.py"
@@ -596,17 +596,17 @@ def check_system_layout(root: Path) -> list[str]:
 
 
 def check_system_entry_sync(root: Path) -> list[str]:
-    """检查根入口是否与 .system/root-configs 的唯一真源一致。"""
+    """检查根入口是否与 .system/entrypoints 的唯一真源一致。"""
     system = root / ".system"
     issues = []
     for filename in ("AGENTS.md", "CLAUDE.md"):
-        source = system / "root-configs" / filename
+        source = system / "entrypoints" / filename
         target = root / filename
         if not source.is_file() or not target.is_file():
             continue
         if target.read_text(encoding="utf-8") != source.read_text(encoding="utf-8"):
             issues.append(
-                f"[根入口漂移] {filename} 与 .system/root-configs/{filename} 内容不一致；运行 bootstrap.py 恢复。"
+                f"[根入口漂移] {filename} 与 .system/entrypoints/{filename} 内容不一致；运行 bootstrap.py 恢复。"
             )
     return issues
 
@@ -627,7 +627,7 @@ def check_system_markdown_links(root: Path) -> list[str]:
             if not target or target.startswith(("#", "/", "~", "http:", "https:", "mailto:")):
                 continue
             path = target.split("#", 1)[0]
-            base = root if document.parent == system / "root-configs" else document.parent
+            base = root if document.parent == system / "entrypoints" else document.parent
             if path and not (base / path).exists():
                 issues.append(
                     f"[路由断链] {document.relative_to(root)} → {target} 不存在。"

@@ -12,7 +12,7 @@ _TOKEN_LOCAL = "127.0" + ".0.1"
 
 def _mk_control_plane(root: Path) -> Path:
     s = root / ".system"
-    for sub in ("rules", "tools", "skills/demo", "templates", "tests", "root-configs"):
+    for sub in ("rules", "tools", "skills/demo", "templates", "tests", "entrypoints"):
         (s / sub).mkdir(parents=True, exist_ok=True)
     return s
 
@@ -33,7 +33,7 @@ class ZeroBindingLintTests(unittest.TestCase):
             s = _mk_control_plane(root)
             (s / "rules" / "a.md").write_text(f"调用 {_TOKEN_MULTI} 同步任务。", encoding="utf-8")
             (s / "tools" / "a.py").write_text(f'BASE = "http://{_TOKEN_LOCAL}:8080"\n', encoding="utf-8")
-            (s / "root-configs" / "AGENTS.md").write_text(f"路由 {_TOKEN_BRAND} 看板", encoding="utf-8")
+            (s / "entrypoints" / "AGENTS.md").write_text(f"路由 {_TOKEN_BRAND} 看板", encoding="utf-8")
             issues = check_rules_zero_system_binding(root)
             self.assertTrue(any(_TOKEN_MULTI in i for i in issues))
             self.assertTrue(any(_TOKEN_BRAND in i for i in issues))

@@ -108,25 +108,25 @@ def render_instance_configs(
     return success
 
 
-def sync_root_configs(verbose: bool = True) -> bool:
+def sync_entrypoints(verbose: bool = True) -> bool:
     """
-    将 .system/root-configs 下的入口配置物理同步至工作区根目录。
+    将 .system/entrypoints 下的根入口真源物理同步至工作区根目录。
     为避免 Synology Drive / 云同步网盘在跨平台同步时对软链接产生 Conflict 冲突，
     采用幂等文件复制（shutil.copy2）作为标准同步策略。
     """
     tools_dir = Path(__file__).resolve().parent
     system_dir = tools_dir.parent
     ws_root = system_dir.parent
-    root_configs = system_dir / "root-configs"
+    entrypoints = system_dir / "entrypoints"
 
-    if not root_configs.exists():
+    if not entrypoints.exists():
         if verbose:
-            print(f"❌ 错误: 未找到配置源目录 {root_configs}", file=sys.stderr)
+            print(f"❌ 错误: 未找到根入口源目录 {entrypoints}", file=sys.stderr)
         return False
 
     success = True
     for filename in ["AGENTS.md", "CLAUDE.md"]:
-        src = root_configs / filename
+        src = entrypoints / filename
         dst = ws_root / filename
 
         if not src.exists():
@@ -138,17 +138,13 @@ def sync_root_configs(verbose: bool = True) -> bool:
                 dst.unlink()
             shutil.copy2(src, dst)
             if verbose:
-                print(f"✅ 入口文件同步就绪: {filename} <- .system/root-configs/{filename}")
+                print(f"✅ 入口文件同步就绪: {filename} <- .system/entrypoints/{filename}")
         except Exception as e:
             if verbose:
                 print(f"❌ 入口同步失败 ({filename}): {e}", file=sys.stderr)
             success = False
 
     return success
-
-
-# 兼容旧接口命名
-setup_symlinks = sync_root_configs
 
 def check_dashboard_token() -> bool:
     """检查看板凭证是否就绪"""
@@ -415,7 +411,7 @@ if __name__ == "__main__":
 
 
 
-    if setup_symlinks(verbose=True):
+    if sync_entrypoints(verbose=True):
         token_ready = check_dashboard_token()
         if token_ready:
             print("✅ 看板 API Token 已就绪。")

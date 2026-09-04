@@ -73,10 +73,10 @@ Phase 6: 路由装配与五维评估 (Done)➔ 挂载使用说明至 .data/rules
 ### Phase 5 · 双重体检门禁 (Dual Gate)
 在终端执行双重验证：
 ```bash
-python3 -m unittest discover -s .system/tests
+python3 -m unittest discover -s .system/tests -t .system
 python3 .system/tools/lint_workspace.py
 ```
-必须确保单元测试 100% 通过且 15 项工作区体检全绿。
+必须确保单元测试与工作区体检全部通过。
 
 ### Phase 6 · 路由装配与五维架构评估 (Wire & Deliver)
 1. 在 `.data/rules/tips.md` 追加该工具的操作提示（`- TIP：...`）；

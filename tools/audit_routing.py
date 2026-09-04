@@ -290,7 +290,7 @@ def main() -> int:
         return 2
 
     if not routes:
-        print("❌ 路由表为空，无可审计对象。\n👉 检查 .system/rules/route_map.json 的 routes 数组。", file=sys.stderr)
+        print("❌ 路由表为空，无可审计对象。\n👉 检查 .system/config/route_map.json 的 routes 数组。", file=sys.stderr)
         return 2
 
     coverage = audit_coverage(routes, cases)

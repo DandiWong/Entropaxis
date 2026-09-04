@@ -28,7 +28,7 @@
    ```bash
    python3 .system/tools/bootstrap.py
    ```
-   该工具会自动将 `.system/root-configs/` 下的 `AGENTS.md` 与 `CLAUDE.md` 物理同步至工作区根目录，建立全局统一的规则控制面（纯文件复制，杜绝云同步网盘跨平台软链冲突）。
+   该工具会自动将 `.system/entrypoints/` 下的 `AGENTS.md` 与 `CLAUDE.md` 物理同步至工作区根目录，建立全局统一的规则控制面（纯文件复制，杜绝云同步网盘跨平台软链冲突）。
 2. **规则与上下文纪律**  
    - 严格遵循根 `AGENTS.md` 常驻层控制面与 `.system/rules/` 架构规范；
    - 坚持**单一真源（Single Source of Truth）**、**上下文瘦身**与 **YAGNI 原则**，禁止跨层级复制规则或创建冗余文件；
@@ -40,8 +40,10 @@
 
 | 路径 | 职责定位 |
 |---|---|
-| `root-configs/` | 工作区根入口物理源文件（`AGENTS.md`、`CLAUDE.md`） |
+| `entrypoints/` | 工作区根入口物理源文件（`AGENTS.md`、`CLAUDE.md`） |
 | `rules/` | 跨项目纯抽象规则真源（零外部系统硬编码，纯架构约束） |
+| `config/` | 由规则正文派生、供工具消费的机器可读控制面数据 |
+| `schemas/` | 机器配置与文档元数据的结构化契约 |
 | `skills/` | 工作区核心能力扩展库（100% 自包含 Agent Skill） |
 | `templates/` | 项目入口、文档结构和机器配置模板 |
 | `tools/` | 工作区自愈（`bootstrap.py`）、项目脚手架与健康度检查工具（`lint_workspace.py`） |
@@ -55,8 +57,8 @@
 
 | 指标 | 检查规则 | 失败后的修复动作 |
 |---|---|---|
-| **结构完整性** | `root-configs/`、`rules/`、`templates/`、`tools/`、`skills/`、`tests/` 及关键入口均存在 | 从仓库恢复缺失文件，不以项目文件替代系统真源 |
-| **根入口同步** | 工作区 `AGENTS.md`、`CLAUDE.md` 内容与 `root-configs/` 一致 | 运行 `bootstrap.py` 恢复入口 |
+| **结构完整性** | `entrypoints/`、`rules/`、`config/`、`schemas/`、`templates/`、`tools/`、`skills/`、`tests/` 及关键入口均存在 | 从版本库恢复缺失文件，不以项目文件替代系统真源 |
+| **根入口同步** | 工作区 `AGENTS.md`、`CLAUDE.md` 内容与 `entrypoints/` 一致 | 运行 `bootstrap.py` 恢复入口 |
 | **路由完整性** | `.system` 内显式 Markdown 本地链接均可解析 | 修正链接或补齐唯一真源 |
 | **模板契约** | 通用项目与软件应用脚手架所需模板齐全；变量闭合且属于声明集合 | 修复模板变量，避免生成未渲染文件 |
 | **Skill 可发现性** | 每个 Skill 有 `SKILL.md`，`name` 与目录名一致，包含 `description` 触发描述 | 补齐入口或修正元数据 |

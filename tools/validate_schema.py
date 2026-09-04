@@ -105,10 +105,10 @@ def parse_front_matter(text: str) -> dict | None:
     return out
 
 
-def check_route_map() -> list[str]:
-    target = WORKSPACE_ROOT / ".system" / "rules" / "route_map.json"
-    if not target.exists():
-        return []
+def check_route_map(target: Path | None = None) -> list[str]:
+    target = target or WORKSPACE_ROOT / ".system" / "config" / "route_map.json"
+    if not target.is_file():
+        return [f"route_map.json 不存在: {target}"]
     try:
         data = json.loads(target.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:

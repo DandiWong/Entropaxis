@@ -40,6 +40,19 @@
       ]
     },
     {
+      "mechanism": "会议纪要",
+      "files": [
+        ".system/rules/工作流指令.md"
+      ],
+      "anchor": "## 会议纪要",
+      "keywords": [
+        "整理会议纪要",
+        "生成会议纪要",
+        "写会议纪要",
+        "会议纪要"
+      ]
+    },
+    {
       "mechanism": "审计",
       "files": [
         ".system/rules/治理指令.md"
