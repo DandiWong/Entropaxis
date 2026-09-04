@@ -38,6 +38,7 @@
 | 对外发布与审批 | `.system/rules/对外发布.md` |
 | 知识沉淀与 Wiki 录入 | `.system/rules/知识沉淀.md` |
 | Tool 与 Skill 的开发、治理与维护 | `.system/rules/工具技能.md` |
+| 分发 / 打包 Skill | `.system/rules/工具技能.md`（分发包契约）与 `.system/rules/文件交付.md`（打开 ZIP 所在目录） |
 | 任务看板 / 待办管理 | `.system/rules/看板联动.md`（按需调用看板 Skill 或本地适配器） |
 | 会议纪要生成 | `.system/rules/指令解析.md`（按需调用会议纪要 Skill） |
 | 财务报销与发票归总 | `.system/rules/财务报销.md` |
