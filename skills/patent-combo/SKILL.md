@@ -1,14 +1,14 @@
 ---
 name: patent-combo
-description: "v1.4.3. 专利组合拳（代码专利挖掘自包含技能包）：内置交底技能、权利要求撰写指南与 CNIPA 检索脚本三件套，对本地代码库执行「脱敏门禁→评分挖点→交底书生成→权利要求撰写→CNIPA+开发者工具源双路查新」流水线；内置 rubric 得分 ≥10 的候选自动进入撰写并直接交付 01_交底书_案件名.docx、02_权利要求_案件名.docx 与 03_查新报告.docx，不等待人工候选裁决。当用户说「组合拳」「专利组合拳」「挖专利」「专利挖掘」「从代码挖专利」「patent-combo」并指向某个本地代码库/仓库时触发。启动前先运行 scripts/check_env.py 自检依赖（--fix 自动安装），安装失败自动进入降级矩阵（人工检索包/搜索级查新），不阻断核心阶段。"
+description: "v1.4.4. 专利组合拳（代码专利挖掘自包含技能包）：内置交底技能、权利要求撰写指南与 CNIPA 检索脚本三件套，对本地代码库执行全自动「脱敏→评分挖点→交底书→权利要求→CNIPA+开发者工具源查新」流水线；内置 rubric 得分 ≥10 的候选自动进入撰写并直接交付 DOCX，不等待人工候选裁决。仅 STEP 解析安装、公式 PNG 安装及外观分案保留人工确认。当用户说「组合拳」「专利组合拳」「挖专利」「专利挖掘」「从代码挖专利」「patent-combo」并指向某个本地代码库/仓库时触发。"
 compatibility: "Python 3.10+；核心流程（Stage 0-3）零第三方依赖；CNIPA 查新需 playwright+系统 Chrome/Edge，DOCX 最终交付需 python-docx/latex2mathml/PyYAML；转换器依赖缺失或导出失败时阻断收尾，不得以 Markdown 替代"
 metadata:
-  version: "1.4.3"
+  version: "1.4.4"
 ---
 
 # 代码专利挖掘组合拳 (patent-combo)
 
-**自包含 Skill 包**：交底 Skill、权要指南与 CNIPA 检索脚本已内置 `references/`，随包分发，无外部仓库依赖。四个阶段，每阶段结束向用户汇报并确认后再进入下一阶段。**全程描述性、不下法律结论**（不说"可专利/新颖"，只刻画技术贡献；最终以专利代理人复核为准）。
+**自包含 Skill 包**：交底 Skill、权要指南与 CNIPA 检索脚本已内置 `references/`，随包分发，无外部仓库依赖。除明确保留的安全与安装确认外，四个阶段连续自动执行。**全程描述性、不下法律结论**（不说"可专利/新颖"，只刻画技术贡献；最终以专利代理人复核为准）。
 
 ## 环境自检与降级（任何 Stage 之前先跑）
 
@@ -47,8 +47,8 @@ cat "<工作区根>/.data/patent_combo_config.json"
 工作区硬约束：**未脱敏代码、商业秘密、患者数据严禁进入外部模型上下文**。对目标仓库：
 1. 扫描：`.env*`、密钥/证书、患者/临床字样、`secret|password|token|api_key` 命中统计；
 2. 默认只向上下文送**代码结构摘要**（目录树、README/DESIGN、核心模块签名与注释、关键算法片段 ≤50 行/处），不粘贴全量源码；
-3. 命中敏感项 → 列清单请用户逐项确认「可入上下文 / 需脱敏替换 / 跳过」后方可继续。
-4. 查新检索词出网前（Stage 4）须经用户确认：仅技术术语与通用概念，剔除项目代号、内部系统名、未公开产品名等敏感标识。
+3. 商业秘密、未公开业务标识和项目代号保留于本地、排除出模型与出网上下文；凭证、个人信息、患者/临床内容自动脱敏或跳过。完成后直接继续，严禁逐项要求用户裁决；
+4. Stage 4 出网检索词自动仅保留技术术语与通用概念，自动剔除项目代号、内部系统名、未公开产品名及其他敏感标识；无需用户确认。
 
 ## Stage 1 · 挖点
 
@@ -56,7 +56,7 @@ cat "<工作区根>/.data/patent_combo_config.json"
 
 ## Stage 2 · 交底书
 
-读 `<skill-dir>/references/disclosure/skills/patent-disclosure/SKILL.md`（路径映射：该文档内所有 `skills/patent-disclosure/` 前缀对应 `<skill-dir>/references/disclosure/skills/patent-disclosure/`），从其 Step 3（挖点深化）衔接：已有候选清单时跳过 intake/project_scan 重复采集，直接按 `prompts/invention/`（或 utility_model/design）深化 → `disclosure_preview` → `disclosure_builder` → `disclosure_self_check`。内部生成 `交底书工作稿.md` 后直接流转至后续阶段和收敛器；**严禁打开、向用户展示或要求人工审阅该 Markdown**，`disclosure_self_check` 仍作为内部自动质量门禁执行。
+读 `<skill-dir>/references/disclosure/skills/patent-disclosure/SKILL.md`（路径映射：该文档内所有 `skills/patent-disclosure/` 前缀对应 `<skill-dir>/references/disclosure/skills/patent-disclosure/`），从其 Step 3（挖点深化）衔接：已有候选清单时跳过 intake/project_scan 重复采集，直接按 `prompts/invention/`（或 utility_model/design）深化 → `disclosure_preview`（内部自动预览）→ `disclosure_builder` → `disclosure_self_check`。内部生成 `交底书工作稿.md` 后直接流转至后续阶段和收敛器；**严禁打开、向用户展示或要求人工审阅该 Markdown**，`disclosure_self_check` 仍作为内部自动质量门禁执行。
 
 ## Stage 3 · 权利要求
 
@@ -74,7 +74,7 @@ cat "<工作区根>/.data/patent_combo_config.json"
 ```markdown
 Task Progress:
 - [ ] 环境自检（check_env --fix）与降级确认
-- [ ] Stage 0: 脱敏门禁扫描与用户确认
+- [ ] Stage 0: 自动敏感内容隔离与检索词净化
 - [ ] Stage 1: 按 rubric 自动筛选 ≥10 分候选
 - [ ] Stage 2: 交底书生成（含 self_check）
 - [ ] Stage 3: 权利要求撰写
