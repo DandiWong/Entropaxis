@@ -92,9 +92,9 @@ Task Progress:
 
 完成后向用户报告输出目录、文件清单、清理结果与降级情况（若有）。
 
-## 内置资产出处（v1.2.0 定版，2026-09-04）
+## 内置资产出处
 
-- `references/disclosure/` ← 工作区内部源仓库「交底技能」（MIT License 随附于该目录）；
-- `references/claims-guide/` ← 工作区内部源仓库「权利要求撰写指南」（License 随附）。源仓库位于注册表 `ip` 项目目录内，物理路径见 `.data/registry.md`，不入可分发面。
+- `references/disclosure/`：内部维护的上游资产快照；MIT License 随附于该目录；
+- `references/claims-guide/`：内部维护的上游资产快照；License 随附于该目录。
 
-升级外部源后须同步本包并在此登记日期，禁止两处版本无声漂移。
+内部源定位、更新记录与审核信息不属于可分发包，且不构成阅读或运行本 Skill 的前置条件。升级外部源后须同步本包并在此登记日期，禁止两处版本无声漂移。
