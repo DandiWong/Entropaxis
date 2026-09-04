@@ -34,7 +34,7 @@ Phase 2: 接口与契约设计 (Spec)  ➔ 确定动词_名词、参数类型清
 Phase 3: 纯标准库代码编写 (Code) ➔ 基于 templates/tool.template.py 生成 .system/tools/<name>.py
 Phase 4: 自动化单测驱动 (TDD)    ➔ 编写 .system/tests/test_<name>.py（覆盖正常与边界拦截）
 Phase 5: 双重体检门禁 (Verify)  ➔ 跑通 unittest (100%) 与 lint_workspace.py (全绿)
-Phase 6: 路由装配与五维评估 (Done)➔ 挂载使用说明至 .data/tips.md，输出五维量化评估表
+Phase 6: 路由装配与五维评估 (Done)➔ 挂载使用说明至 .data/rules/tips.md，输出五维量化评估表
 ```
 
 ---
@@ -79,5 +79,5 @@ python3 .system/tools/lint_workspace.py
 必须确保单元测试 100% 通过且 15 项工作区体检全绿。
 
 ### Phase 6 · 路由装配与五维架构评估 (Wire & Deliver)
-1. 在 `.data/tips.md` 追加该工具的操作提示（`- TIP：...`）；
+1. 在 `.data/rules/tips.md` 追加该工具的操作提示（`- TIP：...`）；
 2. 依据 [`.system/rules/五维评估.md`](../../rules/五维评估.md) 输出标准 4 列五维评估表交付成果。

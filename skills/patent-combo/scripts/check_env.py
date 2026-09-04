@@ -57,7 +57,7 @@ def _detect_browser() -> str | None:
 
 def _default_config_path(skill_dir: Path) -> Path:
     workspace = skill_dir.parents[2]
-    return workspace / ".data" / "patent_combo_config.json"
+    return workspace / ".data" / "skills" / "patent-combo" / "config.json"
 
 # ---------- 检查项 ----------
 
@@ -114,8 +114,8 @@ def check_output_root(config: dict, fix: bool) -> dict:
     p = Path(raw).expanduser() if raw else None
     if not raw:
         return {"id": "output_root", "status": "missing",
-                "detail": ".data/patent_combo_config.json 缺 output_root",
-                "fix": "👉 在 .data/patent_combo_config.json 补 \"output_root\": \"<交底书草稿输出目录>\"",
+                "detail": ".data/skills/patent-combo/config.json 缺 output_root",
+                "fix": "👉 在 .data/skills/patent-combo/config.json 补 \"output_root\": \"<交底书草稿输出目录>\"",
                 "degrade": "无输出根时不落盘，产物仅在会话中交付"}
     if p.exists():
         return {"id": "output_root", "status": "ok", "detail": str(p), "fix": None, "degrade": None}
@@ -169,7 +169,7 @@ def check_priorart_cli(cli_name: str, fix: bool,
     if path:
         return {"id": "priorart_cli", "status": "ok", "detail": f"{cli_name} -> {path}", "fix": None, "degrade": None}
     return {"id": "priorart_cli", "status": "missing", "detail": f"未找到 CLI: {cli_name}；自动安装已禁用",
-            "fix": "👉 由管理员预置已审核的 prior-art CLI；或修正 .data/patent_combo_config.json 的 priorart_cli 路径",
+            "fix": "👉 由管理员预置已审核的 prior-art CLI；或修正 .data/skills/patent-combo/config.json 的 priorart_cli 路径",
             "degrade": "Stage 4 dev-tool 路降级：04_查新报告该节标注「未执行」，改产一句话检索式清单供人工在对应源检索"}
 
 def check_verdict_backend(which_fn: Callable[[str], str | None] = _which,
@@ -188,7 +188,7 @@ def check_legacy_overrides(config: dict) -> dict:
     if legacy:
         return {"id": "legacy_overrides", "status": "ok",
                 "detail": f"检测到旧版覆盖键 {legacy}，Stage 2/3 将改用外部路径（legacy 模式）",
-                "fix": "👉 如需回归内置资产，从 .data/patent_combo_config.json 删除对应键", "degrade": None}
+                "fix": "👉 如需回归内置资产，从 .data/skills/patent-combo/config.json 删除对应键", "degrade": None}
     return {"id": "legacy_overrides", "status": "ok", "detail": "无覆盖，使用内置资产", "fix": None, "degrade": None}
 
 # ---------- 汇总 ----------
@@ -251,11 +251,11 @@ def main(argv: list[str] | None = None) -> int:
             config = json.loads(config_path.read_text(encoding="utf-8"))
         except Exception as e:
             print(f"❌ 实例配置解析失败: {config_path} ({e})", file=sys.stderr)
-            print("👉 修正 .data/patent_combo_config.json 的 JSON 语法后重试", file=sys.stderr)
+            print("👉 修正 .data/skills/patent-combo/config.json 的 JSON 语法后重试", file=sys.stderr)
             return 2
     else:
         print(f"❌ 未找到实例配置: {config_path}", file=sys.stderr)
-        print('👉 创建 .data/patent_combo_config.json，至少含 {"output_root": "<输出目录>"}', file=sys.stderr)
+        print('👉 创建 .data/skills/patent-combo/config.json，至少含 {"output_root": "<输出目录>"}', file=sys.stderr)
         return 2
 
     report = build_report(skill_dir, config, args.fix, env=dict(os.environ))

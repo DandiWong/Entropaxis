@@ -3,7 +3,7 @@
 
 以 task ID 为跨系统主键，把一个开发任务幂等地同步到配置的外部看板。
 协议与状态映射见 .system/rules/看板联动.md。零依赖，仅用标准库。
-看板 Provider CLI 由工作区实例声明 .data/board_config.json 外置（角色 main/dev），
+看板 Provider CLI 由工作区实例声明 .data/templates/board_config.json 外置（角色 main/dev），
 本工具零具体系统名；未声明或 CLI 不可用时自动降级为纯本地。
 """
 import argparse
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 # ponytail: 角色固定为 main/dev 两个，命令语法随所选 CLI；更换异语法看板时需在 Provider 声明层扩展适配
-PROVIDERS_FILE = Path(__file__).resolve().parent.parent.parent / ".data" / "board_config.json"
+PROVIDERS_FILE = Path(__file__).resolve().parent.parent.parent / ".data" / "templates" / "board_config.json"
 
 # 单一 --status 输入 → (dev 看板状态, 主看板 stage；stage=None 表示不进主看板)
 STATUS_MAP = {
@@ -62,7 +62,7 @@ def read_frontmatter(path):
 
 
 def load_providers():
-    """读取工作区级看板 Provider 声明（.data/board_config.json），返回 {role: {"cli": [...]}}。
+    """读取工作区级看板 Provider 声明（.data/templates/board_config.json），返回 {role: {"cli": [...]}}。
     声明缺失或损坏时返回 {}，全部联动自动降级为纯本地。"""
     try:
         d = json.loads(PROVIDERS_FILE.read_text(encoding="utf-8"))

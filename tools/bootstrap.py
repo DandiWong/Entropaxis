@@ -2,7 +2,7 @@
 """
 工作区根入口与系统配置初始化工具 (Bootstrap)
 用于一键同步工作区根目录的 AGENTS.md / CLAUDE.md 入口文件，自动检测宿主机安装的应用程序，
-生成/维护各类文件格式的默认打开器关联配置 (.data/file-opener.json)，并自适应引导环境。
+生成/维护各类文件格式的默认打开器关联配置 (.data/templates/file-opener.json)，并自适应引导环境。
 """
 import os
 import sys
@@ -34,7 +34,7 @@ def render_instance_configs(
             templates_dir = system_dir / "templates"
         if data_dir is None:
             data_dir = ws_root / ".data"
-    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "templates").mkdir(parents=True, exist_ok=True)
 
     if ws_name is None:
         ws_name = data_dir.parent.name or "workspace"
@@ -51,7 +51,8 @@ def render_instance_configs(
         if tpl.name not in DATA_INSTANCE_TEMPLATES:
             continue
         target_name = tpl.name.replace(".template.json", ".json")
-        target = data_dir / target_name
+        # 模板渲染产物一律落 .data/templates/，与源模板同名，路径即来源指针
+        target = data_dir / "templates" / target_name
         if target.exists():
             continue
         try:
@@ -62,7 +63,7 @@ def render_instance_configs(
             )
             rendered += 1
             if verbose:
-                print(f"✅ 已从模板渲染 .data/{target_name}（首次，空 providers）")
+                print(f"✅ 已从模板渲染 .data/templates/{target_name}（首次，空 providers）")
         except Exception as exc:
             if verbose:
                 print(f"❌ 渲染 {target_name} 失败: {exc}", file=sys.stderr)
@@ -73,7 +74,7 @@ def render_instance_configs(
 
 
         target_name = tpl.name.replace(".template.md", ".md")
-        target = data_dir / target_name
+        target = data_dir / "templates" / target_name
         if target.exists():
             continue
         try:
@@ -91,14 +92,14 @@ def render_instance_configs(
             rendered_content = rendered_content.replace("{{ORG_SHARED_PURPOSE_3}}", "待填：用途")
             # 原子写入
             with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", delete=False, dir=str(data_dir), prefix=f".{target_name}.tmp."
+                mode="w", encoding="utf-8", delete=False, dir=str(data_dir / "templates"), prefix=f".{target_name}.tmp."
             ) as tmp:
                 tmp.write(rendered_content)
                 tmp_path = Path(tmp.name)
             tmp_path.replace(target)
             rendered += 1
             if verbose:
-                print(f"✅ 已从模板渲染 .data/{target_name}（首次，占位符已替换为目录名兜底）")
+                print(f"✅ 已从模板渲染 .data/templates/{target_name}（首次，占位符已替换为目录名兜底）")
         except Exception as exc:
             if verbose:
                 print(f"❌ 渲染 {target_name} 失败: {exc}", file=sys.stderr)
@@ -258,7 +259,7 @@ def _report_opener(config: dict) -> None:
     如自建 CLI）不会出现在检测结果里，于是每次运行都像被重置了一样，
     进而诱导 Agent 去"修正"配置，把人工仲裁值真的覆盖掉。
     """
-    print("📖 当前生效的文件打开器映射（.data/file-opener.json）：")
+    print("📖 当前生效的文件打开器映射（.data/templates/file-opener.json）：")
     for info in config.get("associations", {}).values():
         mark = "🔒人工仲裁" if info.get("arbitrated") else "自动匹配"
         exts = ", ".join(info.get("extensions", []))
@@ -297,14 +298,14 @@ def _write_opener_config(target_file: Path, config: dict, verbose: bool) -> None
         with open(target_file, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
         if verbose:
-            print("✅ 已成功生成本机打开器配置: .data/file-opener.json")
+            print("✅ 已成功生成本机打开器配置: .data/templates/file-opener.json")
     except Exception as e:
         if verbose:
-            print(f"❌ 写入 .data/file-opener.json 失败: {e}", file=sys.stderr)
+            print(f"❌ 写入 .data/templates/file-opener.json 失败: {e}", file=sys.stderr)
 
 def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system_dir: Path | None = None) -> dict:
     """
-    初始化或自愈本机文件打开器关联配置 (.data/file-opener.json)。
+    初始化或自愈本机文件打开器关联配置 (.data/templates/file-opener.json)。
 
     合并保留策略（默认）：目标配置存在且合法时，仅回填缺失的格式与字段，
     人工仲裁的 selected_app/command 持久保留，内容无变化时不重写文件；
@@ -315,7 +316,7 @@ def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system
     system_dir = Path(system_dir) if system_dir is not None else tools_dir.parent
     data_dir = system_dir.parent / ".data"
     template_file = system_dir / "templates" / "file-opener.template.json"
-    target_file = data_dir / "file-opener.json"
+    target_file = data_dir / "templates" / "file-opener.json"
 
     if not template_file.exists():
         if verbose:
@@ -358,7 +359,7 @@ def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system
 def get_open_command(file_path: str, root: Path | None = None) -> str:
     """
     根据文件路径或格式获取本机打开命令。
-    优先读取 .data/file-opener.json 中的配置；缺失时优雅降级为系统默认命令。
+    优先读取 .data/templates/file-opener.json 中的配置；缺失时优雅降级为系统默认命令。
     """
     path_obj = Path(file_path)
     if path_obj.is_dir() or not path_obj.suffix:
@@ -375,7 +376,7 @@ def get_open_command(file_path: str, root: Path | None = None) -> str:
         tools_dir = Path(__file__).resolve().parent
         root = tools_dir.parent.parent
 
-    config_file = root / ".data" / "file-opener.json"
+    config_file = root / ".data" / "templates" / "file-opener.json"
     if config_file.is_file():
         try:
             with open(config_file, "r", encoding="utf-8") as f:

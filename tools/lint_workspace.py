@@ -269,6 +269,50 @@ def check_schema_conformance(root: Path) -> list[str]:
     return [f"[违反 schema] {e}" for e in (vs.check_route_map() + vs.check_audit_report_schema_selftest())]
 
 
+def check_data_source_mapping(root: Path) -> list[str]:
+    """双向核验 .data/ 路径与 .system/ 定义方的对应关系。
+
+    `.data/` 按定义方分三个桶，路径本身即指向来源：
+      .data/templates/X  ⟺ .system/templates/X.template.*
+      .data/skills/<N>/* ⟺ .system/skills/<N>/
+      .data/rules/*      ⟺ 由某条规则声明（具体哪条见文件头 source 字段）
+    双向检查能同时抓出孤儿实例文件与失配模板，防结构随时间漂移。
+    """
+    issues = []
+    data_dir, sys_dir = root / ".data", root / ".system"
+    if not data_dir.is_dir():
+        return issues
+
+    tpl_dir = data_dir / "templates"
+    if tpl_dir.is_dir():
+        for p in sorted(tpl_dir.glob("*")):
+            if not p.is_file() or p.suffix not in (".md", ".json"):
+                continue
+            expect = sys_dir / "templates" / f"{p.stem}.template{p.suffix}"
+            if not expect.exists():
+                issues.append(
+                    f"[实例孤儿] .data/templates/{p.name} 找不到对应模板 {expect.relative_to(root)}；"
+                    "它不是模板渲染产物，应移入 .data/rules/ 或 .data/skills/<名>/。"
+                )
+
+    skl_dir = data_dir / "skills"
+    if skl_dir.is_dir():
+        for d in sorted(skl_dir.iterdir()):
+            if d.is_dir() and not (sys_dir / "skills" / d.name).is_dir():
+                issues.append(
+                    f"[实例孤儿] .data/skills/{d.name}/ 找不到对应 Skill "
+                    f".system/skills/{d.name}/；Skill 已删除时其实例配置应一并清理。"
+                )
+
+    for p in sorted(data_dir.glob("*")):
+        if p.is_file() and p.suffix in (".md", ".json"):
+            issues.append(
+                f"[未归桶] .data/{p.name} 位于顶层。按来源归入 templates/（模板渲染）、"
+                "rules/（规则声明）或 skills/<名>/（Skill 私有）。"
+            )
+    return issues
+
+
 def check_data_provenance(root: Path) -> list[str]:
     """检查 .data/ 顶层实例文件是否声明来源与写入策略。
 
@@ -280,7 +324,8 @@ def check_data_provenance(root: Path) -> list[str]:
     data_dir = root / ".data"
     if not data_dir.is_dir():
         return issues
-    for p in sorted(data_dir.glob("*")):
+    # 只扫三个来源桶；credentials/ 与 docs/ 不读不列举（前者含凭据，后者是研究产物）
+    for p in sorted(q for b in ("templates", "rules", "skills") for q in (data_dir / b).rglob("*")):
         if not p.is_file() or p.suffix not in (".md", ".json"):
             continue
         try:
@@ -296,7 +341,7 @@ def check_data_provenance(root: Path) -> list[str]:
             ok = text.startswith("---\n") and "\npolicy:" in text.split("\n---", 2)[0]
         if not ok:
             issues.append(
-                f"[实例文件缺来源标记] .data/{p.name} 未声明 source/managed_by/policy。"
+                f"[实例文件缺来源标记] .data/{p.relative_to(data_dir)} 未声明 source/managed_by/policy。"
                 "运行 `python3 .system/tools/stamp_data_provenance.py` 补盖。"
             )
     return issues
@@ -478,11 +523,11 @@ def check_skill_symlink_health(root: Path) -> list[str]:
 
 
 def check_registry_exists(root: Path) -> list[str]:
-    """检查 .data/registry.md 是否存在（lint 白名单完备性依赖它）。"""
-    registry = root / ".data" / "registry.md"
+    """检查 .data/templates/registry.md 是否存在（lint 白名单完备性依赖它）。"""
+    registry = root / ".data" / "templates" / "registry.md"
     if not registry.exists():
         return [
-            "[注册表缺失] .data/registry.md 不存在，无法校验项目白名单；请先执行 init-project 或手动创建。"
+            "[注册表缺失] .data/templates/registry.md 不存在，无法校验项目白名单；请先执行 init-project 或手动创建。"
         ]
     return []
 
@@ -664,8 +709,8 @@ def check_routing_integrity(root: Path) -> list[str]:
             if not (root / clean_ref).exists():
                 issues.append(f"[根路由断链] 根 AGENTS.md 引用的规则文件 {ref} 不存在。")
 
-    # 2. 检查 .data/registry.md 中的每个项目主目录物理存在
-    registry = root / ".data" / "registry.md"
+    # 2. 检查 .data/templates/registry.md 中的每个项目主目录物理存在
+    registry = root / ".data" / "templates" / "registry.md"
     if registry.exists():
         for line in registry.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -681,7 +726,7 @@ def check_routing_integrity(root: Path) -> list[str]:
                         continue
                     proj_dir = root / d.rstrip("/")
                     if not proj_dir.is_dir():
-                        issues.append(f"[注册表断链] .data/registry.md 注册的项目目录 {d} 物理不存在。")
+                        issues.append(f"[注册表断链] .data/templates/registry.md 注册的项目目录 {d} 物理不存在。")
 
     # 3. 检查主题胶囊目录命名与结构（YYYYMMDD_主题）
     capsule_pattern = re.compile(r"^\d{8}_.+$")
@@ -766,7 +811,8 @@ def main() -> int:
         ("17. 规则文件行数预算检查", check_rule_budget, False),
         ("18. 跨规则文件语义复述检查", check_rule_semantic_dedup, False),
         ("19. .data/ 实例文件来源标记检查", check_data_provenance, False),
-        ("20. 结构化契约 schema 校验", check_schema_conformance, True),
+        ("20. .data/ 路径与来源映射检查", check_data_source_mapping, False),
+        ("21. 结构化契约 schema 校验", check_schema_conformance, True),
     ]
 
     all_issues = []

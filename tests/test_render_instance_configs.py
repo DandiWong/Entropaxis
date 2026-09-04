@@ -49,14 +49,14 @@ class RenderInstanceConfigsTests(TestCase):
         self.assertTrue(ok)
 
         # board_config.json 应被创建
-        board = self.data_dir / "board_config.json"
+        board = self.data_dir / "templates" / "board_config.json"
         self.assertTrue(board.exists())
         data = json.loads(board.read_text(encoding="utf-8"))
         self.assertIn("providers", data)
         self.assertEqual(data["providers"], {})
 
         # workspace-config.md 应被创建，且占位符被替换为 "Acme" 兜底
-        ws_cfg = self.data_dir / "workspace-config.md"
+        ws_cfg = self.data_dir / "templates" / "workspace-config.md"
         self.assertTrue(ws_cfg.exists())
         content = ws_cfg.read_text(encoding="utf-8")
         self.assertIn("Acme", content)
@@ -64,16 +64,16 @@ class RenderInstanceConfigsTests(TestCase):
         self.assertNotIn("{{ORG_FORBIDDEN_ABBR}}", content)
 
         # AGENTS.template.md 不在白名单 → 不应被渲染
-        agents = self.data_dir / "AGENTS.md"
+        agents = self.data_dir / "templates" / "AGENTS.md"
         self.assertFalse(
             agents.exists(),
             "AGENTS.template.md is not in whitelist, must not be rendered to .data/",
         )
 
     def test_existing_target_is_not_overwritten(self) -> None:
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        (self.data_dir / "templates").mkdir(parents=True, exist_ok=True)
         sentinel = "PRESERVED-BY-USER"
-        existing = self.data_dir / "board_config.json"
+        existing = self.data_dir / "templates" / "board_config.json"
         existing.write_text(sentinel, encoding="utf-8")
 
         render_instance_configs(
@@ -98,11 +98,11 @@ class RenderInstanceConfigsTests(TestCase):
         )
 
         # 仅白名单内的两个文件被渲染
-        self.assertTrue((self.data_dir / "board_config.json").exists())
-        self.assertTrue((self.data_dir / "workspace-config.md").exists())
+        self.assertTrue((self.data_dir / "templates" / "board_config.json").exists())
+        self.assertTrue((self.data_dir / "templates" / "workspace-config.md").exists())
         # 不在白名单的全部跳过
-        self.assertFalse((self.data_dir / "AGENTS.md").exists())
-        self.assertFalse((self.data_dir / "README.md").exists())
+        self.assertFalse((self.data_dir / "templates" / "AGENTS.md").exists())
+        self.assertFalse((self.data_dir / "templates" / "README.md").exists())
         self.assertFalse((self.data_dir / "registry.md").exists())
 
     def test_template_dir_missing_is_noop(self) -> None:
@@ -116,4 +116,4 @@ class RenderInstanceConfigsTests(TestCase):
         )
         self.assertTrue(ok)
         # .data/ 可能被 mkdir 但不应有产物
-        self.assertFalse(list(self.data_dir.glob("*")))
+        self.assertFalse(list((self.data_dir / "templates").glob("*")))

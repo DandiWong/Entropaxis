@@ -62,7 +62,7 @@ class InstructionParsingRuleTests(TestCase):
         self.assertIn("优雅降级", content)
 
     def test_workspace_config_declares_external_reviewer_cli(self) -> None:
-        config_path = WORKSPACE_ROOT / ".data" / "workspace-config.md"
+        config_path = WORKSPACE_ROOT / ".data" / "templates" / "workspace-config.md"
         self.assertTrue(config_path.exists(), "workspace-config.md must exist")
         content = config_path.read_text(encoding="utf-8")
 
@@ -70,7 +70,7 @@ class InstructionParsingRuleTests(TestCase):
         self.assertIn("omp --model openai-codex/gpt-5.6-terra", content)
 
     def test_tips_contain_new_command_hints(self) -> None:
-        tips_path = WORKSPACE_ROOT / ".data" / "tips.md"
+        tips_path = WORKSPACE_ROOT / ".data" / "rules" / "tips.md"
         self.assertTrue(tips_path.exists(), "tips.md must exist")
         content = tips_path.read_text(encoding="utf-8")
 

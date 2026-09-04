@@ -116,6 +116,17 @@ class DataProvenanceTests(TestCase):
         for name, meta in PROV.KNOWN.items():
             self.assertIn(meta["policy"], PROV.VALID_POLICIES, name)
 
+    def test_source_buckets_map_to_system(self) -> None:
+        """三个桶的对应关系必须成立，否则「路径即来源指针」就是空话。"""
+        sys.path.insert(0, str(SYSTEM_ROOT / "tools"))
+        import lint_workspace as LW
+        self.assertEqual(LW.check_data_source_mapping(SYSTEM_ROOT.parent), [])
+
+    def test_no_toplevel_instance_files(self) -> None:
+        data = SYSTEM_ROOT.parent / ".data"
+        stray = [p.name for p in data.glob("*") if p.is_file() and p.suffix in (".md", ".json")]
+        self.assertEqual(stray, [], f"顶层散落实例文件未归桶: {stray}")
+
     def test_credentials_dir_never_scanned(self) -> None:
         names = [p.name for p in PROV.target_files()]
         self.assertNotIn("credentials", names)

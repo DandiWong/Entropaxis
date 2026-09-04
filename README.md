@@ -32,7 +32,7 @@
 2. **规则与上下文纪律**  
    - 严格遵循根 `AGENTS.md` 常驻层控制面与 `.system/rules/` 架构规范；
    - 坚持**单一真源（Single Source of Truth）**、**上下文瘦身**与 **YAGNI 原则**，禁止跨层级复制规则或创建冗余文件；
-   - 涉及多端任务与项目识别时，以 `.data/registry.md` 实例注册表为唯一映射基准。
+   - 涉及多端任务与项目识别时，以 `.data/templates/registry.md` 实例注册表为唯一映射基准。
 
 ---
 

@@ -61,7 +61,7 @@ class ToolGovernanceRuleTests(TestCase):
         self.assertIn("tool-crafter", parse_content)
 
     def test_tips_contain_tool_crafter_hints(self) -> None:
-        tips_path = WORKSPACE_ROOT / ".data" / "tips.md"
+        tips_path = WORKSPACE_ROOT / ".data" / "rules" / "tips.md"
         self.assertTrue(tips_path.exists(), "tips.md must exist")
         content = tips_path.read_text(encoding="utf-8")
         self.assertIn("- TIP：你可以说“机制转工具”或“tool-crafter”", content)

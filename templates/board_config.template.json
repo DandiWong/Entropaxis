@@ -1,4 +1,4 @@
 {
-  "_comment": "看板 Provider 实例声明模板：角色 main（团队主看板）/ dev（研发过程看板）→ 具体 CLI。本文件由 .system/tools/bootstrap.py 在 .data/board_config.json 缺失时首次渲染；占位符会被替换为工作区目录名，对方用户需自行填入实际 Token 与 CLI 命令。本文件不入版本库。",
+  "_comment": "看板 Provider 实例声明模板：角色 main（团队主看板）/ dev（研发过程看板）→ 具体 CLI。本文件由 .system/tools/bootstrap.py 在 .data/templates/board_config.json 缺失时首次渲染；占位符会被替换为工作区目录名，对方用户需自行填入实际 Token 与 CLI 命令。本文件不入版本库。",
   "providers": {}
 }

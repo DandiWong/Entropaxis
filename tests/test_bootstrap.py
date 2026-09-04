@@ -56,8 +56,9 @@ class FileOpenerMergeTests(TestCase):
             self.system_dir / "templates" / "file-opener.template.json",
         )
         self.data_dir = self.tmp / ".data"
-        self.data_dir.mkdir()
-        self.config_path = self.data_dir / "file-opener.json"
+        (self.data_dir / "templates").mkdir(parents=True)
+        # 模板渲染产物落 .data/templates/，与源模板同名，路径即来源指针
+        self.config_path = self.data_dir / "templates" / "file-opener.json"
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)

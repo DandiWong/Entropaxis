@@ -55,8 +55,8 @@ KNOWN: dict[str, dict[str, str]] = {
         "managed_by": "人工 + Agent 按《财务报销》配置前置门禁补填",
         "policy": "merge-only",
     },
-    "patent_combo_config.json": {
-        "source": "patent-combo Skill",
+    "config.json": {
+        "source": ".system/skills/patent-combo/",
         "managed_by": "patent-combo Skill",
         "policy": "merge-only",
     },
@@ -75,11 +75,18 @@ KNOWN: dict[str, dict[str, str]] = {
 FALLBACK = {"source": "未登记（按人工真源保护）", "managed_by": "人工", "policy": "merge-only"}
 
 
+# 三个来源桶：路径本身即指向定义方（见 rules/01_根系统治理.md「.data/ 目录结构」）
+SOURCE_BUCKETS = ("templates", "rules", "skills")
+
+
 def target_files(data_dir: Path = DATA_DIR) -> list[Path]:
-    """只取顶层 .md/.json；credentials/ 与子目录一律不碰（含凭据，不读不写不列举）。"""
+    """只取三个来源桶内的 .md/.json；credentials/ 与 docs/ 一律不碰（前者含凭据）。"""
     if not data_dir.is_dir():
         return []
-    return sorted(p for p in data_dir.glob("*") if p.is_file() and p.suffix in (".md", ".json"))
+    return sorted(
+        p for b in SOURCE_BUCKETS for p in (data_dir / b).rglob("*")
+        if p.is_file() and p.suffix in (".md", ".json")
+    )
 
 
 def _meta_for(name: str) -> dict[str, str]:
@@ -136,16 +143,16 @@ def main() -> int:
     missing = [p for p in files if not has_provenance(p)]
     if args.check:
         for p in missing:
-            print(f"⚠️ 缺少来源标记: .data/{p.name}\n👉 运行 python3 .system/tools/stamp_data_provenance.py 补盖")
+            print(f"⚠️ 缺少来源标记: .data/{p.relative_to(DATA_DIR)}\n👉 运行 python3 .system/tools/stamp_data_provenance.py 补盖")
         print(f"{len(files) - len(missing)}/{len(files)} 个文件已有来源标记。")
         return 1 if missing else 0
 
     for p in missing:
         if stamp(p):
             meta = _meta_for(p.name)
-            print(f"✅ .data/{p.name} ← 来源 {meta['source']}｜策略 {meta['policy']}")
+            print(f"✅ .data/{p.relative_to(DATA_DIR)} ← 来源 {meta['source']}｜策略 {meta['policy']}")
     if not missing:
-        print(f"✅ .data/ 全部 {len(files)} 个顶层实例文件均已有来源标记。")
+        print(f"✅ .data/ 全部 {len(files)} 个实例文件均已有来源标记。")
     return 0
 
 
