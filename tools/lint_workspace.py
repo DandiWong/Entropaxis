@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -245,6 +246,59 @@ def check_rule_semantic_dedup(root: Path) -> list[str]:
         )
     if len(ranked) > RULE_DUP_MAX_REPORTS:
         issues.append(f"[跨文件复述] 另有 {len(ranked) - RULE_DUP_MAX_REPORTS} 处较短复述未列出。")
+    return issues
+
+
+def check_schema_conformance(root: Path) -> list[str]:
+    """按 .system/schemas/ 校验结构化契约。
+
+    此前 route_map 的字段集、Front Matter 的取值域、审计报告的问题标注格式，
+    契约都只存在于各自解析器的正则里——改规则的人无从得知自己在破坏一个解析器。
+    """
+    tools = root / ".system" / "tools"
+    if not (tools / "validate_schema.py").exists():
+        return []
+    sys.path.insert(0, str(tools))
+    try:
+        import validate_schema as vs
+    except Exception as exc:  # noqa: BLE001 - 工具不可用不应阻断整体体检
+        return [f"[schema 校验不可用] {exc}"]
+    finally:
+        if str(tools) in sys.path:
+            sys.path.remove(str(tools))
+    return [f"[违反 schema] {e}" for e in (vs.check_route_map() + vs.check_audit_report_schema_selftest())]
+
+
+def check_data_provenance(root: Path) -> list[str]:
+    """检查 .data/ 顶层实例文件是否声明来源与写入策略。
+
+    `.data/` 是人工真源与实例配置所在地，缺少来源标记时人眼无法判断某文件从哪来、
+    谁在维护、能否重写——这正是人工仲裁配置被 Agent 整体覆盖的前置条件。
+    只查顶层 .md/.json；`credentials/` 及子目录含凭据，不读不列举。
+    """
+    issues = []
+    data_dir = root / ".data"
+    if not data_dir.is_dir():
+        return issues
+    for p in sorted(data_dir.glob("*")):
+        if not p.is_file() or p.suffix not in (".md", ".json"):
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if p.suffix == ".json":
+            try:
+                ok = isinstance(json.loads(text).get("_meta"), dict)
+            except (json.JSONDecodeError, AttributeError):
+                ok = False
+        else:
+            ok = text.startswith("---\n") and "\npolicy:" in text.split("\n---", 2)[0]
+        if not ok:
+            issues.append(
+                f"[实例文件缺来源标记] .data/{p.name} 未声明 source/managed_by/policy。"
+                "运行 `python3 .system/tools/stamp_data_provenance.py` 补盖。"
+            )
     return issues
 
 
@@ -711,6 +765,8 @@ def main() -> int:
         ("16. 确定性路由映射表完整性检查", check_route_map_integrity, True),
         ("17. 规则文件行数预算检查", check_rule_budget, False),
         ("18. 跨规则文件语义复述检查", check_rule_semantic_dedup, False),
+        ("19. .data/ 实例文件来源标记检查", check_data_provenance, False),
+        ("20. 结构化契约 schema 校验", check_schema_conformance, True),
     ]
 
     all_issues = []

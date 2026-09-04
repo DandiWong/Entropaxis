@@ -1,0 +1,46 @@
+{
+  "$comment": "交付物 Front Matter 字段契约。真源定义见 rules/文件交付.md §2.2；此前 type/status 的取值范围只写在散文里，无任何校验。消费方：tools/backfill_frontmatter.py、tools/validate_schema.py。",
+  "title": "front_matter",
+  "target": "主题工作胶囊内各阶段 Markdown 文档顶部的 YAML Front Matter",
+  "type": "object",
+  "required": ["type", "topic", "date", "author", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["Spec", "Proposal", "Research", "Audit", "Report", "Changelog"]
+    },
+    "topic": { "type": "string", "minLength": 1 },
+    "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "author": {
+      "type": "string",
+      "enum": ["Researcher", "Designer", "Builder", "Reviewer", "Maintainer"]
+    },
+    "id": {
+      "$comment": "研发/Spec 事项必填；ID 前缀体系见 文件交付.md §2.3",
+      "type": "string",
+      "pattern": "^(Tech|Task|B|R|SC|M|Bug)-\\d+$"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "active", "revised", "completed"]
+    },
+    "audit_max_rounds": {
+      "$comment": "仅 type: Proposal 需覆盖默认轮次上限时声明",
+      "type": "integer",
+      "minimum": 1
+    },
+    "independence": {
+      "$comment": "仅 type: Audit 使用；会话内降级必须显式留痕，check_audit_gate.py 据此阻断 Critical 关闭",
+      "type": "string",
+      "pattern": "^(external:.+|session-internal-downgraded \\(external: .+ (missing|failed)\\))$"
+    }
+  },
+  "conditional_required": [
+    {
+      "when": { "type": "Spec" },
+      "require": ["id"],
+      "message": "type: Spec 必须声明 id（研发事项需可追溯到 Task ID）"
+    }
+  ]
+}

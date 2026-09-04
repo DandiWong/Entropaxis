@@ -248,13 +248,29 @@ def _build_opener_defaults(tpl_data: dict, detected_apps: set[str], cmd_key: str
             "command": selected_cmd,
             "available_candidates": [c["name"] for c in matched_candidates if c["is_installed"]],
         }
-        if verbose:
-            cands_str = f" (可选候选: {', '.join(config['associations'][fmt_id]['available_candidates'])})" if config['associations'][fmt_id]['available_candidates'] else ""
-            print(f"  • {fmt_info['name']} ({', '.join(fmt_info['extensions'])}): 匹配打开程序 -> [{selected_app_name}]{cands_str}")
     return config
 
+
+def _report_opener(config: dict) -> None:
+    """打印**实际生效**的打开器映射，并标注每项来源。
+
+    此前打印的是本机检测结果而非配置生效值——用户手工注册的程序（模板候选之外，
+    如自建 CLI）不会出现在检测结果里，于是每次运行都像被重置了一样，
+    进而诱导 Agent 去"修正"配置，把人工仲裁值真的覆盖掉。
+    """
+    print("📖 当前生效的文件打开器映射（.data/file-opener.json）：")
+    for info in config.get("associations", {}).values():
+        mark = "🔒人工仲裁" if info.get("arbitrated") else "自动匹配"
+        exts = ", ".join(info.get("extensions", []))
+        print(f"  • {info.get('name', '?')} ({exts}): [{info.get('selected_app', '?')}] {mark}")
+
 def _merge_opener(existing: dict, defaults: dict) -> dict:
-    """合并保留策略：人工仲裁的 selected_app/command 原样保留，仅回填缺失格式与缺失字段。"""
+    """合并保留策略：人工仲裁的 selected_app/command 原样保留，仅回填缺失格式与缺失字段。
+
+    存量配置的 command 与本机检测默认值不一致，说明有人**刻意**改过（手工注册了模板候选
+    之外的程序），据此打上 `arbitrated` 标记。该标记既让人一眼看出哪些是人工决定，
+    也让后续任何 Agent 在写这个文件前看到"此项不得覆盖"。
+    """
     merged = json.loads(json.dumps(existing, ensure_ascii=False))
     assoc = merged.setdefault("associations", {})
     if not isinstance(assoc, dict):
@@ -269,6 +285,8 @@ def _merge_opener(existing: dict, defaults: dict) -> dict:
                 cur[key] = dflt.get(key)
         if not isinstance(cur.get("available_candidates"), list):
             cur["available_candidates"] = dflt.get("available_candidates", [])
+        if cur.get("arbitrated") is None and cur.get("command") != dflt.get("command"):
+            cur["arbitrated"] = True
     merged.setdefault("version", defaults.get("version", "1.0.0"))
     merged.setdefault("platform", defaults.get("platform", sys.platform))
     return merged
@@ -320,20 +338,21 @@ def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system
         except Exception:
             existing = None
         if isinstance(existing, dict) and isinstance(existing.get("associations"), dict):
-            defaults = _build_opener_defaults(tpl_data, detect_host_apps(), cmd_key, verbose)
+            # 检测过程不打印：那是候选发现结果，不是生效配置，混淆二者会诱发误"修复"
+            defaults = _build_opener_defaults(tpl_data, detect_host_apps(), cmd_key, verbose=False)
             merged = _merge_opener(existing, defaults)
             if merged != existing:
                 _write_opener_config(target_file, merged, verbose)
-                if verbose:
-                    print("✅ 文件打开器配置已合并补全（人工仲裁项已保留）")
-            elif verbose:
-                print("✅ 本机文件打开器配置已就绪 (.data/file-opener.json)")
+            if verbose:
+                _report_opener(merged)
             return merged
         if verbose:
-            print("⚠️ 既有打开器配置损坏，自动重建自愈...")
+            print("⚠️ 既有打开器配置损坏（无法解析或结构非法），自动重建自愈...")
 
     config = _build_opener_defaults(tpl_data, detect_host_apps(), cmd_key, verbose)
     _write_opener_config(target_file, config, verbose)
+    if verbose:
+        _report_opener(config)
     return config
 
 def get_open_command(file_path: str, root: Path | None = None) -> str:
