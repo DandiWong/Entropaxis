@@ -49,8 +49,8 @@ class ToolGovernanceRuleTests(TestCase):
         agents_content = agents_path.read_text(encoding="utf-8")
         self.assertIn(".system/rules/工具技能.md", agents_content)
 
-        parse_path = SYSTEM_ROOT / "rules" / "指令解析.md"
-        self.assertTrue(parse_path.exists(), "指令解析.md must exist")
+        parse_path = SYSTEM_ROOT / "rules" / "治理指令.md"
+        self.assertTrue(parse_path.exists(), "治理指令.md must exist")
         parse_content = parse_path.read_text(encoding="utf-8")
         self.assertIn("机制转工具 / 制作工具", parse_content)
         self.assertIn("tool-crafter", parse_content)

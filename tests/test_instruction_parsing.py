@@ -7,9 +7,19 @@ WORKSPACE_ROOT = SYSTEM_ROOT.parent
 
 
 class InstructionParsingRuleTests(TestCase):
-    def test_instruction_parsing_defines_new_commands(self) -> None:
+    def test_instruction_parsing_routes_to_command_rules(self) -> None:
+        """核心只留解析方法，机制语义按业务/治理两个切面外置。"""
         rule_path = SYSTEM_ROOT / "rules" / "指令解析.md"
         self.assertTrue(rule_path.exists(), "指令解析.md must exist")
+        content = rule_path.read_text(encoding="utf-8")
+
+        self.assertIn("工作流指令.md", content)
+        self.assertIn("治理指令.md", content)
+        self.assertIn("## 通用任务解析", content)
+
+    def test_governance_commands_define_system_actions(self) -> None:
+        rule_path = SYSTEM_ROOT / "rules" / "治理指令.md"
+        self.assertTrue(rule_path.exists(), "治理指令.md must exist")
         content = rule_path.read_text(encoding="utf-8")
 
         self.assertIn("## 系统自检", content)
