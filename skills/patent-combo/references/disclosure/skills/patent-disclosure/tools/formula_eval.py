@@ -219,6 +219,33 @@ def _ast_allowed(node: ast.AST) -> bool:
             return False
     return True
 
+def _eval_allowed(node: ast.AST) -> float:
+    if isinstance(node, ast.Expression):
+        return _eval_allowed(node.body)
+    if isinstance(node, ast.Constant):
+        return float(node.value)
+    if isinstance(node, ast.UnaryOp):
+        value = _eval_allowed(node.operand)
+        return value if isinstance(node.op, ast.UAdd) else -value
+    if isinstance(node, ast.BinOp):
+        left = _eval_allowed(node.left)
+        right = _eval_allowed(node.right)
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, ast.Div):
+            return left / right
+        raise ValueError("unsupported binary operator")
+    if isinstance(node, (ast.Tuple, ast.List)):
+        raise ValueError("sequence is only valid as min/max arguments")
+    if isinstance(node, ast.Call):
+        values = [_eval_allowed(arg) for arg in node.args]
+        return float((min if node.func.id == "min" else max)(values))
+    raise ValueError(f"unsupported node: {type(node).__name__}")
+
 
 def eval_rhs(rhs_latex: str, values: dict[str, float]) -> tuple[float | None, str | None]:
     """成功返回 (value, None)；失败返回 (None, reason)。reason 以 skip: 开头表示应警告。"""
@@ -238,8 +265,8 @@ def eval_rhs(rhs_latex: str, values: dict[str, float]) -> tuple[float | None, st
     if not _ast_allowed(tree):
         return None, "skip: 含不允许的运算（仅 + - * / min max）"
     try:
-        val = eval(compile(tree, "<formula>", "eval"), {"__builtins__": {}}, {"min": min, "max": max})
-    except Exception as exc:
+        val = _eval_allowed(tree)
+    except (ArithmeticError, TypeError, ValueError) as exc:
         return None, f"skip: 求值失败 ({exc})"
     if not isinstance(val, (int, float)) or not math.isfinite(float(val)):
         return None, "skip: 结果非有限数"

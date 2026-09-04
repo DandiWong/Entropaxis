@@ -1,28 +1,19 @@
 #!/usr/bin/env python3
 """patent-combo 环境自检与降级矩阵生成器（纯标准库，零第三方依赖）。
 
-用法:
-  python3 scripts/check_env.py [--fix] [--json] [--skill-dir <path>] [--config <path>]
-
-行为:
-  1. 核心资产（内置三件套与最终交付收敛器）缺失 => 阻断（exit 2），不猜测替代路径。
-  2. 增量依赖逐项探测: playwright 可导入、系统浏览器、prior-art CLI、verdict 后端。
-  3. --fix: 仅尝试两类安全安装——pip 安装 playwright、cargo 安装 patent（均需对应
-     工具链本机存在；任何安装失败不抛异常，转入降级矩阵）。
-  4. 最终 DOCX 交付由内置收敛器调用随包 md_to_docx 工具；转换失败时保留底稿并阻断收尾，
-     不得以 Markdown 替代。
-  5. 每个失败项输出 ❌ 原因 + 👉 修复建议 + 降级方案；--json 输出结构化报告。
-
-退出码: 0 = 核心阶段(Stage 0-3)可用; 2 = 核心资产缺失（阻断）。
+``--fix`` 仅创建缺失的输出目录，不安装 Python、Cargo 或浏览器依赖。
+依赖必须由管理员按随包锁定清单预置，避免在 Skill 运行期间执行供应链安装。
+核心资产或 Mermaid 固定资产校验失败时阻断；可选检索依赖缺失时按降级矩阵继续。
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
 import os
 import platform
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Callable
@@ -31,9 +22,8 @@ from typing import Callable
 
 def _importable(module: str) -> bool:
     try:
-        __import__(module)
-        return True
-    except Exception:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
         return False
 
 def _which(binary: str) -> str | None:
@@ -95,6 +85,30 @@ def check_core_assets(skill_dir: Path) -> list[dict]:
         })
     return checks
 
+_MERMAID_REL = "references/disclosure/skills/patent-disclosure/tools/vendor/mermaid.min.js"
+_MERMAID_SHA256 = "a43bc1afd446f9c4cc66ac5dd45d02e8d65e26fc5344ec0ef787f88d6ddb6f9e"
+
+
+def check_mermaid_integrity(skill_dir: Path) -> dict:
+    asset = skill_dir / _MERMAID_REL
+    if not asset.is_file():
+        return {
+            "id": "mermaid_integrity",
+            "status": "missing",
+            "detail": f"固定 Mermaid 资产缺失: {asset}",
+            "fix": "重新部署经过校验的 patent-combo Skill 包",
+            "degrade": None,
+        }
+    actual = hashlib.sha256(asset.read_bytes()).hexdigest()
+    ok = actual == _MERMAID_SHA256
+    return {
+        "id": "mermaid_integrity",
+        "status": "ok" if ok else "missing",
+        "detail": f"Mermaid 11.4.1 SHA-256: {actual}",
+        "fix": None if ok else "固定资产哈希不匹配：停止出图并重新部署可信 Skill 包",
+        "degrade": None,
+    }
+
 def check_output_root(config: dict, fix: bool) -> dict:
     raw = config.get("output_root", "")
     p = Path(raw).expanduser() if raw else None
@@ -127,23 +141,17 @@ def check_word_export(importable_fn: Callable[[str], bool] = _importable) -> dic
         "id": "word_export",
         "status": "missing",
         "detail": f"DOCX 导出依赖缺失: {', '.join(missing)}",
-        "fix": f"👉 pip install {packages} 后重跑环境自检",
+        "fix": f"👉 由管理员按 references/disclosure/requirements.txt 的精确版本预置 {packages} 后重跑；Skill 不自动安装",
         "degrade": "最终 DOCX 交付阻断；保留阶段 Markdown 底稿，不得以其替代交付",
     }
+
 
 def check_playwright(fix: bool, importable_fn: Callable[[str], bool] = _importable,
                      installer: Callable[[list[str]], tuple[bool, str]] | None = None) -> dict:
     if importable_fn("playwright"):
         return {"id": "playwright", "status": "ok", "detail": "playwright 可导入", "fix": None, "degrade": None}
-    if fix and installer:
-        ok, out = installer([sys.executable, "-m", "pip", "install", "playwright>=1.40.0,<2.0"])
-        if ok and importable_fn("playwright"):
-            return {"id": "playwright", "status": "ok", "detail": "playwright 已安装", "fix": None, "degrade": None}
-        detail = f"安装失败: {out.strip()[:200]}"
-    else:
-        detail = "playwright 未安装"
-    return {"id": "playwright", "status": "missing", "detail": detail,
-            "fix": "👉 pip install playwright（系统 Chrome/Edge 即可，无需 playwright install chromium）",
+    return {"id": "playwright", "status": "missing", "detail": "playwright 未安装；自动安装已禁用",
+            "fix": "👉 由管理员按 references/disclosure/requirements.txt 的精确版本预置 Playwright",
             "degrade": "Stage 4 CNIPA 路降级：04_查新报告该节标注「未执行（人工）」，改产关键词+IPC 分类号人工检索包（epub.cnipa.gov.cn）"}
 
 def check_browser() -> dict:
@@ -160,15 +168,8 @@ def check_priorart_cli(cli_name: str, fix: bool,
     path = which_fn(cli_name)
     if path:
         return {"id": "priorart_cli", "status": "ok", "detail": f"{cli_name} -> {path}", "fix": None, "degrade": None}
-    if fix and installer and which_fn("cargo"):
-        ok, out = installer(["cargo", "install", "patent", "--locked"])
-        if ok and which_fn(cli_name):
-            return {"id": "priorart_cli", "status": "ok", "detail": f"{cli_name} 已安装", "fix": None, "degrade": None}
-        detail = f"cargo 安装失败: {out.strip()[:200]}"
-    else:
-        detail = f"未找到 CLI: {cli_name}"
-    return {"id": "priorart_cli", "status": "missing", "detail": detail,
-            "fix": "👉 安装 prior-art CLI（cargo install patent）；或修正 .data/patent_combo_config.json 的 priorart_cli 路径",
+    return {"id": "priorart_cli", "status": "missing", "detail": f"未找到 CLI: {cli_name}；自动安装已禁用",
+            "fix": "👉 由管理员预置已审核的 prior-art CLI；或修正 .data/patent_combo_config.json 的 priorart_cli 路径",
             "degrade": "Stage 4 dev-tool 路降级：04_查新报告该节标注「未执行」，改产一句话检索式清单供人工在对应源检索"}
 
 def check_verdict_backend(which_fn: Callable[[str], str | None] = _which,
@@ -199,6 +200,7 @@ def build_report(skill_dir: Path, config: dict, fix: bool,
                  installer: Callable[[list[str]], tuple[bool, str]] | None = None) -> dict:
     checks: list[dict] = []
     checks += check_core_assets(skill_dir)
+    checks.append(check_mermaid_integrity(skill_dir))
     checks.append(check_output_root(config, fix))
     checks.append(check_playwright(fix, importable_fn, installer))
     checks.append(check_browser())
@@ -207,9 +209,9 @@ def build_report(skill_dir: Path, config: dict, fix: bool,
     checks.append(check_verdict_backend(which_fn, env))
     checks.append(check_legacy_overrides(config))
 
-    core_missing = [c for c in checks if c["id"].startswith(("disclosure", "md_to_docx", "cnipa", "claims", "mining", "output_finalizer", "word_export")) and c["status"] == "missing"]
+    core_missing = [c for c in checks if c["id"].startswith(("disclosure", "md_to_docx", "cnipa", "claims", "mining", "output_finalizer", "word_export", "mermaid_integrity")) and c["status"] == "missing"]
     return {
-        "version": "1.4.5",
+        "version": "1.4.6",
         "core_ok": not core_missing,
         "ready_stages": ["Stage 0 脱敏门禁", "Stage 1 挖点", "Stage 2 交底书", "Stage 3 权利要求"] if not core_missing else [],
         "degraded_stages": (["Stage 4 CNIPA 路（人工检索包）"] if any(c["id"] in ("playwright", "system_browser") and c["status"] != "ok" for c in checks) else []) +
@@ -235,7 +237,7 @@ def render_text(report: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="patent-combo 环境自检与降级矩阵")
-    parser.add_argument("--fix", action="store_true", help="尝试安全安装（pip playwright / cargo patent）")
+    parser.add_argument("--fix", action="store_true", help="仅创建缺失的输出目录；不安装运行时依赖")
     parser.add_argument("--json", action="store_true", help="输出结构化 JSON")
     parser.add_argument("--skill-dir", default=str(Path(__file__).resolve().parent.parent))
     parser.add_argument("--config", default=None)
@@ -256,14 +258,8 @@ def main(argv: list[str] | None = None) -> int:
         print('👉 创建 .data/patent_combo_config.json，至少含 {"output_root": "<输出目录>"}', file=sys.stderr)
         return 2
 
-    def installer(cmd: list[str]) -> tuple[bool, str]:
-        try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            return r.returncode == 0, (r.stderr or r.stdout or "")
-        except Exception as e:
-            return False, str(e)
+    report = build_report(skill_dir, config, args.fix, env=dict(os.environ))
 
-    report = build_report(skill_dir, config, args.fix, env=dict(os.environ), installer=installer)
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:

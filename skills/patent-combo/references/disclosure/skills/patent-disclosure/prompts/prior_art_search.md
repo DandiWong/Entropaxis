@@ -10,8 +10,8 @@
 
 ### A. 中国专利公布公告（**优先**，官方站点）
 
-1. **站点**：[国家知识产权局 中国专利公布公告](http://epub.cnipa.gov.cn/)（**仅** `epub.cnipa.gov.cn`）。
-2. **工具**（本仓库 **`skills/patent-disclosure/tools/crawl/`**）：**`cnipa_epub_search.py`** —— **一步**完成公布站检索与结果解析（Playwright 过站点 WAF）；结果页 HTML **仅在内存中处理，不落盘**。成功时终端含 **`EPUB_NOTE:`** / **`EPUB_HITS_JSON:`**。
+1. **站点**：[国家知识产权局 中国专利公布公告](http://epub.cnipa.gov.cn/)（**仅** `epub.cnipa.gov.cn`）。该站仅提供 HTTP，传输不保证机密性或完整性；只允许发送已去除项目名、组织名、源码、路径、账号与凭证特征的公开通用技术词，命中结果须经公开页面二次核验。
+2. **工具**（本仓库 **`skills/patent-disclosure/tools/crawl/`**）：**`cnipa_epub_search.py`** —— 净化完成后必须显式传入 `--public-terms-confirmed`，一步完成公布站检索与结果解析；结果页 HTML **仅在内存中处理，不落盘**。成功时终端含 **`EPUB_SECURITY:`** / **`EPUB_NOTE:`** / **`EPUB_HITS_JSON:`**。
 3. **专利类型过滤（与 intake 一致）**：官网首页支持勾选 **发明公布 / 发明授权 / 实用新型 / 外观设计**。脚本参数 **`--type invention|utility_model|design|all`**（默认 `all`）。intake 默认为发明时，查新应传 **`--type invention`**；实用新型 / 外观分别传 `utility_model` / `design`。映射见 **`references/patent_type_search.yaml`** 与 **`tools/patent_type.py`**。
 3b. **两段式查新（必做，用于提高 1.1 相关度）**
 
@@ -22,9 +22,9 @@
    3. **第二轮（收口）**：同一 `--type`，加 **`--class`**（`--ipc` / `--loc` 同义；最多 3 个号；带 `--class` 时词数最多 3）。核心词比第一轮更贴本案手段。脚本走公布站 **高级查询**（分类号 + 名称），例如：
 
       ```bash
-      python …/cnipa_epub_search.py --type invention --class B01J20,B01D53 胺功能化
-      python …/cnipa_epub_search.py --type design --class 26-05 台灯
-      python …/cnipa_epub_search.py --type design --class 26-05
+      python …/cnipa_epub_search.py --public-terms-confirmed --type invention --class B01J20,B01D53 胺功能化
+      python …/cnipa_epub_search.py --public-terms-confirmed --type design --class 26-05 台灯
+      python …/cnipa_epub_search.py --public-terms-confirmed --type design --class 26-05
       ```
 
       第二轮 0 条：减少分类号或换更短核心词后重试，再按下面保底处理；**不要**改走需登录的专利检索及分析系统。
@@ -40,13 +40,13 @@
 
 4. **国知局检索词（生成阶段必做，须在拼 Bash 之前完成）**
 
-   - **拆分责任在 Agent**：在**生成/构造命令阶段**，从本案技术方案、专利点或用户主题中归纳 **2～8 个与方案相关度高的检索单位**，**仅用 ASCII 空格分隔**，再写入 `cnipa_epub_search.py` 的参数。每一单位宜为 **有检索意义的语义块**，例如：**专业术语**、**名词短语**、**名动组合（如「批量调度」「异构调度」）**、**业内固定搭配**；**不要**拆成过碎的单字、泛义双字（如单独 `检索`、`增强`、`系统`、`方法` 等泛词），也**不要**把无关联词硬凑成一串。
+   - **拆分与净化责任在 Agent**：在**生成/构造命令阶段**，从本案技术方案、专利点或用户主题中归纳 **2～8 个与方案相关度高的检索单位**，自动删除项目名、组织名、源码、路径、URL、账号、凭证特征及未公开业务名称；每项不超过 40 字。净化完成后才允许传入 `--public-terms-confirmed`。仅用 ASCII 空格分隔，再写入 `cnipa_epub_search.py` 的参数。每一单位宜为有检索意义的专业术语、名词短语或名动组合，不要拆成泛词，也不要把无关联词硬凑成一串。
    - **禁止**把**无空格的一整句长中文**当作**唯一**参数（例如不要：`".../cnipa_epub_search.py" "知识库检索增强大语言模型"`）。长串在公布站单框内易被当作整句 AND，**极易 0 条**。
    - **Agent 执行时**：**一次进程传入全部检索单位**（多个 argv 或空格分隔均可）。脚本在**同一浏览器**内一词一查再合并。**禁止**为控时把 2～8 个词拆成 2～8 次独立 Playwright 进程（冷启动更慢）。若单次环境超时，再拆成至多两批，每批仍共用一个浏览器。
    - 示意（须按本案替换；**一次调用、多个词**；类型按 intake）：
 
      ```bash
-     python …skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type invention 知识库 检索增强 大语言模型
+     python …skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type invention 知识库 检索增强 大语言模型
      ```
 
    - **脚本不做**自动分词或自动拆长中文；若确需**整句一次** AND 检索，改用 **`cnipa_epub_crawler.py`** 单传一句。
@@ -57,14 +57,14 @@
    python skills/patent-disclosure/tools/browser.py --probe
    ```
 
-   - **禁止**把 `pip install` / `python -m playwright install chromium` 写进每次检索的默认命令。
-   - `--probe` 的 stdout JSON：`playwright=false` 时**本会话最多一次** `pip install playwright`（或 `pip install -r requirements.txt`），再 `--probe`。
-   - `ok=true`（已有 Chrome / Edge / 自带 Chromium）→ **直接检索**，**禁止** `playwright install chromium`。
-   - `ok=false` 且已有 Playwright 包、本机无 Chrome/Edge 时，才允许**一次** `python -m playwright install chromium`，然后再检索。
-   - 探测或启动仍失败 → 进入 **B**（WebSearch），不要反复安装。
+   - **禁止**在 Skill 运行期执行 `pip install`、Cargo 安装或浏览器安装。
+   - `--probe` 的 stdout JSON：`playwright=false` 时直接进入 **B**，由管理员在任务外按精确版本依赖清单预置后方可重试。
+   - `ok=true`（已有 Chrome / Edge / 自带 Chromium）→ 直接检索。
+   - `ok=false` → 进入 **B**，不下载浏览器、不修改环境。
+   - 探测或启动失败 → 进入 **B**，不要反复尝试。
 
    ```bash
-   python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type invention 词甲 词乙 词丙
+   python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type invention 词甲 词乙 词丙
    ```
 
    - **合并**：一次调用若 stderr 含 **`EPUB_MERGE:`**，以 **stdout** 上**唯一一行** **`EPUB_HITS_JSON:`** 为准（脚本已按 `pub_number` 去重）。仅当拆成多批调用时，Agent 再按 **`pub_number`**（无则 **`link`**）合并。

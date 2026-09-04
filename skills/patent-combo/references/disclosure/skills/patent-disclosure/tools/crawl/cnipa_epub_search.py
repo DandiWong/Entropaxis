@@ -13,16 +13,16 @@
 **专利类型**：``--type invention|utility_model|design|all``（默认 ``all``）。
 对应首页勾选：发明公布+发明授权 / 实用新型 / 外观设计（见 ``tools/patent_type.py``）。
 第二轮收口：``--class B01J20``（发明/实用 IPC）或 ``--class 26-05``（外观 LOC），走公布站高级查询「分类号+名称」。
-仅分类号保底：``--type design --class 26-05``（不跟检索词）。
+该站仅提供 HTTP；调用方必须先净化为公开通用技术词，并显式传入 ``--public-terms-confirmed``。
 
 用法：
 
-  python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py 词1
-  python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type utility_model 卡扣
-  python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type design 外壳造型
-  python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type invention --class B01J20 胺功能化
-  python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type design --class 26-05 台灯
-  python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type design --class 26-05
+  python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed 词1
+  python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type utility_model 卡扣
+  python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type design 外壳造型
+  python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type invention --class B01J20 胺功能化
+  python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type design --class 26-05 台灯
+  python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type design --class 26-05
 
 需已安装：``pip install playwright``（或根目录 ``requirements.txt``）。有系统 Chrome / Edge 时不必 ``playwright install chromium``。探测：``python tools/browser.py --probe``。
 """
@@ -47,15 +47,24 @@ from stdio_utf8 import ensure_utf8_stdio
 _MAX_TERMS = 8
 _MAX_CLASS_CODES = 3
 _MAX_TERMS_WITH_CLASS = 3
+_SENSITIVE_TERM_RE = re.compile(
+    r"(?:https?://|[/\\\\]|@|(?:api[_-]?key|token|secret|password|passwd|credential))",
+    re.IGNORECASE,
+)
 
 
-def _parse_argv(argv: list[str]) -> tuple[str, list[str], list[str]]:
+def _parse_argv(argv: list[str]) -> tuple[str, list[str], list[str], bool]:
     patent_type = TYPE_ALL
     rest: list[str] = []
     class_codes: list[str] = []
+    public_terms_confirmed = False
     i = 0
     while i < len(argv):
         a = argv[i]
+        if a == "--public-terms-confirmed":
+            public_terms_confirmed = True
+            i += 1
+            continue
         if a in ("--type", "-t") and i + 1 < len(argv):
             patent_type = normalize_patent_type(argv[i + 1], default=TYPE_ALL)
             i += 2
@@ -81,7 +90,7 @@ def _parse_argv(argv: list[str]) -> tuple[str, list[str], list[str]]:
             continue
         rest.append(a)
         i += 1
-    return patent_type, rest, class_codes
+    return patent_type, rest, class_codes, public_terms_confirmed
 
 
 def _terms_from_argv(argv: list[str]) -> list[str]:
@@ -92,6 +101,16 @@ def _terms_from_argv(argv: list[str]) -> list[str]:
             if p:
                 terms.append(p)
     return terms
+
+def _validate_public_terms(terms: list[str], confirmed: bool) -> str | None:
+    if not confirmed:
+        return "HTTP 检索前必须传入 --public-terms-confirmed，确认关键词已净化为公开通用技术词"
+    for term in terms:
+        if len(term) > 40:
+            return f"检索词过长，疑似包含未净化文本: {term[:20]}…"
+        if _SENSITIVE_TERM_RE.search(term):
+            return f"检索词包含路径、网络地址、账号或凭证特征，已阻断: {term}"
+    return None
 
 
 def _dedupe_hits(hits_lists: list) -> list:
@@ -111,7 +130,7 @@ def _dedupe_hits(hits_lists: list) -> list:
 
 def _usage() -> None:
     print(
-        "usage: python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py [--type invention|utility_model|design|all] [--class CODE] [term ...]",
+        "usage: python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed [--type invention|utility_model|design|all] [--class CODE] [term ...]",
         file=sys.stderr,
     )
     print(
@@ -119,11 +138,11 @@ def _usage() -> None:
         file=sys.stderr,
     )
     print(
-        "example: python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type utility_model 卡扣",
+        "example: python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type utility_model 卡扣",
         file=sys.stderr,
     )
     print(
-        "class-only: python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type design --class 26-05",
+        "class-only: python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type design --class 26-05",
         file=sys.stderr,
     )
 
@@ -131,8 +150,12 @@ def _usage() -> None:
 def main(argv: list[str] | None = None) -> int:
     ensure_utf8_stdio()
     argv = argv if argv is not None else sys.argv[1:]
-    patent_type, rest, class_codes = _parse_argv(argv)
+    patent_type, rest, class_codes, public_terms_confirmed = _parse_argv(argv)
     terms = _terms_from_argv(rest)
+    public_terms_error = _validate_public_terms(terms, public_terms_confirmed)
+    if public_terms_error:
+        print(f"ERROR: {public_terms_error}", file=sys.stderr)
+        return 2
     if not terms and not class_codes:
         _usage()
         return 2
@@ -152,6 +175,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    print(
+        "EPUB_SECURITY: transport=http public_terms_confirmed=true; verify returned records independently",
+        file=sys.stderr,
+    )
     os.environ.setdefault("EPUB_WAF_MAX_WAIT_SEC", "180")
 
     try:

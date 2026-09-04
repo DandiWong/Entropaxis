@@ -1,9 +1,9 @@
 ---
 name: patent-combo
-description: "v1.4.5. 专利组合拳（代码专利挖掘自包含技能包）：内置交底技能、权利要求撰写指南与 CNIPA 检索脚本三件套，对本地代码库执行全自动「脱敏→评分挖点→交底书→权利要求→CNIPA+开发者工具源查新」流水线；内置 rubric 得分 ≥10 的候选自动进入撰写并直接交付 DOCX，不等待人工候选裁决。发明交底强制包含系统框图、流程图及脱敏关键实现代码。仅 STEP 解析安装、公式 PNG 安装及外观分案保留人工确认。当用户说「组合拳」「专利组合拳」「挖专利」「专利挖掘」「从代码挖专利」「patent-combo」并指向某个本地代码库/仓库时触发。"
+description: "v1.4.6. 专利组合拳（代码专利挖掘自包含技能包）：内置交底技能、权利要求撰写指南与 CNIPA 检索脚本三件套，对本地代码库执行全自动「脱敏→评分挖点→交底书→权利要求→CNIPA+开发者工具源查新」流水线；内置 rubric 得分 ≥10 的候选自动进入撰写并直接交付 DOCX，不等待人工候选裁决。发明交底强制包含系统框图、流程图及脱敏关键实现代码。运行期不自动安装依赖；CNIPA 明文 HTTP 检索仅允许已净化并显式确认的公开技术词。仅 STEP 解析及外观分案保留人工确认。当用户说「组合拳」「专利组合拳」「挖专利」「专利挖掘」「从代码挖专利」「patent-combo」并指向某个本地代码库/仓库时触发。"
 compatibility: "Python 3.10+；核心流程（Stage 0-3）零第三方依赖；CNIPA 查新需 playwright+系统 Chrome/Edge，DOCX 最终交付需 python-docx/latex2mathml/PyYAML；转换器依赖缺失或导出失败时阻断收尾，不得以 Markdown 替代"
 metadata:
-  version: "1.4.5"
+  version: "1.4.6"
 ---
 
 # 代码专利挖掘组合拳 (patent-combo)
@@ -16,8 +16,8 @@ metadata:
 python3 "<skill-dir>/scripts/check_env.py" --fix
 ```
 
-- **exit 0**：核心阶段（Stage 0-3）就绪；输出中列出的降级阶段照常推进，并如实告知用户。
-- **exit 2**：核心资产缺失（内置包不完整）→ ❌ 阻断，按 👉 提示重新部署 Skill 包，**禁止手工拼接或猜测路径**。
+- **exit 0**：核心阶段（Stage 0-3）就绪；输出中列出的降级阶段照常推进，并如实告知用户。`--fix` 仅创建缺失输出目录，不安装依赖。
+- **exit 2**：核心资产、固定 Mermaid 哈希或 Word 依赖缺失 → ❌ 阻断，按 👉 提示由管理员预置锁定依赖或重新部署 Skill 包，**禁止手工拼接或猜测路径**。
 
 降级矩阵（安装失败时的确定性行为）：
 
@@ -64,7 +64,7 @@ cat "<工作区根>/.data/patent_combo_config.json"
 
 ## Stage 4 · 双路查新
 
-1. **CNIPA**：`python3 "<skill-dir>/references/disclosure/skills/patent-disclosure/tools/crawl/cnipa_epub_search.py" [--type invention|utility_model|design] [--class CODE] <关键词...>`（两段式：关键词 → IPC 分类号回补，不足 4 条同分类号补第一轮）；Playwright 走系统 Chrome。**降级**：环境自检标记缺失时不出脚本，改产人工检索包。
+1. **CNIPA**：先按 Stage 0 自动净化为公开通用技术词，再执行 `python3 "<skill-dir>/references/disclosure/skills/patent-disclosure/tools/crawl/cnipa_epub_search.py" --public-terms-confirmed [--type invention|utility_model|design] [--class CODE] <关键词...>`（两段式：关键词 → IPC 分类号回补，不足 4 条同分类号补第一轮）。公布站仅提供 HTTP；脚本拒绝未确认词、路径、URL、账号/凭证特征和超长文本，并在 stderr 标记明文传输，结果须二次核验。Playwright 走系统 Chrome。**降级**：环境自检标记缺失时不出脚本，改产人工检索包。
 2. **dev-tool prior art**：`<priorart_cli> "<用一句话概括的候选点子>"`（19 源语义查重，Open/Crowded/Saturated）。verdict 后端缺失时自动追加 `--fast --keyword-only`；首次运行需下载 ~80MB 本地嵌入模型，耗时长属预期。
 
 内部生成 `查新报告工作稿.md`。报告必须包含同级章节「命中专利列表」与其后的「人工检索式清单」；直接由收敛器截取前者至后者前的内容生成 DOCX，**严禁打开、向用户展示或要求人工审阅该 Markdown**。

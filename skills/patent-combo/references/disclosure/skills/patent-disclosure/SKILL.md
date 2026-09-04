@@ -20,7 +20,7 @@ user-invocable: false
 | Step 8 | `prompts/disclosure_self_check.md` |
 | 迭代 | `iteration_context.md` / `merger.md` / `correction_handler.md` |
 
-查新工具：`tools/crawl/cnipa_epub_search.py`。整仓安装时路径为 `skills/patent-disclosure/tools/crawl/cnipa_epub_search.py`。著录检索不在本包，**禁止**当查新引擎调用。  
-`--type` 与 intake 一致；两段式：关键词 → `EPUB_CLASS_HINT` / IPC·LOC → `--class`；不足 4 条则同分类号回补第一轮。
+查新工具：`tools/crawl/cnipa_epub_search.py`。整仓安装时路径为 `skills/patent-disclosure/tools/crawl/cnipa_epub_search.py`。著录检索不在本包，**禁止**当查新引擎调用。
+调用前须把检索词净化为公开通用技术词并传 `--public-terms-confirmed`；公布站仅提供 HTTP，脚本会拒绝路径、URL、账号/凭证特征和超长文本，结果须二次核验。`--type` 与 intake 一致；两段式：关键词 → `EPUB_CLASS_HINT` / IPC·LOC → `--class`；不足 4 条则同分类号回补第一轮。
 
 线稿、CAD、公式、Word 出图用本包 `tools/`（`browser.py`、`mermaid_render.py`、`md_to_docx.py` 等）。

@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 if str(SYSTEM_ROOT) not in sys.path:
@@ -21,6 +22,26 @@ _finalizer_spec = importlib.util.spec_from_file_location("patent_combo_finalize_
 finalize_outputs = importlib.util.module_from_spec(_finalizer_spec)
 _finalizer_spec.loader.exec_module(finalize_outputs)
 
+_DISCLOSURE_TOOLS = (
+    SYSTEM_ROOT / "skills" / "patent-combo" / "references" / "disclosure"
+    / "skills" / "patent-disclosure" / "tools"
+)
+for _module_path in (_DISCLOSURE_TOOLS, _DISCLOSURE_TOOLS / "crawl"):
+    if str(_module_path) not in sys.path:
+        sys.path.insert(0, str(_module_path))
+
+
+def _load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+formula_eval = _load_module("patent_formula_eval", _DISCLOSURE_TOOLS / "formula_eval.py")
+cad_bootstrap = _load_module("patent_cad_bootstrap", _DISCLOSURE_TOOLS / "bootstrap_cad_venv.py")
+cnipa_search = _load_module("patent_cnipa_search", _DISCLOSURE_TOOLS / "crawl" / "cnipa_epub_search.py")
+
 CORE_FILES = [
     "scripts/finalize_outputs.py",
     "references/disclosure/skills/patent-disclosure/SKILL.md",
@@ -29,6 +50,7 @@ CORE_FILES = [
     "references/disclosure/skills/patent-disclosure/tools/crawl/cnipa_epub_search.py",
     "references/claims-guide/PATENT_SKILL.md",
     "references/mining-rubric.md",
+    "references/disclosure/skills/patent-disclosure/tools/vendor/mermaid.min.js",
 ]
 
 
@@ -48,7 +70,11 @@ class PatentComboEnvTests(TestCase):
         for rel in CORE_FILES:
             p = self.skill_dir / rel
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text("placeholder", encoding="utf-8")
+            if rel.endswith("vendor/mermaid.min.js"):
+                source = SYSTEM_ROOT / "skills" / "patent-combo" / rel
+                p.write_bytes(source.read_bytes())
+            else:
+                p.write_text("placeholder", encoding="utf-8")
         self.out_dir = self.tmp / "ws" / "out"
         self.out_dir.mkdir()
         self.config = {"output_root": str(self.out_dir), "priorart_cli": "patent"}
@@ -111,49 +137,40 @@ class PatentComboEnvTests(TestCase):
         self.assertEqual(word_export["status"], "missing")
         self.assertIn("python-docx", word_export["fix"])
 
-    def test_fix_installs_playwright(self) -> None:
+    def test_fix_never_installs_runtime_dependencies(self) -> None:
         calls: list[list[str]] = []
-        state = {"installed": False}
-
-        def importable(module: str) -> bool:
-            return module != "playwright" or state["installed"]
 
         def installer(cmd: list[str]) -> tuple[bool, str]:
             calls.append(cmd)
-            state["installed"] = True
             return True, ""
 
         report = check_env.build_report(
             self.skill_dir, self.config, fix=True,
-            importable_fn=importable, which_fn=lambda name: f"/usr/bin/{name}",
-            env={}, installer=installer,
+            importable_fn=lambda module: module != "playwright",
+            which_fn=lambda name: None, env={}, installer=installer,
         )
         by_id = {c["id"]: c for c in report["checks"]}
-        self.assertEqual(by_id["playwright"]["status"], "ok")
-        self.assertEqual(len(calls), 1)
-        self.assertIn("playwright", calls[0][-1])
+        self.assertEqual(by_id["playwright"]["status"], "missing")
+        self.assertIn("自动安装已禁用", by_id["playwright"]["detail"])
+        self.assertEqual(by_id["priorart_cli"]["status"], "missing")
+        self.assertEqual(calls, [])
 
-    def test_priorart_cli_cargo_install(self) -> None:
-        calls: list[list[str]] = []
-        paths: dict[str, str | None] = {"cargo": "/usr/local/bin/cargo", "patent": None}
-
-        def which_fn(name: str) -> str | None:
-            return paths.get(name)
-
-        def installer(cmd: list[str]) -> tuple[bool, str]:
-            calls.append(cmd)
-            paths["patent"] = "/Users/x/.cargo/bin/patent"
-            return True, ""
+    def test_mermaid_hash_mismatch_blocks_core(self) -> None:
+        mermaid = (
+            self.skill_dir
+            / "references/disclosure/skills/patent-disclosure/tools/vendor/mermaid.min.js"
+        )
+        mermaid.write_text("tampered", encoding="utf-8")
 
         report = check_env.build_report(
-            self.skill_dir, self.config, fix=True,
-            importable_fn=_ok, which_fn=which_fn, env={}, installer=installer,
+            self.skill_dir, self.config, fix=False,
+            importable_fn=_ok, which_fn=lambda name: f"/usr/bin/{name}", env={},
         )
-        by_id = {c["id"]: c for c in report["checks"]}
-        self.assertEqual(by_id["priorart_cli"]["status"], "ok")
-        self.assertEqual(len(calls), 1)
-        self.assertIn("cargo", calls[0])
-        self.assertIn("patent", calls[0])
+
+        self.assertFalse(report["core_ok"])
+        integrity = next(c for c in report["checks"] if c["id"] == "mermaid_integrity")
+        self.assertEqual(integrity["status"], "missing")
+        self.assertIn("哈希不匹配", integrity["fix"])
 
     def test_legacy_overrides_reported(self) -> None:
         config = dict(self.config, disclosure_skill="/some/repo")
@@ -165,6 +182,34 @@ class PatentComboEnvTests(TestCase):
         self.assertIn("legacy", legacy["detail"].lower())
 
 
+
+class PatentComboSecurityTests(TestCase):
+    def test_formula_evaluator_uses_allowlisted_ast_interpreter(self) -> None:
+        value, error = formula_eval.eval_rhs("min(8, 3) + 2 * 4", {})
+        self.assertIsNone(error)
+        self.assertEqual(value, 11.0)
+        source = (_DISCLOSURE_TOOLS / "formula_eval.py").read_text(encoding="utf-8")
+        self.assertNotIn("eval(compile(", source)
+
+    def test_cad_cleanup_rejects_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tools = Path(temp) / "tools"
+            tools.mkdir()
+            external = Path(temp) / "external"
+            external.mkdir()
+            link = tools / "cad-env"
+            link.symlink_to(external, target_is_directory=True)
+            with patch.object(cad_bootstrap, "_SHARED", tools), patch.object(
+                cad_bootstrap, "VENV_DIR", link
+            ):
+                with self.assertRaisesRegex(RuntimeError, "symlinked"):
+                    cad_bootstrap._remove_stale_venv()
+            self.assertTrue(external.is_dir())
+
+    def test_cnipa_requires_public_term_acknowledgement(self) -> None:
+        self.assertIn("public-terms-confirmed", cnipa_search._validate_public_terms(["路由"], False))
+        self.assertIn("已阻断", cnipa_search._validate_public_terms(["token=secret"], True))
+        self.assertIsNone(cnipa_search._validate_public_terms(["动作路由"], True))
 class PatentComboFinalizerTests(TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="patent-combo-finalize-"))

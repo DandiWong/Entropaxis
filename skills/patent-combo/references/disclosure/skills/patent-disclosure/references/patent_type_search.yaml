@@ -14,12 +14,12 @@
 | `all`（默认） | 四类全选 |
 
 ```bash
-python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type utility_model 卡扣
-python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type design 灯具
-python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type invention 调度
-python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type invention --class B01J20 胺功能化
-python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type design --class 26-05 台灯
-python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --type design --class 26-05
+python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type utility_model 卡扣
+python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type design 灯具
+python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type invention 调度
+python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type invention --class B01J20 胺功能化
+python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type design --class 26-05 台灯
+python skills/patent-disclosure/tools/crawl/cnipa_epub_search.py --public-terms-confirmed --type design --class 26-05
 ```
 
 第一轮首页关键词；stderr **`EPUB_CLASS_HINT:`** 与 JSON **`ipc_codes`/`loc_codes`** 供第二轮 `--class`（发明/实用 IPC，外观 LOC）。第二轮不足 4 条时从第一轮同分类号回补；仍少可仅分类号或相邻号再查，禁止编造凑数。Google Patents 的 `CPC=` / LOC 词仅为可选补充，外网失败即跳过。

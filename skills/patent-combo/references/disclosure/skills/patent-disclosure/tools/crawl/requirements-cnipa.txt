@@ -2,4 +2,4 @@
 # Same playwright as root requirements.txt.
 # System Chrome/Edge is enough; no need for `playwright install chromium`.
 # Probe: python tools/browser.py --probe
-playwright>=1.40.0,<2.0
+playwright==1.62.0

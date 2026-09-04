@@ -1,15 +1,15 @@
 # Used by skills/patent-disclosure/tools/md_to_docx.py, docx_to_md.py, pptx_to_md.py,
 # mermaid_render.py, formula_plan.
-python-docx>=1.1.0,<2.0
+python-docx==1.2.0
 # Word editable math (LaTeX -> MathML -> OMML); keep source text on failure
-latex2mathml>=3.77.0,<4.0
+latex2mathml==3.81.0
 # formula_plan / paradigms.yaml
-PyYAML>=6.0,<7.0
+PyYAML==6.0.3
 # mermaid -> PNG via Playwright; shares browser with CNIPA crawl
 # (skills/patent-disclosure/tools/browser.py)
-playwright>=1.40.0,<2.0
-mammoth>=1.6.0,<2.0
-python-pptx>=0.6.21,<2.0
+playwright==1.62.0
+mammoth==1.12.1
+python-pptx==1.0.2
 
 # Optional: formula PNG (OMML fail AND user says yes; ~100MB incl numpy)
 #   pip install matplotlib
