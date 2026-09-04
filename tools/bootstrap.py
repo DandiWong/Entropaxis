@@ -196,65 +196,31 @@ def detect_host_apps() -> set[str]:
                     detected.add(p.stem.lower())
     return detected
 
-def init_file_opener(verbose: bool = True, force_rescan: bool = False) -> dict:
-    """
-    初始化或自愈本机文件打开器关联配置 (.data/file-opener.json)。
-    基于 .system/templates/file-opener.template.json 检测本机安装软件并生成配置。
-    """
-    tools_dir = Path(__file__).resolve().parent
-    system_dir = tools_dir.parent
-    ws_root = system_dir.parent
-    data_dir = ws_root / ".data"
-    template_file = system_dir / "templates" / "file-opener.template.json"
-    target_file = data_dir / "file-opener.json"
+def _opener_cmd_key() -> str:
+    if sys.platform == "darwin":
+        return "cmd_macos"
+    if sys.platform == "win32":
+        return "cmd_windows"
+    return "cmd_linux"
 
-    if not template_file.exists():
-        if verbose:
-            print(f"⚠️ 未找到文件打开器模板: {template_file}", file=sys.stderr)
-        return {}
-
-    if target_file.exists() and not force_rescan:
-        try:
-            with open(target_file, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            if verbose:
-                print("✅ 本机文件打开器配置已就绪 (.data/file-opener.json)")
-            return cfg
-        except Exception:
-            pass
-
-    # 读取模板并自动扫描本机软件
-    try:
-        with open(template_file, "r", encoding="utf-8") as f:
-            tpl_data = json.load(f)
-    except Exception as e:
-        if verbose:
-            print(f"❌ 读取模板失败: {e}", file=sys.stderr)
-        return {}
-
-    detected_apps = detect_host_apps()
-    cmd_key = "cmd_macos" if sys.platform == "darwin" else ("cmd_windows" if sys.platform == "win32" else "cmd_linux")
-
+def _build_opener_defaults(tpl_data: dict, detected_apps: set[str], cmd_key: str, verbose: bool = False) -> dict:
+    """依据模板与本机检测结果构建全量打开器配置（纯构建，不含任何写入）。"""
     config = {
         "version": tpl_data.get("version", "1.0.0"),
         "platform": sys.platform,
-        "associations": {}
+        "associations": {},
     }
-
     if verbose:
         print("🔍 正在检测本机安装的应用程序以配置默认打开程序...")
-
     for fmt_id, fmt_info in tpl_data.get("formats", {}).items():
         selected_cmd = ""
         selected_app_name = ""
         matched_candidates = []
-
         for cand in fmt_info.get("candidates", []):
             cand_name = cand["name"]
             cand_cmd = cand.get(cmd_key, "")
             if not cand_cmd:
                 continue
-
             cand_lower = cand_name.lower().replace(" ", "").replace("office", "")
             is_installed = False
             for dapp in detected_apps:
@@ -262,17 +228,11 @@ def init_file_opener(verbose: bool = True, force_rescan: bool = False) -> dict:
                 if cand_lower in dapp_clean or dapp_clean in cand_lower:
                     is_installed = True
                     break
-
             if is_installed or "默认" in cand_name or "系统" in cand_name:
-                matched_candidates.append({
-                    "name": cand_name,
-                    "command": cand_cmd,
-                    "is_installed": is_installed
-                })
+                matched_candidates.append({"name": cand_name, "command": cand_cmd, "is_installed": is_installed})
                 if not selected_cmd and is_installed:
                     selected_cmd = cand_cmd
                     selected_app_name = cand_name
-
         if not selected_cmd:
             if sys.platform == "darwin":
                 selected_cmd = "open"
@@ -281,28 +241,99 @@ def init_file_opener(verbose: bool = True, force_rescan: bool = False) -> dict:
             else:
                 selected_cmd = "xdg-open"
             selected_app_name = "系统默认关联程序"
-
         config["associations"][fmt_id] = {
             "name": fmt_info["name"],
             "extensions": fmt_info["extensions"],
             "selected_app": selected_app_name,
             "command": selected_cmd,
-            "available_candidates": [c["name"] for c in matched_candidates if c["is_installed"]]
+            "available_candidates": [c["name"] for c in matched_candidates if c["is_installed"]],
         }
         if verbose:
             cands_str = f" (可选候选: {', '.join(config['associations'][fmt_id]['available_candidates'])})" if config['associations'][fmt_id]['available_candidates'] else ""
             print(f"  • {fmt_info['name']} ({', '.join(fmt_info['extensions'])}): 匹配打开程序 -> [{selected_app_name}]{cands_str}")
+    return config
 
-    data_dir.mkdir(parents=True, exist_ok=True)
+def _merge_opener(existing: dict, defaults: dict) -> dict:
+    """合并保留策略：人工仲裁的 selected_app/command 原样保留，仅回填缺失格式与缺失字段。"""
+    merged = json.loads(json.dumps(existing, ensure_ascii=False))
+    assoc = merged.setdefault("associations", {})
+    if not isinstance(assoc, dict):
+        assoc = merged["associations"] = {}
+    for fmt_id, dflt in defaults.get("associations", {}).items():
+        cur = assoc.get(fmt_id)
+        if not isinstance(cur, dict):
+            assoc[fmt_id] = json.loads(json.dumps(dflt, ensure_ascii=False))
+            continue
+        for key in ("name", "extensions", "selected_app", "command"):
+            if not cur.get(key):
+                cur[key] = dflt.get(key)
+        if not isinstance(cur.get("available_candidates"), list):
+            cur["available_candidates"] = dflt.get("available_candidates", [])
+    merged.setdefault("version", defaults.get("version", "1.0.0"))
+    merged.setdefault("platform", defaults.get("platform", sys.platform))
+    return merged
+
+def _write_opener_config(target_file: Path, config: dict, verbose: bool) -> None:
+    target_file.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(target_file, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
         if verbose:
-            print(f"✅ 已成功生成本机打开器配置: .data/file-opener.json")
+            print("✅ 已成功生成本机打开器配置: .data/file-opener.json")
     except Exception as e:
         if verbose:
             print(f"❌ 写入 .data/file-opener.json 失败: {e}", file=sys.stderr)
 
+def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system_dir: Path | None = None) -> dict:
+    """
+    初始化或自愈本机文件打开器关联配置 (.data/file-opener.json)。
+
+    合并保留策略（默认）：目标配置存在且合法时，仅回填缺失的格式与字段，
+    人工仲裁的 selected_app/command 持久保留，内容无变化时不重写文件；
+    全量重扫仅在显式 force_rescan=True（CLI: --force-rescan-opener）时执行；
+    既有配置损坏（无法解析或结构非法）时自动重建自愈。
+    """
+    tools_dir = Path(__file__).resolve().parent
+    system_dir = Path(system_dir) if system_dir is not None else tools_dir.parent
+    data_dir = system_dir.parent / ".data"
+    template_file = system_dir / "templates" / "file-opener.template.json"
+    target_file = data_dir / "file-opener.json"
+
+    if not template_file.exists():
+        if verbose:
+            print(f"⚠️ 未找到文件打开器模板: {template_file}", file=sys.stderr)
+        return {}
+    try:
+        with open(template_file, "r", encoding="utf-8") as f:
+            tpl_data = json.load(f)
+    except Exception as e:
+        if verbose:
+            print(f"❌ 读取模板失败: {e}", file=sys.stderr)
+        return {}
+
+    cmd_key = _opener_cmd_key()
+
+    if target_file.exists() and not force_rescan:
+        try:
+            with open(target_file, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = None
+        if isinstance(existing, dict) and isinstance(existing.get("associations"), dict):
+            defaults = _build_opener_defaults(tpl_data, detect_host_apps(), cmd_key, verbose)
+            merged = _merge_opener(existing, defaults)
+            if merged != existing:
+                _write_opener_config(target_file, merged, verbose)
+                if verbose:
+                    print("✅ 文件打开器配置已合并补全（人工仲裁项已保留）")
+            elif verbose:
+                print("✅ 本机文件打开器配置已就绪 (.data/file-opener.json)")
+            return merged
+        if verbose:
+            print("⚠️ 既有打开器配置损坏，自动重建自愈...")
+
+    config = _build_opener_defaults(tpl_data, detect_host_apps(), cmd_key, verbose)
+    _write_opener_config(target_file, config, verbose)
     return config
 
 def get_open_command(file_path: str, root: Path | None = None) -> str:
@@ -373,7 +404,8 @@ if __name__ == "__main__":
         else:
             print("ℹ️ 看板尚未配置 Token（可直接对 Agent 说「配置看板 Token」或让 Agent 执行 init.py）。")
         render_instance_configs(verbose=True)
-        init_file_opener(verbose=True, force_rescan=True)
+        force_rescan_opener = "--force-rescan-opener" in sys.argv
+        init_file_opener(verbose=True, force_rescan=force_rescan_opener)
         print("\n✨ 工作区初始化与自愈完成！")
         if sys.platform == "win32":
             print_windows_hints()

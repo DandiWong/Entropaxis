@@ -1,4 +1,7 @@
+import json
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from unittest import TestCase
 
@@ -32,18 +35,72 @@ class BootstrapSyncTests(TestCase):
         finally:
             target.write_text(original, encoding="utf-8")
 
-    def test_file_opener_initialization_and_command(self) -> None:
-        # Test file opener initialization
-        cfg = init_file_opener(verbose=False, force_rescan=True)
-        self.assertIsInstance(cfg, dict)
-        self.assertIn("associations", cfg)
-        self.assertIn("word", cfg["associations"])
-        self.assertIn("markdown", cfg["associations"])
-
-        # Test get_open_command with various formats
+    def test_get_open_command_formats_and_dirs(self) -> None:
         cmd_docx = get_open_command("01_test/doc.docx", SYSTEM_ROOT.parent)
         self.assertIn("doc.docx", cmd_docx)
         cmd_pptx = get_open_command("01_test/slide.pptx", SYSTEM_ROOT.parent)
         self.assertIn("slide.pptx", cmd_pptx)
         cmd_dir = get_open_command("01_test/dir/", SYSTEM_ROOT.parent)
         self.assertIn("01_test/dir/", cmd_dir)
+
+
+class FileOpenerMergeTests(TestCase):
+    """merge-preserve 策略：人工仲裁项持久保留；全量重扫仅显式触发（G-13）。"""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="file-opener-"))
+        self.system_dir = self.tmp / ".system"
+        (self.system_dir / "templates").mkdir(parents=True)
+        shutil.copy(
+            SYSTEM_ROOT / "templates" / "file-opener.template.json",
+            self.system_dir / "templates" / "file-opener.template.json",
+        )
+        self.data_dir = self.tmp / ".data"
+        self.data_dir.mkdir()
+        self.config_path = self.data_dir / "file-opener.json"
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _arbitrated_config(self) -> dict:
+        return {
+            "version": "1.0.0",
+            "platform": "darwin",
+            "associations": {
+                "markdown": {
+                    "name": "Markdown与标记文档",
+                    "extensions": [".md"],
+                    "selected_app": "Orca (orca file open)",
+                    "command": "orca file open",
+                    "available_candidates": ["Orca (orca file open)"],
+                }
+            },
+        }
+
+    def test_default_run_preserves_arbitration_and_fills_missing(self) -> None:
+        self.config_path.write_text(json.dumps(self._arbitrated_config(), ensure_ascii=False), encoding="utf-8")
+        cfg = init_file_opener(verbose=False, system_dir=self.system_dir)
+        self.assertEqual(cfg["associations"]["markdown"]["command"], "orca file open")
+        self.assertIn("word", cfg["associations"])
+        on_disk = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["associations"]["markdown"]["command"], "orca file open")
+        self.assertIn("word", on_disk["associations"])
+
+    def test_force_rescan_rebuilds_from_template(self) -> None:
+        self.config_path.write_text(json.dumps(self._arbitrated_config(), ensure_ascii=False), encoding="utf-8")
+        cfg = init_file_opener(verbose=False, force_rescan=True, system_dir=self.system_dir)
+        self.assertNotEqual(cfg["associations"]["markdown"]["command"], "orca file open")
+
+    def test_corrupt_config_self_heals(self) -> None:
+        self.config_path.write_text("{not-json", encoding="utf-8")
+        cfg = init_file_opener(verbose=False, system_dir=self.system_dir)
+        self.assertIn("markdown", cfg["associations"])
+        json.loads(self.config_path.read_text(encoding="utf-8"))
+
+    def test_rerun_without_change_keeps_file_stable(self) -> None:
+        self.config_path.write_text(json.dumps(self._arbitrated_config(), ensure_ascii=False), encoding="utf-8")
+        first = init_file_opener(verbose=False, system_dir=self.system_dir)
+        stamp = self.config_path.stat().st_mtime_ns
+        second = init_file_opener(verbose=False, system_dir=self.system_dir)
+        self.assertEqual(first, second)
+        self.assertEqual(self.config_path.stat().st_mtime_ns, stamp)
