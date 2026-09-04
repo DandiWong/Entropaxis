@@ -1,9 +1,9 @@
 ---
 name: patent-combo
-description: "v1.4.2. 专利组合拳（代码专利挖掘自包含技能包）：内置交底技能、权利要求撰写指南与 CNIPA 检索脚本三件套，对本地代码库执行「脱敏门禁→评分挖点→交底书生成→权利要求撰写→CNIPA+开发者工具源双路查新」流水线，直接交付 01_交底书_案件名.docx、02_权利要求_案件名.docx 与 03_查新报告.docx；Markdown 仅作未打开、未人工审阅的瞬态转换底稿。当用户说「组合拳」「专利组合拳」「挖专利」「专利挖掘」「从代码挖专利」「patent-combo」并指向某个本地代码库/仓库时触发。启动前先运行 scripts/check_env.py 自检依赖（--fix 自动安装），安装失败自动进入降级矩阵（人工检索包/搜索级查新），不阻断核心阶段。"
+description: "v1.4.3. 专利组合拳（代码专利挖掘自包含技能包）：内置交底技能、权利要求撰写指南与 CNIPA 检索脚本三件套，对本地代码库执行「脱敏门禁→评分挖点→交底书生成→权利要求撰写→CNIPA+开发者工具源双路查新」流水线；内置 rubric 得分 ≥10 的候选自动进入撰写并直接交付 01_交底书_案件名.docx、02_权利要求_案件名.docx 与 03_查新报告.docx，不等待人工候选裁决。当用户说「组合拳」「专利组合拳」「挖专利」「专利挖掘」「从代码挖专利」「patent-combo」并指向某个本地代码库/仓库时触发。启动前先运行 scripts/check_env.py 自检依赖（--fix 自动安装），安装失败自动进入降级矩阵（人工检索包/搜索级查新），不阻断核心阶段。"
 compatibility: "Python 3.10+；核心流程（Stage 0-3）零第三方依赖；CNIPA 查新需 playwright+系统 Chrome/Edge，DOCX 最终交付需 python-docx/latex2mathml/PyYAML；转换器依赖缺失或导出失败时阻断收尾，不得以 Markdown 替代"
 metadata:
-  version: "1.4.2"
+  version: "1.4.3"
 ---
 
 # 代码专利挖掘组合拳 (patent-combo)
@@ -52,7 +52,7 @@ cat "<工作区根>/.data/patent_combo_config.json"
 
 ## Stage 1 · 挖点
 
-读本目录 `references/mining-rubric.md`（四维评分 0–13，≥8 入选；发明藏在哪里/跳过什么）→ 扫描产出 `01_候选清单.md`（评分、代码证据、counter-case、git blame 发明人归因、披露时序）→ **停下来让用户勾选**要推进的候选，并按清单建议追问 know-how。
+读本目录 `references/mining-rubric.md`，对每项按四维（总分 0–12）打分。**得分 ≥10 的全部候选自动进入 Stage 2–4 撰写与输出，严禁停下来要求用户勾选、裁决或补充 know-how。**为每个入选候选在 `<output_root>/{{yyyymmdd}}_{{repo主题}}/` 下创建独立的 `{{序号}}_{{规范化案件名称}}/` 事件目录，并逐一完成交底书、权利要求与查新；得分 <10 的候选不进入撰写。无候选达到 10 分时，报告“无自动入选候选”后结束本轮，不生成交底书、权利要求或查新报告。
 
 ## Stage 2 · 交底书
 
@@ -75,7 +75,7 @@ cat "<工作区根>/.data/patent_combo_config.json"
 Task Progress:
 - [ ] 环境自检（check_env --fix）与降级确认
 - [ ] Stage 0: 脱敏门禁扫描与用户确认
-- [ ] Stage 1: 挖点候选清单 + 用户勾选
+- [ ] Stage 1: 按 rubric 自动筛选 ≥10 分候选
 - [ ] Stage 2: 交底书生成（含 self_check）
 - [ ] Stage 3: 权利要求撰写
 - [ ] Stage 4: 双路查新报告
@@ -84,11 +84,11 @@ Task Progress:
 
 ## 收尾
 
-输出至 `<output_root>/{{yyyymmdd}}_{{repo主题}}/`。每份文件末尾追加：
+每个入选候选的事件目录位于 `<output_root>/{{yyyymmdd}}_{{repo主题}}/{{序号}}_{{规范化案件名称}}/`。每份文件末尾追加：
 
 > 本草稿为 AI 辅助挖掘结果，非查新/FTO/法律意见，正式申报前须经专利代理人复核。
 
-全部阶段完成后，**不打开、不展示、不要求人工审阅任何阶段 Markdown**，立即使用内置收敛器生成最终 DOCX 并清理阶段底稿：
+每个入选候选完成 Stage 4 后，**不打开、不展示、不要求人工审阅任何阶段 Markdown**，立即在其事件目录使用内置收敛器生成最终 DOCX 并清理阶段底稿：
 
 ```bash
 python3 "<skill-dir>/scripts/finalize_outputs.py" \
