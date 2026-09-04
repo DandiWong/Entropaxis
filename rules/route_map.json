@@ -99,7 +99,7 @@
       "mechanism": "机制转工具",
       "files": [
         ".system/rules/治理指令.md",
-        ".system/rules/工具技能.md"
+        ".system/rules/工具设计.md"
       ],
       "anchor": "## 机制转工具 / 制作工具 (Tool Crafter)",
       "keywords": [
@@ -115,7 +115,7 @@
       "mechanism": "注册Skill",
       "files": [
         ".system/rules/治理指令.md",
-        ".system/rules/工具技能.md"
+        ".system/rules/技能设计.md"
       ],
       "anchor": "## 注册 Skill / 注册到 Entropaxis / 注册到根系统",
       "keywords": [

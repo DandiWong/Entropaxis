@@ -12,14 +12,19 @@ class ToolGovernanceRuleTests(TestCase):
         self.assertTrue(rule_path.exists(), "工具技能.md must exist")
         content = rule_path.read_text(encoding="utf-8")
 
+        # 核心只留形态判定与共同红线，Tool/Skill 细则各自外置
         self.assertIn("## 0. 能力扩展形态判定模型", content)
-        self.assertIn("# 第一篇：Tool 工具设计、准入与工程治理", content)
-        self.assertIn("# 第二篇：Skill 技能设计、架构与最佳实践", content)
-        self.assertIn("# 第三篇：共同合规红线", content)
-        self.assertIn("自由度阶梯匹配", content)
-        self.assertIn("渐进式披露架构", content)
-        self.assertIn("单跳引用与 500 行预算铁律", content)
-        self.assertIn("行动导向的错误契约", content)
+        self.assertIn("## 共同合规红线", content)
+        self.assertIn("工具设计.md", content)
+        self.assertIn("技能设计.md", content)
+
+        tool_content = (SYSTEM_ROOT / "rules" / "工具设计.md").read_text(encoding="utf-8")
+        skill_content = (SYSTEM_ROOT / "rules" / "技能设计.md").read_text(encoding="utf-8")
+        self.assertIn("五维准入漏斗", tool_content)
+        self.assertIn("自由度阶梯匹配", skill_content)
+        self.assertIn("渐进式披露架构", skill_content)
+        self.assertIn("单跳引用与 500 行预算铁律", skill_content)
+        self.assertIn("行动导向的错误契约", tool_content)
         self.assertIn("Local-First 纯标准库铁律", content)
         self.assertIn("零系统绑定与声明外置", content)
 
