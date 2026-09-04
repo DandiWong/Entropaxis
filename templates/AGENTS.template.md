@@ -4,10 +4,7 @@
 
 ## 工作区上下文
 
-- 工作区根入口：`{{ROOT_AGENTS_PATH}}`
-- 通用开发规则：`../../.system/rules/软件工程.md`（或相对路径）
-- 知识与资产沉淀：`../../.system/rules/知识沉淀.md`
-- 项目运行与通用分层：`../../.system/rules/项目组织.md`
+- 工作区总路由与通用规则：`{{ROOT_AGENTS_PATH}}`
 
 ## 按需入口
 

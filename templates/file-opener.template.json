@@ -58,9 +58,10 @@
       "command": "",
       "candidates": [
         {"name": "Google Chrome", "cmd_macos": "open -a \"Google Chrome\"", "cmd_windows": "start chrome", "cmd_linux": "google-chrome"},
+        {"name": "Obsidian", "cmd_macos": "open -a \"Obsidian\"", "cmd_windows": "start obsidian", "cmd_linux": "obsidian"},
         {"name": "Typora", "cmd_macos": "open -a \"Typora\"", "cmd_windows": "start typora", "cmd_linux": "typora"},
-        {"name": "Visual Studio Code", "cmd_macos": "open -a \"Visual Studio Code\"", "cmd_windows": "code", "cmd_linux": "code"},
-        {"name": "Cursor", "cmd_macos": "open -a \"Cursor\"", "cmd_windows": "cursor", "cmd_linux": "cursor"}
+        {"name": "Cursor", "cmd_macos": "open -a \"Cursor\"", "cmd_windows": "cursor", "cmd_linux": "cursor"},
+        {"name": "Visual Studio Code", "cmd_macos": "open -a \"Visual Studio Code\"", "cmd_windows": "code", "cmd_linux": "code"}
       ]
     },
     "html": {

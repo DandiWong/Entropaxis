@@ -135,14 +135,29 @@ def check_rule_deduplication(root: Path) -> list[str]:
     return issues
 
 
+def _is_nested_git_repo_path(path: Path, root: Path) -> bool:
+    """path 是否位于工作区根之外、自带独立 .git 的上游/第三方目录内（含 .system/ 自身）。
+    与 registry.md「自带 .git 且非工作区成员的上游仓库不纳入注册表」的排除口径一致，
+    防止把有独立代码/内容契约的嵌套仓库误判为待规范化的工作区项目薄壳。"""
+    current = path.parent
+    while True:
+        if (current / ".git").exists():
+            return True
+        if current == root or current.parent == current:
+            return False
+        current = current.parent
+
+
 def check_claude_md_thin_shell(root: Path) -> list[str]:
     """所有 CLAUDE.md 必须是纯薄壳：一行标题 + 唯一一行 @AGENTS.md，无其他 import 或正文。
-    例外：若 CLAUDE.md 是指向同目录 AGENTS.md 的符号链接（open-slide 等框架约定），视为等价薄壳。"""
-    import os
+    例外：若 CLAUDE.md 是指向同目录 AGENTS.md 的符号链接（open-slide 等框架约定），视为等价薄壳；
+    嵌套独立 git 仓库（见 `_is_nested_git_repo_path`）视为上游内容，不纳入检查。"""
     issues = []
     for cm in root.glob("**/CLAUDE.md"):
         cm_str = str(cm)
         if any(ex in cm_str for ex in ("Archive", "repoes", "node_modules", "repo/dify")):
+            continue
+        if _is_nested_git_repo_path(cm, root):
             continue
         try:
             # 框架约定例外：CLAUDE.md → AGENTS.md 符号链接 = 等价薄壳
@@ -159,6 +174,39 @@ def check_claude_md_thin_shell(root: Path) -> list[str]:
         except Exception:
             pass
     return issues
+
+
+def fix_claude_md_thin_shell(root: Path) -> list[str]:
+    """将 check_claude_md_thin_shell 判定为违规的项目 CLAUDE.md 原地改写为标准薄壳
+    （一行标题 + @AGENTS.md）。排除名单、符号链接例外与嵌套独立 git 仓库排除均与检测
+    函数保持一致（单一真源见 `_is_nested_git_repo_path`），只改写真正判定为违规的文件；
+    已合规文件不动。"""
+    fixed = []
+    for cm in root.glob("**/CLAUDE.md"):
+        cm_str = str(cm)
+        if any(ex in cm_str for ex in ("Archive", "repoes", "node_modules", "repo/dify")):
+            continue
+        if _is_nested_git_repo_path(cm, root):
+            continue
+        try:
+            if cm.is_symlink():
+                target = os.readlink(str(cm))
+                if target in ("AGENTS.md", "./AGENTS.md"):
+                    continue
+            text = cm.read_text(encoding="utf-8")
+            lines = [l for l in text.splitlines() if l.strip()]
+            if len(lines) == 2 and lines[0].startswith("#") and lines[1].strip() == "@AGENTS.md":
+                continue
+            title = (
+                lines[0].strip()
+                if lines and lines[0].strip().startswith("#")
+                else f"# {cm.parent.name} · Claude Code 入口"
+            )
+            cm.write_text(f"{title}\n@AGENTS.md\n", encoding="utf-8")
+            fixed.append(str(cm.relative_to(root)))
+        except Exception:
+            pass
+    return fixed
 
 
 def _tracked_files(system: Path) -> set[Path] | None:
@@ -430,7 +478,78 @@ def check_system_tools_compile(root: Path) -> list[str]:
                 f"[工具语法错误] {tool.relative_to(root)}:{error.lineno}: {error.msg}"
             )
     return issues
+def check_routing_integrity(root: Path) -> list[str]:
+    """检查根入口动作矩阵、项目注册表及主题胶囊容器链条的完整性与连通性。"""
+    issues = []
+
+    # 1. 检查根 AGENTS.md 动作路由表中的每个规则目标文件真实存在
+    root_agents = root / "AGENTS.md"
+    if root_agents.exists():
+        text = root_agents.read_text(encoding="utf-8")
+        rule_refs = re.findall(r"`(\.system/rules/[^`]+)`", text)
+        for ref in rule_refs:
+            clean_ref = ref.split("#")[0].strip()
+            if not (root / clean_ref).exists():
+                issues.append(f"[根路由断链] 根 AGENTS.md 引用的规则文件 {ref} 不存在。")
+
+    # 2. 检查 .data/registry.md 中的每个项目主目录物理存在
+    registry = root / ".data" / "registry.md"
+    if registry.exists():
+        for line in registry.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line.startswith("|") or line.startswith("| 项目 ID") or line.startswith("|---"):
+                continue
+            cols = [c.strip() for c in line.split("|")[1:-1]]
+            if len(cols) >= 3:
+                dir_cell = cols[2]
+                dirs = re.findall(r"`([^`]+)`", dir_cell)
+                for d in dirs:
+                    d = d.strip()
+                    if not d or "+" in d:
+                        continue
+                    proj_dir = root / d.rstrip("/")
+                    if not proj_dir.is_dir():
+                        issues.append(f"[注册表断链] .data/registry.md 注册的项目目录 {d} 物理不存在。")
+
+    # 3. 检查主题胶囊目录命名与结构（YYYYMMDD_主题）
+    capsule_pattern = re.compile(r"^\d{8}_.+$")
+    for d in root.glob("**/20[2-3][0-9][0-1][0-9][0-3][0-9]_*"):
+        if any(ex in str(d) for ex in EXCLUDE_PATTERNS) or not d.is_dir():
+            continue
+        if not capsule_pattern.match(d.name):
+            issues.append(f"[胶囊命名异常] 主题胶囊目录 {d.relative_to(root)} 不符合 YYYYMMDD_主题 规范。")
+
+
+    # 4. 检查全工作区所有子项目 AGENTS.md 的工作区根回链连通性与零废弃规则
+    for agents_doc in root.rglob("AGENTS.md"):
+        if agents_doc == root / "AGENTS.md" or any(ex in str(agents_doc) for ex in EXCLUDE_PATTERNS):
+            continue
+        text = agents_doc.read_text(encoding="utf-8")
+        refs = re.findall(r"`([^`]+AGENTS\.md)`", text) + re.findall(r"\[[^\]]*\]\(([^)\s]+AGENTS\.md)\)", text)
+        if not refs:
+            issues.append(f"[子入口无回链] {agents_doc.relative_to(root)} 缺少指向工作区根 AGENTS.md 的回链。")
+        else:
+            for ref in refs:
+                target = (agents_doc.parent / ref).resolve()
+                if not target.exists() or target != (root / "AGENTS.md").resolve():
+                    issues.append(f"[子入口回链无效] {agents_doc.relative_to(root)} -> {ref} 未能正确定位到工作区根 AGENTS.md。")
+        for bad_rule in ("开发通用规则", "开发项目联动规则", "知识库规则", "项目运行规则", "表达文风规则", "代码库重构与治理规则"):
+            if bad_rule in text:
+                issues.append(f"[子入口硬编码废弃规则] {agents_doc.relative_to(root)} 包含废弃规则名 {bad_rule}，应收敛至单一根回链。")
+    return issues
+
+
 def main() -> int:
+    if "--fix-claude-md" in sys.argv:
+        fixed = fix_claude_md_thin_shell(ROOT)
+        if fixed:
+            print(f"🔧 已改写 {len(fixed)} 个 CLAUDE.md 为标准薄壳：")
+            for f in fixed:
+                print(f"   • {f}")
+        else:
+            print("✅ 未发现需要改写的 CLAUDE.md。")
+        print()
+
     print(f"🔍 开始对工作区进行健康度与上下文瘦身体检: {ROOT}\n" + "=" * 60)
 
     checks = [
@@ -440,14 +559,15 @@ def main() -> int:
         ("4. 脚手架模板契约检查", check_system_templates, True),
         ("5. Skill 入口与触发元数据检查", check_system_skills, True),
         ("6. .system 工具语法检查", check_system_tools_compile, True),
-        ("7. 常驻层 Token 预算检查", check_resident_budget, False),
-        ("8. 契约状态文件历史堆积检查", check_current_state_bloat, False),
-        ("9. 规则单一真源去重检查", check_rule_deduplication, False),
-        ("10. Dashboard 看板任务健康度检查", check_dashboard_task_hygiene, False),
-        ("11. CLAUDE.md 薄壳纯净度检查", check_claude_md_thin_shell, False),
-        ("12. rules/ 零系统绑定检查", check_rules_zero_system_binding, False),
-        ("13. Skill 软链健康度检查", check_skill_symlink_health, False),
-        ("14. 项目注册表存在性检查", check_registry_exists, False),
+        ("7. 路由完整性与胶囊容器检查", check_routing_integrity, True),
+        ("8. 常驻层 Token 预算检查", check_resident_budget, False),
+        ("9. 契约状态文件历史堆积检查", check_current_state_bloat, False),
+        ("10. 规则单一真源去重检查", check_rule_deduplication, False),
+        ("11. Dashboard 看板任务健康度检查", check_dashboard_task_hygiene, False),
+        ("12. CLAUDE.md 薄壳纯净度检查", check_claude_md_thin_shell, False),
+        ("13. rules/ 零系统绑定检查", check_rules_zero_system_binding, False),
+        ("14. Skill 软链健康度检查", check_skill_symlink_health, False),
+        ("15. 项目注册表存在性检查", check_registry_exists, False),
     ]
 
     all_issues = []
@@ -476,3 +596,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
