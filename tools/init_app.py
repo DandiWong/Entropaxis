@@ -135,7 +135,7 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = _parser()
     args = parser.parse_args()
-    templates = Path(__file__).resolve().parent.parent / "templates"
+    templates = Path(__file__).resolve().parent.parent / "templates" / "project"
     try:
         target = init_app(
             args.name,

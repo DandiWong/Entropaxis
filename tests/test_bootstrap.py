@@ -50,10 +50,10 @@ class FileOpenerMergeTests(TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="file-opener-"))
         self.system_dir = self.tmp / ".system"
-        (self.system_dir / "templates").mkdir(parents=True)
+        (self.system_dir / "templates" / "data").mkdir(parents=True)
         shutil.copy(
-            SYSTEM_ROOT / "templates" / "file-opener.template.json",
-            self.system_dir / "templates" / "file-opener.template.json",
+            SYSTEM_ROOT / "templates" / "data" / "file-opener.template.json",
+            self.system_dir / "templates" / "data" / "file-opener.template.json",
         )
         self.data_dir = self.tmp / ".data"
         (self.data_dir / "templates").mkdir(parents=True)

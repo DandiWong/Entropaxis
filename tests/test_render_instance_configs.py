@@ -24,15 +24,16 @@ class RenderInstanceConfigsTests(TestCase):
         self.tmpdir = Path(_tempfile.mkdtemp(prefix="render-test-"))
         self.templates_dir = self.tmpdir / "templates"
         self.data_dir = self.tmpdir / ".data"
-        self.templates_dir.mkdir(parents=True, exist_ok=True)
+        (self.templates_dir / "data").mkdir(parents=True, exist_ok=True)
+        (self.templates_dir / "project").mkdir(parents=True, exist_ok=True)
 
         # 复制真实模板（避免在测试里硬编码两份）
-        real_templates = SYSTEM_ROOT / "templates"
+        real_templates = SYSTEM_ROOT / "templates" / "data"
         for name in ("board_config.template.json", "workspace-config.template.md"):
-            shutil.copy2(real_templates / name, self.templates_dir / name)
+            shutil.copy2(real_templates / name, self.templates_dir / "data" / name)
 
-        # 再加一个非白名单模板（模拟项目级脚手架）确保不被渲染
-        (self.templates_dir / "AGENTS.template.md").write_text(
+        # 项目脚手架放 project/，确保不被实例渲染流程碰到（目录即白名单，无需硬编码名单）
+        (self.templates_dir / "project" / "AGENTS.template.md").write_text(
             "# AGENTS\n{{ORG_FULL_NAME}}", encoding="utf-8"
         )
 

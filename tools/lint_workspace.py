@@ -273,7 +273,7 @@ def check_data_source_mapping(root: Path) -> list[str]:
     """双向核验 .data/ 路径与 .system/ 定义方的对应关系。
 
     `.data/` 按定义方分三个桶，路径本身即指向来源：
-      .data/templates/X  ⟺ .system/templates/X.template.*
+      .data/templates/X  ⟺ .system/templates/data/X.template.*
       .data/skills/<N>/* ⟺ .system/skills/<N>/
       .data/rules/*      ⟺ 由某条规则声明（具体哪条见文件头 source 字段）
     双向检查能同时抓出孤儿实例文件与失配模板，防结构随时间漂移。
@@ -288,11 +288,23 @@ def check_data_source_mapping(root: Path) -> list[str]:
         for p in sorted(tpl_dir.glob("*")):
             if not p.is_file() or p.suffix not in (".md", ".json"):
                 continue
-            expect = sys_dir / "templates" / f"{p.stem}.template{p.suffix}"
+            expect = sys_dir / "templates" / "data" / f"{p.stem}.template{p.suffix}"
             if not expect.exists():
                 issues.append(
                     f"[实例孤儿] .data/templates/{p.name} 找不到对应模板 {expect.relative_to(root)}；"
                     "它不是模板渲染产物，应移入 .data/rules/ 或 .data/skills/<名>/。"
+                )
+
+    # 反向：模板存在却无实例。拆分 templates/data 与 templates/project 后
+    # 该目录内每个模板都必然对应一个 .data/templates/ 实例，可严格双向核验。
+    sys_tpl = sys_dir / "templates" / "data"
+    if sys_tpl.is_dir() and tpl_dir.is_dir():
+        for t in sorted(sys_tpl.glob("*.template.*")):
+            stem, suffix = t.name.split(".template", 1)
+            if not (tpl_dir / f"{stem}{suffix}").exists():
+                issues.append(
+                    f"[实例未渲染] .system/templates/data/{t.name} 没有对应实例 "
+                    f".data/templates/{stem}{suffix}；运行 `python3 .system/tools/bootstrap.py` 渲染。"
                 )
 
     skl_dir = data_dir / "skills"
@@ -455,7 +467,7 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
     binding_targets: list[Path] = []
     binding_targets += _glob(system / "rules", "*.md")
     binding_targets += _glob(system / "root-configs", "*.md")
-    binding_targets += _glob(system / "templates", "*")
+    binding_targets += _glob(system / "templates", "**/*")
     operational_targets: list[Path] = [
         p for p in _glob(system / "tools", "*.py") if p.name != "lint_workspace.py"
     ]
@@ -624,8 +636,12 @@ def check_system_markdown_links(root: Path) -> list[str]:
 
 
 def check_system_templates(root: Path) -> list[str]:
-    """检查模板完备性与变量契约，保证两个脚手架可独立渲染。"""
-    templates = root / ".system" / "templates"
+    """检查模板完备性与变量契约，保证两个脚手架可独立渲染。
+
+    templates/ 按消费方分两个子目录：data/ 渲染到 .data/（bootstrap），
+    project/ 是项目脚手架（init_project / init_app）。本检查只管后者。
+    """
+    templates = root / ".system" / "templates" / "project"
     issues = []
     required = (
         "AGENTS.template.md",
@@ -642,7 +658,7 @@ def check_system_templates(root: Path) -> list[str]:
     for filename in required:
         template = templates / filename
         if not template.is_file():
-            issues.append(f"[模板缺失] .system/templates/{filename} 不存在。")
+            issues.append(f"[模板缺失] .system/templates/project/{filename} 不存在。")
             continue
         text = template.read_text(encoding="utf-8")
         variables = set(re.findall(r"{{([^{}]+)}}", text))

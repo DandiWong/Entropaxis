@@ -30,7 +30,7 @@
 | 新建/生成/导出通用文件，或查找/定位文件位置 | `.system/rules/文件交付.md` |
 | 系统边界、项目目录结构与组织命名 | `.system/rules/项目组织.md` |
 | 代码开发、调试与自动化验证 | `.system/rules/软件工程.md` |
-| 根系统、AGENTS 与元规则治理 | `.system/rules/01_根系统治理.md` |
+| 根系统治理与元规则 | `.system/rules/01_根系统治理.md`；布局与写入语义见 `.system/rules/控制面布局.md` |
 | 角色职责、跨角色交接与协作验收 | `.system/rules/角色协作.md` |
 | 工作区自然语言指令与任务解析 | `.system/rules/指令解析.md` |
 | 日常业务动作指令（同步/任务/沉淀/复盘/定位/初始化）| `.system/rules/工作流指令.md` |

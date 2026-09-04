@@ -43,13 +43,15 @@ def render_instance_configs(
     rendered = 0
 
 
-    # 仅渲染真正属于 .data/ 的实例模板；templates/ 目录下还有项目级脚手架模板（README/AGENTS 等），由 init_project / init_app 走，不在此处处理
-    DATA_INSTANCE_TEMPLATES = {"board_config.template.json", "workspace-config.template.md"}
+    # templates/data/ 即实例模板白名单——目录按消费方划分，无需硬编码名单
+    # （项目脚手架在 templates/project/，由 init_project / init_app 消费）
+    data_templates = templates_dir / "data"
+    if not data_templates.is_dir():
+        if verbose:
+            print(f"ℹ️ 未找到实例模板目录 {data_templates}，跳过渲染")
+        return True
 
-
-    for tpl in sorted(templates_dir.glob("*.template.json")):
-        if tpl.name not in DATA_INSTANCE_TEMPLATES:
-            continue
+    for tpl in sorted(data_templates.glob("*.template.json")):
         target_name = tpl.name.replace(".template.json", ".json")
         # 模板渲染产物一律落 .data/templates/，与源模板同名，路径即来源指针
         target = data_dir / "templates" / target_name
@@ -68,11 +70,7 @@ def render_instance_configs(
             if verbose:
                 print(f"❌ 渲染 {target_name} 失败: {exc}", file=sys.stderr)
             success = False
-    for tpl in sorted(templates_dir.glob("*.template.md")):
-        if tpl.name not in DATA_INSTANCE_TEMPLATES:
-            continue
-
-
+    for tpl in sorted(data_templates.glob("*.template.md")):
         target_name = tpl.name.replace(".template.md", ".md")
         target = data_dir / "templates" / target_name
         if target.exists():
@@ -315,7 +313,7 @@ def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system
     tools_dir = Path(__file__).resolve().parent
     system_dir = Path(system_dir) if system_dir is not None else tools_dir.parent
     data_dir = system_dir.parent / ".data"
-    template_file = system_dir / "templates" / "file-opener.template.json"
+    template_file = system_dir / "templates" / "data" / "file-opener.template.json"
     target_file = data_dir / "templates" / "file-opener.json"
 
     if not template_file.exists():
