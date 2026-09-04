@@ -1,0 +1,25 @@
+# Used by skills/patent-disclosure/tools/md_to_docx.py, docx_to_md.py, pptx_to_md.py,
+# mermaid_render.py, formula_plan.
+python-docx>=1.1.0
+# Word editable math (LaTeX -> MathML -> OMML); keep source text on failure
+latex2mathml>=3.77.0
+# formula_plan / paradigms.yaml
+PyYAML>=6.0
+# mermaid -> PNG via Playwright; shares browser with CNIPA crawl
+# (skills/patent-disclosure/tools/browser.py)
+playwright>=1.40.0
+mammoth>=1.6.0
+python-pptx>=0.6.21
+
+# Optional: formula PNG (OMML fail AND user says yes; ~100MB incl numpy)
+#   pip install matplotlib
+#   python skills/patent-disclosure/tools/md_to_docx.py -i a.md -o a.docx --math-render
+
+# Optional: CNIPA epub.cnipa.gov.cn (Playwright; system Chrome/Edge)
+#   pip install playwright
+#   python skills/patent-disclosure/tools/browser.py --probe
+#   only if no system browser: python -m playwright install chromium
+
+# Optional: STEP views (CadQuery inside skills/patent-disclosure/tools/cad-env; Python 3.10-3.12)
+#   python skills/patent-disclosure/tools/cad_venv.py
+#   python skills/patent-disclosure/tools/run_step_to_views.py --enable-step-parse -i model.step -o outputs/case/cad_views

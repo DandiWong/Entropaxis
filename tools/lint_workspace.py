@@ -393,6 +393,11 @@ def check_system_markdown_links(root: Path) -> list[str]:
     issues = []
     link_pattern = re.compile(r"\[[^\]]*]\(([^)\s]+)(?:\s+[^)]*)?\)")
     for document in system.rglob("*.md"):
+        # Skill 包内随附的冻结参考文档（skills/<name>/references/**）不参与路由断链检查：
+        # 其内部链接属于第三方/上游文档结构，不构成工作区路由契约。
+        parts = document.relative_to(system).parts
+        if len(parts) >= 3 and parts[0] == "skills" and parts[2] == "references":
+            continue
         for target in link_pattern.findall(document.read_text(encoding="utf-8")):
             target = target.strip("<>")
             if not target or target.startswith(("#", "/", "~", "http:", "https:", "mailto:")):
