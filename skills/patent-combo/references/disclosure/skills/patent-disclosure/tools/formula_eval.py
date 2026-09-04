@@ -203,6 +203,8 @@ def _subst_names(expr: str, values: dict[str, float]) -> tuple[str, list[str]]:
 def _ast_allowed(node: ast.AST) -> bool:
     if not isinstance(node, _ALLOWED_AST):
         return False
+    if isinstance(node, ast.Constant) and not isinstance(node.value, (int, float)):
+        return False
     if isinstance(node, ast.Pow):
         return False
     if isinstance(node, ast.Call):
