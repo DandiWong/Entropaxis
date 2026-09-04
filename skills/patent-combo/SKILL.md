@@ -1,9 +1,9 @@
 ---
 name: patent-combo
-description: "v1.2.0. 代码专利挖掘组合拳（自包含 Skill 包）：内置交底 Skill、权要指南与 CNIPA 检索脚本三件套，对本地代码库执行「脱敏门禁→rubric 挖点→交底书生成→权利要求撰写→CNIPA+dev-tool 双路查新」流水线，产出候选清单、交底书、权利要求与查新报告。当用户说「组合拳」「专利组合拳」「挖专利」「专利挖掘」「从代码挖专利」「patent-combo」并指向某个本地代码库/仓库时触发。启动前先跑 scripts/check_env.py 自检依赖（--fix 自动安装），安装失败自动进入降级矩阵（人工检索包/搜索级查新），不阻断核心阶段。"
+description: "v1.3.0. 专利组合拳（代码专利挖掘自包含技能包）：内置交底技能、权利要求撰写指南与 CNIPA 检索脚本三件套，对本地代码库执行「脱敏门禁→评分挖点→交底书生成→权利要求撰写→CNIPA+开发者工具源双路查新」流水线，产出候选清单、交底书（仅 docx 交付）、权利要求与查新报告。当用户说「组合拳」「专利组合拳」「挖专利」「专利挖掘」「从代码挖专利」「patent-combo」并指向某个本地代码库/仓库时触发。启动前先运行 scripts/check_env.py 自检依赖（--fix 自动安装），安装失败自动进入降级矩阵（人工检索包/搜索级查新），不阻断核心阶段。"
 compatibility: "Python 3.10+；核心流程（Stage 0-3）零第三方依赖；CNIPA 查新需 playwright+系统 Chrome/Edge，Word 导出需 python-docx/latex2mathml/PyYAML（用时自检并 --fix 安装，失败自动降级）"
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # 代码专利挖掘组合拳 (patent-combo)
@@ -55,7 +55,7 @@ cat "<工作区根>/.data/patent_combo_config.json"
 
 ## Stage 2 · 交底书
 
-读 `<skill-dir>/references/disclosure/skills/patent-disclosure/SKILL.md`（路径映射：该文档内所有 `skills/patent-disclosure/` 前缀对应 `<skill-dir>/references/disclosure/skills/patent-disclosure/`），从其 Step 3（挖点深化）衔接：已有候选清单时跳过 intake/project_scan 重复采集，直接按 `prompts/invention/`（或 utility_model/design）深化 → `disclosure_preview` → `disclosure_builder` → `disclosure_self_check`，产出 `02_交底书.md`。Word 导出用其 `tools/md_to_docx.py`。
+读 `<skill-dir>/references/disclosure/skills/patent-disclosure/SKILL.md`（路径映射：该文档内所有 `skills/patent-disclosure/` 前缀对应 `<skill-dir>/references/disclosure/skills/patent-disclosure/`），从其 Step 3（挖点深化）衔接：已有候选清单时跳过 intake/project_scan 重复采集，直接按 `prompts/invention/`（或 utility_model/design）深化 → `disclosure_preview` → `disclosure_builder` → `disclosure_self_check`。**交底书唯一交付格式为 docx**：用其 `tools/md_to_docx.py` 将 `02_交底书.md` 导出为 `02_交底书.docx`；md 与导出过程中的图片/图表仅为中间产物，留作 Stage 3/4 底稿，收尾时统一清理。Word 导出失败时**保留 `02_交底书.md` 并向用户明示**，严禁删除唯一可用格式。
 
 ## Stage 3 · 权利要求
 
@@ -78,7 +78,7 @@ Task Progress:
 - [ ] Stage 2: 交底书生成（含 self_check）
 - [ ] Stage 3: 权利要求撰写
 - [ ] Stage 4: 双路查新报告
-- [ ] 收尾: 输出目录交付
+- [ ] 收尾: 输出目录交付（交底书仅留 docx，清理中间产物）
 ```
 
 ## 收尾
@@ -87,7 +87,9 @@ Task Progress:
 
 > 本草稿为 AI 辅助挖掘结果，非查新/FTO/法律意见，正式申报前须经专利代理人复核。
 
-完成后向用户报告输出目录、四份文件清单与降级情况（若有）。
+**交底书清理（强制）**：全部阶段完成后，删除事件目录中的 `02_交底书.md` 与导出过程产生的中间图片/图表文件，仅保留 `02_交底书.docx`；`01_候选清单.md`、`03_权利要求.md`、`04_查新报告.md` 不在清理范围。Word 导出失败时豁免本条（保留 md 并向用户明示）。
+
+完成后向用户报告输出目录、文件清单、清理结果与降级情况（若有）。
 
 ## 内置资产出处（v1.2.0 定版，2026-09-04）
 
