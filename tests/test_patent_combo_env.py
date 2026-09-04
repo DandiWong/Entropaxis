@@ -36,6 +36,7 @@ def _ok(module: str) -> bool:
     return True
 
 
+
 def _missing(module: str) -> bool:
     return False
 
@@ -54,6 +55,16 @@ class PatentComboEnvTests(TestCase):
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_distribution_excludes_legacy_build_and_demo_files(self) -> None:
+        package_root = SYSTEM_ROOT / "skills" / "patent-combo"
+        excluded = (
+            "references/disclosure/skills/patent-disclosure/tools/package.json",
+            "references/disclosure/skills/patent-disclosure/tools/package-lock.json",
+            "references/disclosure/skills/patent-disclosure/tools/gen_demo_snap_step.py",
+        )
+        for relative_path in excluded:
+            self.assertFalse((package_root / relative_path).exists(), relative_path)
 
     def test_all_ready(self) -> None:
         report = check_env.build_report(

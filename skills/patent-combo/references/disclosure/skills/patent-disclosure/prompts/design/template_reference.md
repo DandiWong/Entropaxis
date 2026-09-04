@@ -26,5 +26,3 @@
 ## 与在先差异短句示例
 
 > 相对直杆台灯，本案折臂折线与弯月灯头轮廓更明显（须经查新核实，勿贬低未检索对象）。
-
-教学样例：`examples/example_design_desk_lamp/`（brief + 国内媒体实拍；须自填 AppearanceSchema + figure_plan；brief 为教学虚构）。

@@ -55,5 +55,3 @@ figures:
 ```markdown
 如图1所示，基板1上表面设鳍片2……；如图2为图1的局部放大，钩部4与板缘缺口咬合……。
 ```
-
-教学样例目录：`examples/example_utility_model_ev_powertrain/`（电驱桥 brief + 展台实拍；须自填 StructureSchema + figure_plan；线稿文生图；brief 为教学虚构）。

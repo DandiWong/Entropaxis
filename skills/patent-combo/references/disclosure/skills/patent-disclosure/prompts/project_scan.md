@@ -134,30 +134,3 @@ Agent **不得**因「只能舒适读取文本」而**遗漏**项目内的 Word 
 | 外观设计 | 按要点落面收正投影/立体图（非默认六视）、效果图、色彩说明、`appearance_*.yaml/json`；再按 `prompts/fill_appearance_schema.md` 填表并写出 **`figure_plan.yaml`** |
 
 独立结构/外观附图（用户点名或 schema `source_images`）**需要** Read 识图，不适用下方「sample_assets 跳过」惯例。
-
-## 示例案件 `knowledge/`（练习时勿漏）
-
-### 发明 · `skills/patent-disclosure/examples/example_batch_job_scheduler/knowledge/`
-
-| 路径 | 动作 |
-|------|------|
-| `docs/architecture.md` | 直接 Read |
-| `docs/sample_architecture_review.docx` | **先** `tools/docx_to_md.py` → 再 Read 生成的 `.md` |
-| `docs/sample_scheduler_deck.pptx` | **先** `tools/pptx_to_md.py` → 再 Read 生成的 `.md` |
-| `docs/sample_assets/*.png` | **跳过**单独精读（内容已由 Office 内嵌图 + 转换 MD 覆盖） |
-
-### 实用新型 · `skills/patent-disclosure/examples/example_utility_model_ev_powertrain/knowledge/`
-
-| 路径 | 动作 |
-|------|------|
-| `docs/structure_brief.md` | Read（主材料；部件表与建议剖视/爆炸/局部） |
-| `assets/*.jpg` | 展台实拍，**须**识图打分；`kind` 为 `photo_clean` / `photo_scene`，**不入文**；本案例无合格线稿，成文前按 brief **文生图** |
-
-教学用 STEP 不在本示例：见 `skills/patent-disclosure/tests/fixtures/cad/demo_snap_plate.step`（`cad_scan` / `gen_demo_snap_step.py`）。
-
-### 外观 · `skills/patent-disclosure/examples/example_design_desk_lamp/knowledge/`
-
-| 路径 | 动作 |
-|------|------|
-| `docs/design_brief.md` | Read |
-| `assets/*.{jpg,png}` | **须**识图填 AppearanceSchema + **`figure_plan.yaml`**（教学用；勿依赖预填 yaml；场景图默认低优先级） |

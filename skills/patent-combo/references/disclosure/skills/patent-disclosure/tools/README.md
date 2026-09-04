@@ -32,8 +32,7 @@
 | **`step_to_views.py`** | STEP → SVG（有 Cairo 再 PNG）。须 **`--enable-step-parse`**；请用 cad-env 的 Python。 |
 | **`svg_screenshot.py`** | 短时 HTTP + 无头浏览器把 SVG 截成 PNG（端口先探测，用完关闭）。 |
 | **`run_step_to_views.py`** | 探测 cad-env → 必要时 bootstrap → 出图 → 补 PNG。 |
-| **`gen_demo_snap_step.py`** | 生成教学用 `tests/fixtures/cad/demo_snap_plate.step`（无 CadQuery）。 |
-| **`requirements-step.txt`** | ASCII only；CadQuery + cairosvg；**只装进 cad-env**。 |
+| `requirements-step.txt` | ASCII only；CadQuery + cairosvg；**只装进 cad-env**。 |
 
 流程纪律见 **`skills/patent-disclosure/prompts/project_scan.md`**「CAD / STEP」：有 STEP 成文不中断，交底落盘后再反问；仅有原生 CAD 则交付回复末尾提示导出 STEP。投影图是普通材料（`kind: cad`），**不得当线稿、不得入文**；打分后可能作图生图参考。
 
@@ -129,7 +128,7 @@ python tools/structure_callout_overlay.py --case-dir outputs/case --anchors outp
 | 本机 Chrome 或 Edge | **推荐**；有则不必再下 Chromium |
 | `python -m playwright install chromium` | **仅当**本机无 Chrome/Edge 时 |
 
-探测：`python tools/browser.py --probe`。**禁止**为出图执行 `npm install` / `npx -y @mermaid-js/mermaid-cli`。`tools/package.json` 仅为旧 mmdc 可选遗留，主路径不使用。
+探测：`python tools/browser.py --probe`。**禁止**为出图执行 `npm install` / `npx -y @mermaid-js/mermaid-cli`；主路径不使用 Node 或 mmdc。
 
 生成 Word 仍需：`pip install -r requirements.txt`（python-docx 等）。
 
