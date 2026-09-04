@@ -9,7 +9,7 @@ SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from tools.bootstrap import sync_entrypoints, detect_host_apps, init_file_opener, get_open_command
+from tools.bootstrap import sync_entrypoints, detect_host_apps, init_file_opener
 
 # ponytail: sync_entrypoints() 的路径由自身 __file__ 派生，无法用 monkeypatch 隔离到临时目录；
 # 直接对真实工作区跑，并用 finally 恢复，覆盖幂等性与漂移自愈两条核心路径。
@@ -35,13 +35,6 @@ class BootstrapSyncTests(TestCase):
         finally:
             target.write_text(original, encoding="utf-8")
 
-    def test_get_open_command_formats_and_dirs(self) -> None:
-        cmd_docx = get_open_command("01_test/doc.docx", SYSTEM_ROOT.parent)
-        self.assertIn("doc.docx", cmd_docx)
-        cmd_pptx = get_open_command("01_test/slide.pptx", SYSTEM_ROOT.parent)
-        self.assertIn("slide.pptx", cmd_pptx)
-        cmd_dir = get_open_command("01_test/dir/", SYSTEM_ROOT.parent)
-        self.assertIn("01_test/dir/", cmd_dir)
 
 
 class FileOpenerMergeTests(TestCase):

@@ -51,6 +51,7 @@ SYSTEM_REQUIRED_FILES = (
     "tools/init_project.py",
     "tools/init_app.py",
     "tools/lint_workspace.py",
+    "tools/open_file.py",
 )
 SYSTEM_TEMPLATE_VARIABLES = {
     "项目名",

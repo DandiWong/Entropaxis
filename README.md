@@ -102,6 +102,7 @@
 ## 🛠️ 常用开发与治理入口
 
 - **根入口配置同步/自愈**：`python3 .system/tools/bootstrap.py`
+- **按配置打开文件**：`python3 .system/tools/open_file.py <path> [<path> ...]`
 - **通用项目脚手架初始化**：`python3 .system/tools/init_project.py <项目名>`
 - **软件应用脚手架初始化**：`python3 .system/tools/init_app.py <app-name> --target-dir <项目路径>/02_开发`
 - **工作区规则与健康度体检**：`python3 .system/tools/lint_workspace.py`

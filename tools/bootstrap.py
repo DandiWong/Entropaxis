@@ -350,46 +350,6 @@ def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system
         _report_opener(config)
     return config
 
-def get_open_command(file_path: str, root: Path | None = None) -> str:
-    """
-    根据文件路径或格式获取本机打开命令。
-    优先读取 .data/templates/file-opener.json 中的配置；缺失时优雅降级为系统默认命令。
-    """
-    path_obj = Path(file_path)
-    if path_obj.is_dir() or not path_obj.suffix:
-        if sys.platform == "darwin":
-            return f'open "{file_path}"'
-        elif sys.platform == "win32":
-            return f'explorer "{file_path}"'
-        else:
-            return f'xdg-open "{file_path}"'
-
-    ext = path_obj.suffix.lower()
-
-    if root is None:
-        tools_dir = Path(__file__).resolve().parent
-        root = tools_dir.parent.parent
-
-    config_file = root / ".data" / "templates" / "file-opener.json"
-    if config_file.is_file():
-        try:
-            with open(config_file, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            for _, assoc in cfg.get("associations", {}).items():
-                if ext in assoc.get("extensions", []):
-                    cmd = assoc.get("command", "")
-                    if cmd:
-                        return f'{cmd} "{file_path}"'
-        except Exception:
-            pass
-
-    # 默认兜底
-    if sys.platform == "darwin":
-        return f'open "{file_path}"'
-    elif sys.platform == "win32":
-        return f'start "" "{file_path}"'
-    else:
-        return f'xdg-open "{file_path}"'
 
 def print_windows_hints() -> None:
     print("""

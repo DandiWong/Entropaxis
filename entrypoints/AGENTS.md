@@ -8,6 +8,7 @@
 
 - 搜索用 `grep`/`find` 内置工具，多OR词用一次 `multi_grep`；必须走bash 时用 `rg`，不用 `grep`
 - 定位后用 `read` 的offset/limit 只读命中附近；工作区外已知文件直接read
+- 打开本地文件统一执行 `python3 .system/tools/open_file.py <path>`；不得直接调用 `open`、`start`、`xdg-open` 或应用 CLI 绕过 `.data/templates/file-opener.json`。
 
 ## 安全边界
 
