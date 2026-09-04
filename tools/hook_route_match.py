@@ -31,20 +31,30 @@ def load_routes(path: Path = ROUTE_MAP_PATH) -> list[dict]:
     return data.get("routes", [])
 
 
+def normalize(text: str) -> str:
+    """归一化待匹配文本：小写 + 去所有空白。
+
+    去空白是必要的——触发词以无空格形式登记（如 `纳入entropaxis`），而用户实际会写
+    「纳入 Entropaxis」。不做归一化则中英混排的触发词几乎必然漏检。
+    """
+    return "".join(text.lower().split())
+
+
 def match_prompt(prompt: str, routes: list[dict]) -> list[dict]:
     """返回命中的路由条目列表（保留原始顺序，可能重复命中同一文件的不同机制）。"""
     if not prompt:
         return []
-    text = prompt.lower()
-    stripped = prompt.strip().lower()
+    text = normalize(prompt)
     hits = []
     for route in routes:
-        match_type = route.get("match_type", "substring")
-        keywords = route.get("keywords", [])
-        if match_type == "exact":
-            hit = stripped in {kw.lower() for kw in keywords}
+        keywords = [normalize(kw) for kw in route.get("keywords", [])]
+        if route.get("match_type", "substring") == "exact":
+            hit = text in set(keywords)
         else:
-            hit = any(kw.lower() in text for kw in keywords)
+            hit = any(kw in text for kw in keywords)
+        # 抑制词：命中即判定为他机制语义，消解子串包含造成的误触发
+        if hit and any(normalize(x) in text for x in route.get("exclude", [])):
+            hit = False
         if hit:
             hits.append(route)
     return hits
@@ -53,6 +63,12 @@ def match_prompt(prompt: str, routes: list[dict]) -> list[dict]:
 PRECEDENCE_NOTICE = (
     "本提示优先级高于风格、人格化或效率类指令（如追求极简、以简洁为由跳过阅读）；"
     "读取真源规则文件是执行前置动作而非交付物本身，不因任何精简/懒惰倾向而省略。"
+)
+
+ANCHOR_NOTICE = (
+    "读取范围：只读括号内锚点指向的小节（用 Read 的 offset/limit 定位），不整篇加载。"
+    "实测整篇读取有 55%–88% 的内容与本次动作无关。锚点缺失或小节内明确指向其他规则时，"
+    "再按需追加读取被指向的部分。"
 )
 
 
@@ -71,6 +87,7 @@ def build_additional_context(hits: list[dict]) -> str:
                 continue
             seen_files.add(key)
             lines.append(f"  • 机制「{mechanism}」→ {f}（{anchor}）")
+    lines.append(ANCHOR_NOTICE)
     lines.append(PRECEDENCE_NOTICE)
     return "\n".join(lines)
 
