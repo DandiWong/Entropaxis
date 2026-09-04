@@ -44,7 +44,7 @@
 | 分发 / 打包 Skill | `.system/rules/技能设计.md`（分发包契约）与 `.system/rules/文件交付.md`（打开 ZIP 所在目录） |
 | Spec、任务状态、任务看板与待办管理 | `.system/rules/看板联动.md`（按需调用看板 Skill 或本地适配器） |
 | 会议纪要生成 | `.system/rules/工作流指令.md`（按需调用会议纪要 Skill） |
-| 财务报销与发票归总 | `.system/rules/财务报销.md` |
+| 报销 / 整理发票 | `.system/rules/工作流指令.md` 与 `.system/rules/财务报销.md` |
 | 项目注册表（工作区项目索引） | `.data/registry.md` |
 
 进入具体项目后，先读最近的 `AGENTS.md`，再按其中路由读取 README、Spec 或操作文档。仅在任务涉及外部看板、联网、发布或特定工具时加载对应规则或 Skill。

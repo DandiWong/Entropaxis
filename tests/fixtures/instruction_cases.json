@@ -9,45 +9,315 @@
     "maintenance": "route_map.json 新增机制或触发词时，同步在此补 positive 用例；复盘发现的漏检/误触发实例补为 paraphrase/negative 用例。"
   },
   "cases": [
-    {"kind": "positive", "instruction": "帮我初始化一下工作区", "expect": ["工作区初始化"]},
-    {"kind": "positive", "instruction": "我是新人，怎么开始", "expect": ["工作区初始化"]},
-    {"kind": "positive", "instruction": "配置打开方式", "expect": ["工作区初始化"]},
-    {"kind": "positive", "instruction": "上周那份方案文件在哪", "expect": ["定位查找文件"]},
-    {"kind": "positive", "instruction": "找一下季度汇报的原稿", "expect": ["定位查找文件"]},
-    {"kind": "positive", "instruction": "打开它所在文件夹", "expect": ["定位查找文件"]},
-    {"kind": "positive", "instruction": "对当前方案做一次审计", "expect": ["审计"]},
-    {"kind": "positive", "instruction": "评审方案", "expect": ["审计"]},
-    {"kind": "positive", "instruction": "根据审计修正", "expect": ["修正"]},
-    {"kind": "positive", "instruction": "响应审计报告里的意见", "expect": ["修正"]},
-    {"kind": "positive", "instruction": "系统自检", "expect": ["系统自检"]},
-    {"kind": "positive", "instruction": "跑个 Entropaxis 自检", "expect": ["系统自检"]},
-    {"kind": "positive", "instruction": "开始新迭代", "expect": ["新迭代"]},
-    {"kind": "positive", "instruction": "开新分支干下一个 feature", "expect": ["新迭代"]},
-    {"kind": "positive", "instruction": "把这个机制转工具", "expect": ["机制转工具"]},
-    {"kind": "positive", "instruction": "帮我制作工具", "expect": ["机制转工具"]},
-    {"kind": "positive", "instruction": "把这个 skill 注册到根系统", "expect": ["注册Skill"]},
-    {"kind": "positive", "instruction": "将它纳入 Entropaxis", "expect": ["注册Skill"]},
-    {"kind": "positive", "instruction": "同步任务", "expect": ["同步任务", "同步"]},
-    {"kind": "positive", "instruction": "跟看板同步一下", "expect": ["同步"]},
-    {"kind": "positive", "instruction": "建个任务跟进这件事", "expect": ["任务登记"]},
-    {"kind": "positive", "instruction": "记个任务", "expect": ["任务登记"]},
-    {"kind": "positive", "instruction": "把这个结论沉淀下来", "expect": ["记录沉淀"]},
-    {"kind": "positive", "instruction": "记录一下这次的决定", "expect": ["记录沉淀"]},
-    {"kind": "positive", "instruction": "对这个季度做个复盘", "expect": ["复盘"]},
-    {"kind": "positive", "instruction": "tip", "expect": ["tip"]},
-
-    {"kind": "negative", "instruction": "这段代码为什么会报错", "expect": []},
-    {"kind": "negative", "instruction": "解释一下这个函数的作用", "expect": []},
-    {"kind": "negative", "instruction": "帮我把这段话翻译成英文", "expect": []},
-    {"kind": "negative", "instruction": "今天天气怎么样", "expect": []},
-    {"kind": "negative", "instruction": "我们讨论一下架构该怎么设计", "expect": []},
-    {"kind": "negative", "instruction": "给我一些 tips 参考", "expect": [], "note": "tip 用例为 exact 匹配，含在长句中不应命中"},
-
-    {"kind": "paraphrase", "instruction": "帮我审一下这个方案有没有问题", "expect": ["审计"], "note": "「审一下」不在字面触发词内"},
-    {"kind": "paraphrase", "instruction": "走一遍审修回环", "expect": ["审计", "修正"], "note": "机制名指代，元规则第 8 条要求语义命中"},
-    {"kind": "paraphrase", "instruction": "把这些经验沉到规则里", "expect": ["记录沉淀"], "note": "「沉到」非「沉淀」"},
-    {"kind": "paraphrase", "instruction": "回顾下上个月哪些地方做重复了", "expect": ["复盘"], "note": "「回顾」非「复盘」"},
-    {"kind": "paraphrase", "instruction": "这个流程每次都手工做，能不能自动化", "expect": ["机制转工具"], "note": "描述工具化动机而未用触发词"},
-    {"kind": "paraphrase", "instruction": "检查一下根系统健不健康", "expect": ["系统自检"], "note": "「检查」非「自检」"}
+    {
+      "kind": "positive",
+      "instruction": "帮我初始化一下工作区",
+      "expect": [
+        "工作区初始化"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "我是新人，怎么开始",
+      "expect": [
+        "工作区初始化"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "配置打开方式",
+      "expect": [
+        "工作区初始化"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "上周那份方案文件在哪",
+      "expect": [
+        "定位查找文件"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "找一下季度汇报的原稿",
+      "expect": [
+        "定位查找文件"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "打开它所在文件夹",
+      "expect": [
+        "定位查找文件"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "对当前方案做一次审计",
+      "expect": [
+        "审计"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "评审方案",
+      "expect": [
+        "审计"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "根据审计修正",
+      "expect": [
+        "修正"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "响应审计报告里的意见",
+      "expect": [
+        "修正"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "系统自检",
+      "expect": [
+        "系统自检"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "跑个 Entropaxis 自检",
+      "expect": [
+        "系统自检"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "开始新迭代",
+      "expect": [
+        "新迭代"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "开新分支干下一个 feature",
+      "expect": [
+        "新迭代"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "把这个机制转工具",
+      "expect": [
+        "机制转工具"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "帮我制作工具",
+      "expect": [
+        "机制转工具"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "把这个 skill 注册到根系统",
+      "expect": [
+        "注册Skill"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "将它纳入 Entropaxis",
+      "expect": [
+        "注册Skill"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "同步任务",
+      "expect": [
+        "同步任务",
+        "同步"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "跟看板同步一下",
+      "expect": [
+        "同步"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "建个任务跟进这件事",
+      "expect": [
+        "任务登记"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "记个任务",
+      "expect": [
+        "任务登记"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "把这个结论沉淀下来",
+      "expect": [
+        "记录沉淀"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "记录一下这次的决定",
+      "expect": [
+        "记录沉淀"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "对这个季度做个复盘",
+      "expect": [
+        "复盘"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "tip",
+      "expect": [
+        "tip"
+      ]
+    },
+    {
+      "kind": "negative",
+      "instruction": "这段代码为什么会报错",
+      "expect": []
+    },
+    {
+      "kind": "negative",
+      "instruction": "解释一下这个函数的作用",
+      "expect": []
+    },
+    {
+      "kind": "negative",
+      "instruction": "帮我把这段话翻译成英文",
+      "expect": []
+    },
+    {
+      "kind": "negative",
+      "instruction": "今天天气怎么样",
+      "expect": []
+    },
+    {
+      "kind": "negative",
+      "instruction": "我们讨论一下架构该怎么设计",
+      "expect": []
+    },
+    {
+      "kind": "negative",
+      "instruction": "给我一些 tips 参考",
+      "expect": [],
+      "note": "tip 用例为 exact 匹配，含在长句中不应命中"
+    },
+    {
+      "kind": "paraphrase",
+      "instruction": "帮我审一下这个方案有没有问题",
+      "expect": [
+        "审计"
+      ],
+      "note": "「审一下」不在字面触发词内"
+    },
+    {
+      "kind": "positive",
+      "instruction": "走一遍审修回环",
+      "expect": [
+        "审计",
+        "修正"
+      ]
+    },
+    {
+      "kind": "paraphrase",
+      "instruction": "把这些经验沉到规则里",
+      "expect": [
+        "记录沉淀"
+      ],
+      "note": "「沉到」非「沉淀」"
+    },
+    {
+      "kind": "paraphrase",
+      "instruction": "回顾下上个月哪些地方做重复了",
+      "expect": [
+        "复盘"
+      ],
+      "note": "「回顾」非「复盘」"
+    },
+    {
+      "kind": "positive",
+      "instruction": "这个流程每次都手工做，能不能自动化",
+      "expect": [
+        "机制转工具"
+      ]
+    },
+    {
+      "kind": "paraphrase",
+      "instruction": "检查一下根系统健不健康",
+      "expect": [
+        "系统自检"
+      ],
+      "note": "「检查」非「自检」"
+    },
+    {
+      "kind": "positive",
+      "instruction": "整理发票",
+      "expect": [
+        "报销归总"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "把这个月的报销归总一下",
+      "expect": [
+        "报销归总"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "报销初始化",
+      "expect": [
+        "报销归总"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "审修",
+      "expect": [
+        "审计",
+        "修正"
+      ]
+    },
+    {
+      "kind": "negative",
+      "instruction": "自动化测试跑一下",
+      "expect": [],
+      "note": "自动化测试属软件工程语境，由 exclude 抑制"
+    },
+    {
+      "kind": "negative",
+      "instruction": "配置一下自动化部署流水线",
+      "expect": [],
+      "note": "自动化部署/流水线同样由 exclude 抑制"
+    },
+    {
+      "kind": "paraphrase",
+      "instruction": "这些发票该报了",
+      "expect": [
+        "报销归总"
+      ],
+      "note": "「报了」非「报销」"
+    }
   ]
 }
