@@ -544,6 +544,28 @@ def check_routing_integrity(root: Path) -> list[str]:
     return issues
 
 
+def check_route_map_integrity(root: Path) -> list[str]:
+    """检查确定性路由映射表 (route_map.json) 结构完整且目标文件真实存在。"""
+    import json as _json
+
+    issues = []
+    route_map = root / ".system" / "rules" / "route_map.json"
+    if not route_map.is_file():
+        return issues
+    try:
+        data = _json.loads(route_map.read_text(encoding="utf-8"))
+    except _json.JSONDecodeError as error:
+        return [f"[路由映射表解析失败] {route_map.relative_to(root)}: {error.msg}"]
+    for entry in data.get("routes", []):
+        mechanism = entry.get("mechanism", "<未命名机制>")
+        if not entry.get("keywords"):
+            issues.append(f"[路由映射缺关键词] 机制「{mechanism}」未声明 keywords。")
+        for f in entry.get("files", []):
+            if not (root / f).exists():
+                issues.append(f"[路由映射断链] 机制「{mechanism}」引用的 {f} 不存在。")
+    return issues
+
+
 def main() -> int:
     if "--fix-claude-md" in sys.argv:
         fixed = fix_claude_md_thin_shell(ROOT)
@@ -573,6 +595,7 @@ def main() -> int:
         ("13. rules/ 零系统绑定检查", check_rules_zero_system_binding, False),
         ("14. Skill 软链健康度检查", check_skill_symlink_health, False),
         ("15. 项目注册表存在性检查", check_registry_exists, False),
+        ("16. 确定性路由映射表完整性检查", check_route_map_integrity, True),
     ]
 
     all_issues = []

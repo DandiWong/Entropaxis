@@ -6,3 +6,5 @@ __pycache__/
 skills/internal-org-*/
 skills/internal-org-*
 
+# Skill 分发包构建产物（本地生成，不入库）
+skills/*.zip

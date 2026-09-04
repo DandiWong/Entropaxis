@@ -1,0 +1,94 @@
+{
+  "_meta": {
+    "purpose": "确定性关键词路由索引，供 tools/hook_route_match.py 在 UserPromptSubmit 阶段做字面命中的前置注入；语义/转述命中仍依赖模型对根 AGENTS.md 路由表与本文件的理解，本表只兜底提升字面命中的召回率，不替代语义判断。",
+    "source_of_truth": "本表关键词逐条摘自 .system/rules/指令解析.md 与 .system/rules/文件交付.md 中已声明的“触发意图/触发场景”原文，不新增未在规则正文出现过的措辞；新增机制的显式触发词时须同步在此登记，避免字面命中漏检。",
+    "deliberate_omissions": "规则正文枚举的裸词“任务”未纳入（过于通用，逐字匹配会在几乎所有工作汇报语境下误触发，违反元规则3“薄入口/按需”），改用更具体的“建个任务/记个任务/登记任务”子串；“记录/沉淀”“复盘”等仍按原文保留，存在一定误触发容忍度。"
+  },
+  "routes": [
+    {
+      "mechanism": "工作区初始化",
+      "files": [".system/rules/指令解析.md"],
+      "anchor": "## 工作区初始化 / 新机配置",
+      "keywords": ["初始化", "新电脑", "我是新人", "配置工作区", "系统初始化", "配置打开方式", "修改打开程序"]
+    },
+    {
+      "mechanism": "定位查找文件",
+      "files": [".system/rules/指令解析.md", ".system/rules/文件交付.md"],
+      "anchor": "## 定位 / 查找文件 | ### 4.2 触发场景",
+      "keywords": ["文件在哪", "找一下", "所在目录", "所在文件夹"]
+    },
+    {
+      "mechanism": "审计",
+      "files": [".system/rules/指令解析.md"],
+      "anchor": "## 审计",
+      "keywords": ["审计", "方案审计", "审核方案", "评审方案"]
+    },
+    {
+      "mechanism": "修正",
+      "files": [".system/rules/指令解析.md"],
+      "anchor": "## 修正",
+      "keywords": ["修正方案", "根据审计修正", "响应审计报告"]
+    },
+    {
+      "mechanism": "系统自检",
+      "files": [".system/rules/指令解析.md", ".system/rules/01_根系统治理.md"],
+      "anchor": "## 系统自检",
+      "keywords": ["系统自检", "自检", "entropaxis 自检", "entropaxis自检"]
+    },
+    {
+      "mechanism": "新迭代",
+      "files": [".system/rules/指令解析.md", ".system/rules/软件工程.md"],
+      "anchor": "## 新迭代 / 新 Feature",
+      "keywords": ["新迭代", "新feature", "new feature", "开始新迭代", "开新分支"]
+    },
+    {
+      "mechanism": "机制转工具",
+      "files": [".system/rules/指令解析.md", ".system/rules/工具技能.md"],
+      "anchor": "## 机制转工具 / 制作工具 (Tool Crafter)",
+      "keywords": ["机制转工具", "制作工具", "创建工具", "机制工具化", "tool-crafter", "toolify"]
+    },
+    {
+      "mechanism": "注册Skill",
+      "files": [".system/rules/指令解析.md", ".system/rules/工具技能.md"],
+      "anchor": "## 注册 Skill / 注册到 Entropaxis / 注册到根系统",
+      "keywords": ["注册到entropaxis", "注册到根系统", "注册skill", "安装并注册skill", "纳入entropaxis"]
+    },
+    {
+      "mechanism": "同步任务",
+      "files": [".system/rules/指令解析.md", ".system/rules/看板联动.md"],
+      "anchor": "## 同步任务",
+      "keywords": ["同步任务"]
+    },
+    {
+      "mechanism": "同步",
+      "files": [".system/rules/指令解析.md", ".system/rules/看板联动.md"],
+      "anchor": "## 同步",
+      "keywords": ["同步"]
+    },
+    {
+      "mechanism": "任务登记",
+      "files": [".system/rules/指令解析.md", ".system/rules/看板联动.md"],
+      "anchor": "## 任务",
+      "keywords": ["建个任务", "记个任务", "登记任务"]
+    },
+    {
+      "mechanism": "记录沉淀",
+      "files": [".system/rules/指令解析.md", ".system/rules/知识沉淀.md"],
+      "anchor": "## 记录 / 沉淀",
+      "keywords": ["记录", "沉淀"]
+    },
+    {
+      "mechanism": "复盘",
+      "files": [".system/rules/指令解析.md"],
+      "anchor": "## 复盘",
+      "keywords": ["复盘"]
+    },
+    {
+      "mechanism": "tip",
+      "files": [".system/rules/指令解析.md"],
+      "anchor": "## Tip",
+      "match_type": "exact",
+      "keywords": ["tip"]
+    }
+  ]
+}
