@@ -23,6 +23,15 @@ RESIDENT_MAX_LINES = 50
 PROJECT_AGENTS_MAX_LINES = 60
 MAX_CURRENT_STATE_LINES = 120
 
+# 按需层预算：单个规则文件行数建议线。不设 rules/ 目录总量上限——规则数量随业务自然增长，
+# 总量封顶会逼迫把不相关内容塞进同一文件，反而破坏正交收敛。
+RULE_MAX_LINES = 120
+# 跨规则文件语义重复检测：归一化后连续重复字符数达该窗口即判定为复述（应改为引用）。
+# 25 字约合一个完整分句：实测该阈值召回全部真实复述且零误报；再收紧会把中英双写等
+# 非复述形态一并命中（那属于《表达文风》L1 的处理范围，不应在此告警）。
+RULE_DUP_WINDOW = 25
+RULE_DUP_MAX_REPORTS = 8
+
 EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "repo/dify", "graphify-out")
 
 # 控制面零系统绑定/零真实实体禁词（小写匹配；lint 自身因定义检测常量而豁免）
@@ -132,6 +141,110 @@ def check_rule_deduplication(root: Path) -> list[str]:
             issues.append(
                 f"[潜在规则重复] 二级标题「{header}」同时出现在多个规则文件中: {', '.join(files)}。请确认是否违背单一真源原则。"
             )
+    return issues
+
+
+def check_rule_budget(root: Path) -> list[str]:
+    """检查单个规则文件行数是否超出按需层预算。
+
+    常驻层（AGENTS.md）已有 check_resident_budget 把关，但被按需读取的 rules/ 本身
+    此前不受任何预算约束——这正是规则体量失控的结构性缺口。本检查补上该门禁。
+    """
+    issues = []
+    rules_dir = root / ".system" / "rules"
+    if not rules_dir.exists():
+        return issues
+    for rf in sorted(rules_dir.glob("*.md")):
+        try:
+            cnt = len(rf.read_text(encoding="utf-8").splitlines())
+        except Exception:
+            continue
+        if cnt > RULE_MAX_LINES:
+            issues.append(
+                f"[规则超预算] rules/{rf.name} 共 {cnt} 行，超建议线 {RULE_MAX_LINES} 行（超 {cnt - RULE_MAX_LINES} 行）。"
+                "按《表达文风》「规则瘦身」处理：判据留规则、操作步骤下沉 Skill、复述改引用。"
+            )
+    return issues
+
+
+def _normalize_rule_text(content: str) -> str:
+    """归一化规则正文，供跨文件复述检测使用。
+
+    剔除代码块与行内代码：命令原文允许跨文件重复（漂移代价高于 Token 收益）；
+    剔除强调标记、标题井号与空白：不承载判据，否则同义片段会因排版差异漏检。
+    """
+    content = re.sub(r"```.*?```", "", content, flags=re.DOTALL)
+    content = re.sub(r"`[^`]*`", "", content)
+    content = re.sub(r"\]\([^)]*\)", "]", content)  # 链接目标是指针不是复述，剔除后只留链接文字
+    kept = []
+    for line in content.splitlines():
+        s = line.strip()
+        if not s or set(s) <= set("|-: "):  # 空行与表格分隔行
+            continue
+        kept.append(s)
+    return re.sub(r"[\s*_>#]", "", "".join(kept))
+
+
+def check_rule_semantic_dedup(root: Path) -> list[str]:
+    """检测跨规则文件的连续重复片段（复述），补足字面标题去重的盲区。
+
+    check_rule_deduplication 只比对 `##` 标题字符串是否相同，语义复述完全不可见。
+    本检查以滑动窗口找出在 2 个以上文件中同时出现的连续片段，命中即应改为「见 X.md §N」引用。
+    """
+    issues = []
+    rules_dir = root / ".system" / "rules"
+    if not rules_dir.exists():
+        return issues
+
+    norm: dict[str, str] = {}
+    for rf in sorted(rules_dir.glob("*.md")):
+        try:
+            norm[rf.name] = _normalize_rule_text(rf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+    window_owners: dict[str, set[str]] = {}
+    for name, text in norm.items():
+        for i in range(len(text) - RULE_DUP_WINDOW + 1):
+            window_owners.setdefault(text[i : i + RULE_DUP_WINDOW], set()).add(name)
+
+    # 把同一文件内相邻的命中窗口合并为极大片段，避免同一处重复被拆成数十条告警
+    fragments: dict[str, set[str]] = {}
+    for name, text in norm.items():
+        run_start = None
+        for i in range(len(text) - RULE_DUP_WINDOW + 1):
+            owners = window_owners.get(text[i : i + RULE_DUP_WINDOW], set())
+            hit = len(owners) > 1
+            if hit and run_start is None:
+                run_start = i
+            elif not hit and run_start is not None:
+                frag = text[run_start : i - 1 + RULE_DUP_WINDOW]
+                fragments.setdefault(frag, set()).update(
+                    window_owners.get(text[run_start : run_start + RULE_DUP_WINDOW], set())
+                )
+                run_start = None
+        if run_start is not None:
+            frag = text[run_start:]
+            fragments.setdefault(frag, set()).update(
+                window_owners.get(text[run_start : run_start + RULE_DUP_WINDOW], set())
+            )
+
+    # 同一处复述会在参与的每个文件各产出一条等长片段，按 owners 归并后只保留最长的一条
+    by_owners: dict[tuple[str, ...], str] = {}
+    for frag, owners in fragments.items():
+        key = tuple(sorted(owners))
+        if len(frag) > len(by_owners.get(key, "")):
+            by_owners[key] = frag
+
+    ranked = sorted(by_owners.items(), key=lambda kv: len(kv[1]), reverse=True)
+    for owners, frag in ranked[:RULE_DUP_MAX_REPORTS]:
+        preview = frag[:50] + ("…" if len(frag) > 50 else "")
+        issues.append(
+            f"[跨文件复述] {len(frag)} 字片段同时出现在 {', '.join(owners)}：「{preview}」。"
+            "请择一保留正文，其余改为「见 X.md §N」+ 一句用途说明。"
+        )
+    if len(ranked) > RULE_DUP_MAX_REPORTS:
+        issues.append(f"[跨文件复述] 另有 {len(ranked) - RULE_DUP_MAX_REPORTS} 处较短复述未列出。")
     return issues
 
 
@@ -596,6 +709,8 @@ def main() -> int:
         ("14. Skill 软链健康度检查", check_skill_symlink_health, False),
         ("15. 项目注册表存在性检查", check_registry_exists, False),
         ("16. 确定性路由映射表完整性检查", check_route_map_integrity, True),
+        ("17. 规则文件行数预算检查", check_rule_budget, False),
+        ("18. 跨规则文件语义复述检查", check_rule_semantic_dedup, False),
     ]
 
     all_issues = []
