@@ -119,7 +119,7 @@ def check_playwright(fix: bool, importable_fn: Callable[[str], bool] = _importab
     if importable_fn("playwright"):
         return {"id": "playwright", "status": "ok", "detail": "playwright 可导入", "fix": None, "degrade": None}
     if fix and installer:
-        ok, out = installer([sys.executable, "-m", "pip", "install", "playwright>=1.40.0"])
+        ok, out = installer([sys.executable, "-m", "pip", "install", "playwright>=1.40.0,<2.0"])
         if ok and importable_fn("playwright"):
             return {"id": "playwright", "status": "ok", "detail": "playwright 已安装", "fix": None, "degrade": None}
         detail = f"安装失败: {out.strip()[:200]}"
