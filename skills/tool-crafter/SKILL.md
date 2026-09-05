@@ -10,7 +10,7 @@ metadata:
 本 Skill 提供将工作区高频操作、复合 CLI 命令、机械规则计算或破坏性动作**标准化转化为系统级工具 (`.system/tools/<name>.py`)** 的端到端自动化流水线。
 
 核心方法论依据：
-- 规则真源：[`../../rules/工具技能.md`](../../rules/工具技能.md)
+- 规则真源：[`../../rules/工具设计.md`](../../rules/工具设计.md)（形态判定见 `知识沉淀.md`）
 - 系统演进准则：[`../../rules/01_根系统治理.md`](../../rules/01_根系统治理.md)
 - ApX 高级工具工程规范（语义化接口、行动导向错误契约、纯标准库、幂等原子暂存）
 
@@ -29,12 +29,12 @@ metadata:
 ## 2. 工具化 6 步标准流水线
 
 ```text
-Phase 1: 机制准入审查 (Funnel)   ➔ 核对《工具技能》五维判据（确定性/频次/安全/ROI/零绑定）
+Phase 1: 机制准入审查 (Funnel)   ➔ 核对《工具设计》五维判据（确定性/频次/安全/ROI/零绑定）
 Phase 2: 接口与契约设计 (Spec)  ➔ 确定动词_名词、参数类型清洗、结构化输出与行动导向报错
 Phase 3: 纯标准库代码编写 (Code) ➔ 基于 templates/tool.template.py 生成 .system/tools/<name>.py
 Phase 4: 自动化单测驱动 (TDD)    ➔ 编写 .system/tests/test_<name>.py（覆盖正常与边界拦截）
 Phase 5: 双重体检门禁 (Verify)  ➔ 跑通 unittest (100%) 与 lint_workspace.py (全绿)
-Phase 6: 路由装配与五维评估 (Done)➔ 挂载使用说明至 .data/tips.md，输出五维量化评估表
+Phase 6: 路由装配与五维评估 (Done)➔ 挂载使用说明至 .data/rules/tips.md，输出五维量化评估表
 ```
 
 ---
@@ -42,7 +42,7 @@ Phase 6: 路由装配与五维评估 (Done)➔ 挂载使用说明至 .data/tips.
 ## 3. 详细执行 SOP
 
 ### Phase 1 · 机制准入审查 (Funnel Check)
-在写任何代码前，先对照 [`.system/rules/工具技能.md`](../../rules/工具技能.md) 第 2 节逐项检查：
+在写任何代码前，先对照 [`.system/rules/工具设计.md`](../../rules/工具设计.md) 第 2 节逐项检查：
 1. **确定性**：逻辑是否具备确定性输入输出（非主观润色/文本发散）？
 2. **复用频次**：是否跨项目复用或为日常核心高频操作？
 3. **安全收敛**：能否将原本开放的任意 Shell 收敛为受控参数？
@@ -73,11 +73,11 @@ Phase 6: 路由装配与五维评估 (Done)➔ 挂载使用说明至 .data/tips.
 ### Phase 5 · 双重体检门禁 (Dual Gate)
 在终端执行双重验证：
 ```bash
-python3 -m unittest discover -s .system/tests
+python3 -m unittest discover -s .system/tests -t .system
 python3 .system/tools/lint_workspace.py
 ```
-必须确保单元测试 100% 通过且 15 项工作区体检全绿。
+必须确保单元测试与工作区体检全部通过。
 
 ### Phase 6 · 路由装配与五维架构评估 (Wire & Deliver)
-1. 在 `.data/tips.md` 追加该工具的操作提示（`- TIP：...`）；
+1. 在 `.data/rules/tips.md` 追加该工具的操作提示（`- TIP：...`）；
 2. 依据 [`.system/rules/五维评估.md`](../../rules/五维评估.md) 输出标准 4 列五维评估表交付成果。

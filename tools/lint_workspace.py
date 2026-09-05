@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -23,6 +24,15 @@ RESIDENT_MAX_LINES = 50
 PROJECT_AGENTS_MAX_LINES = 60
 MAX_CURRENT_STATE_LINES = 120
 
+# 按需层预算：单个规则文件行数建议线。不设 rules/ 目录总量上限——规则数量随业务自然增长，
+# 总量封顶会逼迫把不相关内容塞进同一文件，反而破坏正交收敛。
+RULE_MAX_LINES = 120
+# 跨规则文件语义重复检测：归一化后连续重复字符数达该窗口即判定为复述（应改为引用）。
+# 25 字约合一个完整分句：实测该阈值召回全部真实复述且零误报；再收紧会把中英双写等
+# 非复述形态一并命中（那属于《表达文风》L1 的处理范围，不应在此告警）。
+RULE_DUP_WINDOW = 25
+RULE_DUP_MAX_REPORTS = 8
+
 EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "repo/dify", "graphify-out")
 
 # 控制面零系统绑定/零真实实体禁词（小写匹配；lint 自身因定义检测常量而豁免）
@@ -31,16 +41,17 @@ FORBIDDEN_BINDINGS = ("internal-org", "board-platform", "dev-platform", "研发�
 FORBIDDEN_HOST_PATTERN = re.compile(r"127\.0\.0\.1|localhost")
 
 # .system 健康度：控制面可发现、可渲染、可执行的最小契约。
-SYSTEM_REQUIRED_DIRECTORIES = ("root-configs", "rules", "templates", "tools", "skills", "tests")
+SYSTEM_REQUIRED_DIRECTORIES = ("entrypoints", "rules", "config", "schemas", "templates", "tools", "skills", "tests")
 SYSTEM_REQUIRED_FILES = (
     "AGENTS.md",
     "README.md",
-    "root-configs/AGENTS.md",
-    "root-configs/CLAUDE.md",
+    "entrypoints/AGENTS.md",
+    "entrypoints/CLAUDE.md",
     "tools/bootstrap.py",
     "tools/init_project.py",
     "tools/init_app.py",
     "tools/lint_workspace.py",
+    "tools/open_file.py",
 )
 SYSTEM_TEMPLATE_VARIABLES = {
     "项目名",
@@ -135,6 +146,220 @@ def check_rule_deduplication(root: Path) -> list[str]:
     return issues
 
 
+def check_rule_budget(root: Path) -> list[str]:
+    """检查单个规则文件行数是否超出按需层预算。
+
+    常驻层（AGENTS.md）已有 check_resident_budget 把关，但被按需读取的 rules/ 本身
+    此前不受任何预算约束——这正是规则体量失控的结构性缺口。本检查补上该门禁。
+    """
+    issues = []
+    rules_dir = root / ".system" / "rules"
+    if not rules_dir.exists():
+        return issues
+    for rf in sorted(rules_dir.glob("*.md")):
+        try:
+            cnt = len(rf.read_text(encoding="utf-8").splitlines())
+        except Exception:
+            continue
+        if cnt > RULE_MAX_LINES:
+            issues.append(
+                f"[规则超预算] rules/{rf.name} 共 {cnt} 行，超建议线 {RULE_MAX_LINES} 行（超 {cnt - RULE_MAX_LINES} 行）。"
+                "按《表达文风》「规则瘦身」处理：判据留规则、操作步骤下沉 Skill、复述改引用。"
+            )
+    return issues
+
+
+def _normalize_rule_text(content: str) -> str:
+    """归一化规则正文，供跨文件复述检测使用。
+
+    剔除代码块与行内代码：命令原文允许跨文件重复（漂移代价高于 Token 收益）；
+    剔除强调标记、标题井号与空白：不承载判据，否则同义片段会因排版差异漏检。
+    """
+    content = re.sub(r"```.*?```", "", content, flags=re.DOTALL)
+    content = re.sub(r"`[^`]*`", "", content)
+    content = re.sub(r"\]\([^)]*\)", "]", content)  # 链接目标是指针不是复述，剔除后只留链接文字
+    kept = []
+    for line in content.splitlines():
+        s = line.strip()
+        if not s or set(s) <= set("|-: "):  # 空行与表格分隔行
+            continue
+        kept.append(s)
+    return re.sub(r"[\s*_>#]", "", "".join(kept))
+
+
+def check_rule_semantic_dedup(root: Path) -> list[str]:
+    """检测跨规则文件的连续重复片段（复述），补足字面标题去重的盲区。
+
+    check_rule_deduplication 只比对 `##` 标题字符串是否相同，语义复述完全不可见。
+    本检查以滑动窗口找出在 2 个以上文件中同时出现的连续片段，命中即应改为「见 X.md §N」引用。
+    """
+    issues = []
+    rules_dir = root / ".system" / "rules"
+    if not rules_dir.exists():
+        return issues
+
+    norm: dict[str, str] = {}
+    for rf in sorted(rules_dir.glob("*.md")):
+        try:
+            norm[rf.name] = _normalize_rule_text(rf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+    window_owners: dict[str, set[str]] = {}
+    for name, text in norm.items():
+        for i in range(len(text) - RULE_DUP_WINDOW + 1):
+            window_owners.setdefault(text[i : i + RULE_DUP_WINDOW], set()).add(name)
+
+    # 把同一文件内相邻的命中窗口合并为极大片段，避免同一处重复被拆成数十条告警
+    fragments: dict[str, set[str]] = {}
+    for name, text in norm.items():
+        run_start = None
+        for i in range(len(text) - RULE_DUP_WINDOW + 1):
+            owners = window_owners.get(text[i : i + RULE_DUP_WINDOW], set())
+            hit = len(owners) > 1
+            if hit and run_start is None:
+                run_start = i
+            elif not hit and run_start is not None:
+                frag = text[run_start : i - 1 + RULE_DUP_WINDOW]
+                fragments.setdefault(frag, set()).update(
+                    window_owners.get(text[run_start : run_start + RULE_DUP_WINDOW], set())
+                )
+                run_start = None
+        if run_start is not None:
+            frag = text[run_start:]
+            fragments.setdefault(frag, set()).update(
+                window_owners.get(text[run_start : run_start + RULE_DUP_WINDOW], set())
+            )
+
+    # 同一处复述会在参与的每个文件各产出一条等长片段，按 owners 归并后只保留最长的一条
+    by_owners: dict[tuple[str, ...], str] = {}
+    for frag, owners in fragments.items():
+        key = tuple(sorted(owners))
+        if len(frag) > len(by_owners.get(key, "")):
+            by_owners[key] = frag
+
+    ranked = sorted(by_owners.items(), key=lambda kv: len(kv[1]), reverse=True)
+    for owners, frag in ranked[:RULE_DUP_MAX_REPORTS]:
+        preview = frag[:50] + ("…" if len(frag) > 50 else "")
+        issues.append(
+            f"[跨文件复述] {len(frag)} 字片段同时出现在 {', '.join(owners)}：「{preview}」。"
+            "请择一保留正文，其余改为「见 X.md §N」+ 一句用途说明。"
+        )
+    if len(ranked) > RULE_DUP_MAX_REPORTS:
+        issues.append(f"[跨文件复述] 另有 {len(ranked) - RULE_DUP_MAX_REPORTS} 处较短复述未列出。")
+    return issues
+
+
+def check_schema_conformance(root: Path) -> list[str]:
+    """按 .system/schemas/ 校验结构化契约。
+
+    此前 route_map 的字段集、Front Matter 的取值域、审计报告的问题标注格式，
+    契约都只存在于各自解析器的正则里——改规则的人无从得知自己在破坏一个解析器。
+    """
+    tools = root / ".system" / "tools"
+    if not (tools / "validate_schema.py").exists():
+        return []
+    sys.path.insert(0, str(tools))
+    try:
+        import validate_schema as vs
+    except Exception as exc:  # noqa: BLE001 - 工具不可用不应阻断整体体检
+        return [f"[schema 校验不可用] {exc}"]
+    finally:
+        if str(tools) in sys.path:
+            sys.path.remove(str(tools))
+    return [f"[违反 schema] {e}" for e in (vs.check_route_map() + vs.check_audit_report_schema_selftest())]
+
+
+def check_data_source_mapping(root: Path) -> list[str]:
+    """双向核验 .data/ 路径与 .system/ 定义方的对应关系。
+
+    `.data/` 按定义方分三个桶，路径本身即指向来源：
+      .data/templates/X  ⟺ .system/templates/data/X.template.*
+      .data/skills/<N>/* ⟺ .system/skills/<N>/
+      .data/rules/*      ⟺ 由某条规则声明（具体哪条见文件头 source 字段）
+    双向检查能同时抓出孤儿实例文件与失配模板，防结构随时间漂移。
+    """
+    issues = []
+    data_dir, sys_dir = root / ".data", root / ".system"
+    if not data_dir.is_dir():
+        return issues
+
+    tpl_dir = data_dir / "templates"
+    if tpl_dir.is_dir():
+        for p in sorted(tpl_dir.glob("*")):
+            if not p.is_file() or p.suffix not in (".md", ".json"):
+                continue
+            expect = sys_dir / "templates" / "data" / f"{p.stem}.template{p.suffix}"
+            if not expect.exists():
+                issues.append(
+                    f"[实例孤儿] .data/templates/{p.name} 找不到对应模板 {expect.relative_to(root)}；"
+                    "它不是模板渲染产物，应移入 .data/rules/ 或 .data/skills/<名>/。"
+                )
+
+    # 反向：模板存在却无实例。拆分 templates/data 与 templates/project 后
+    # 该目录内每个模板都必然对应一个 .data/templates/ 实例，可严格双向核验。
+    sys_tpl = sys_dir / "templates" / "data"
+    if sys_tpl.is_dir() and tpl_dir.is_dir():
+        for t in sorted(sys_tpl.glob("*.template.*")):
+            stem, suffix = t.name.split(".template", 1)
+            if not (tpl_dir / f"{stem}{suffix}").exists():
+                issues.append(
+                    f"[实例未渲染] .system/templates/data/{t.name} 没有对应实例 "
+                    f".data/templates/{stem}{suffix}；运行 `python3 .system/tools/bootstrap.py` 渲染。"
+                )
+
+    skl_dir = data_dir / "skills"
+    if skl_dir.is_dir():
+        for d in sorted(skl_dir.iterdir()):
+            if d.is_dir() and not (sys_dir / "skills" / d.name).is_dir():
+                issues.append(
+                    f"[实例孤儿] .data/skills/{d.name}/ 找不到对应 Skill "
+                    f".system/skills/{d.name}/；Skill 已删除时其实例配置应一并清理。"
+                )
+
+    for p in sorted(data_dir.glob("*")):
+        if p.is_file() and p.suffix in (".md", ".json"):
+            issues.append(
+                f"[未归桶] .data/{p.name} 位于顶层。按来源归入 templates/（模板渲染）、"
+                "rules/（规则声明）或 skills/<名>/（Skill 私有）。"
+            )
+    return issues
+
+
+def check_data_provenance(root: Path) -> list[str]:
+    """检查 .data/ 顶层实例文件是否声明来源与写入策略。
+
+    `.data/` 是人工真源与实例配置所在地，缺少来源标记时人眼无法判断某文件从哪来、
+    谁在维护、能否重写——这正是人工仲裁配置被 Agent 整体覆盖的前置条件。
+    只查顶层 .md/.json；`credentials/` 及子目录含凭据，不读不列举。
+    """
+    issues = []
+    data_dir = root / ".data"
+    if not data_dir.is_dir():
+        return issues
+    # 只扫三个来源桶；credentials/ 与 docs/ 不读不列举（前者含凭据，后者是研究产物）
+    for p in sorted(q for b in ("templates", "rules", "skills") for q in (data_dir / b).rglob("*")):
+        if not p.is_file() or p.suffix not in (".md", ".json"):
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if p.suffix == ".json":
+            try:
+                ok = isinstance(json.loads(text).get("_meta"), dict)
+            except (json.JSONDecodeError, AttributeError):
+                ok = False
+        else:
+            ok = text.startswith("---\n") and "\npolicy:" in text.split("\n---", 2)[0]
+        if not ok:
+            issues.append(
+                f"[实例文件缺来源标记] .data/{p.relative_to(data_dir)} 未声明 source/managed_by/policy。"
+                "运行 `python3 .system/tools/stamp_data_provenance.py` 补盖。"
+            )
+    return issues
+
+
 def _is_nested_git_repo_path(path: Path, root: Path) -> bool:
     """path 是否位于工作区根之外、自带独立 .git 的上游/第三方目录内（含 .system/ 自身）。
     与 registry.md「自带 .git 且非工作区成员的上游仓库不纳入注册表」的排除口径一致，
@@ -225,7 +450,7 @@ def _tracked_files(system: Path) -> set[Path] | None:
 
 
 def check_rules_zero_system_binding(root: Path) -> list[str]:
-    """控制面（rules/、root-configs/、templates/、tools/、tests/、skills/*/SKILL.md）
+    """控制面（rules/、entrypoints/、templates/、tools/、tests/、skills/*/SKILL.md）
     不得出现具体业务系统绑定或真实实体；tools/skills/tests 可执行内容额外禁止硬编码本地端点。
     仅检查版本库跟踪文件（非 git 环境退化全扫），业务私有 Skill 依 .gitignore 豁免。"""
     issues = []
@@ -242,8 +467,8 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
 
     binding_targets: list[Path] = []
     binding_targets += _glob(system / "rules", "*.md")
-    binding_targets += _glob(system / "root-configs", "*.md")
-    binding_targets += _glob(system / "templates", "*")
+    binding_targets += _glob(system / "entrypoints", "*.md")
+    binding_targets += _glob(system / "templates", "**/*")
     operational_targets: list[Path] = [
         p for p in _glob(system / "tools", "*.py") if p.name != "lint_workspace.py"
     ]
@@ -311,11 +536,11 @@ def check_skill_symlink_health(root: Path) -> list[str]:
 
 
 def check_registry_exists(root: Path) -> list[str]:
-    """检查 .data/registry.md 是否存在（lint 白名单完备性依赖它）。"""
-    registry = root / ".data" / "registry.md"
+    """检查 .data/templates/registry.md 是否存在（lint 白名单完备性依赖它）。"""
+    registry = root / ".data" / "templates" / "registry.md"
     if not registry.exists():
         return [
-            "[注册表缺失] .data/registry.md 不存在，无法校验项目白名单；请先执行 init-project 或手动创建。"
+            "[注册表缺失] .data/templates/registry.md 不存在，无法校验项目白名单；请先执行 init-project 或手动创建。"
         ]
     return []
 
@@ -372,17 +597,17 @@ def check_system_layout(root: Path) -> list[str]:
 
 
 def check_system_entry_sync(root: Path) -> list[str]:
-    """检查根入口是否与 .system/root-configs 的唯一真源一致。"""
+    """检查根入口是否与 .system/entrypoints 的唯一真源一致。"""
     system = root / ".system"
     issues = []
     for filename in ("AGENTS.md", "CLAUDE.md"):
-        source = system / "root-configs" / filename
+        source = system / "entrypoints" / filename
         target = root / filename
         if not source.is_file() or not target.is_file():
             continue
         if target.read_text(encoding="utf-8") != source.read_text(encoding="utf-8"):
             issues.append(
-                f"[根入口漂移] {filename} 与 .system/root-configs/{filename} 内容不一致；运行 bootstrap.py 恢复。"
+                f"[根入口漂移] {filename} 与 .system/entrypoints/{filename} 内容不一致；运行 bootstrap.py 恢复。"
             )
     return issues
 
@@ -403,7 +628,7 @@ def check_system_markdown_links(root: Path) -> list[str]:
             if not target or target.startswith(("#", "/", "~", "http:", "https:", "mailto:")):
                 continue
             path = target.split("#", 1)[0]
-            base = root if document.parent == system / "root-configs" else document.parent
+            base = root if document.parent == system / "entrypoints" else document.parent
             if path and not (base / path).exists():
                 issues.append(
                     f"[路由断链] {document.relative_to(root)} → {target} 不存在。"
@@ -412,8 +637,12 @@ def check_system_markdown_links(root: Path) -> list[str]:
 
 
 def check_system_templates(root: Path) -> list[str]:
-    """检查模板完备性与变量契约，保证两个脚手架可独立渲染。"""
-    templates = root / ".system" / "templates"
+    """检查模板完备性与变量契约，保证两个脚手架可独立渲染。
+
+    templates/ 按消费方分两个子目录：data/ 渲染到 .data/（bootstrap），
+    project/ 是项目脚手架（init_project / init_app）。本检查只管后者。
+    """
+    templates = root / ".system" / "templates" / "project"
     issues = []
     required = (
         "AGENTS.template.md",
@@ -430,7 +659,7 @@ def check_system_templates(root: Path) -> list[str]:
     for filename in required:
         template = templates / filename
         if not template.is_file():
-            issues.append(f"[模板缺失] .system/templates/{filename} 不存在。")
+            issues.append(f"[模板缺失] .system/templates/project/{filename} 不存在。")
             continue
         text = template.read_text(encoding="utf-8")
         variables = set(re.findall(r"{{([^{}]+)}}", text))
@@ -497,8 +726,8 @@ def check_routing_integrity(root: Path) -> list[str]:
             if not (root / clean_ref).exists():
                 issues.append(f"[根路由断链] 根 AGENTS.md 引用的规则文件 {ref} 不存在。")
 
-    # 2. 检查 .data/registry.md 中的每个项目主目录物理存在
-    registry = root / ".data" / "registry.md"
+    # 2. 检查 .data/templates/registry.md 中的每个项目主目录物理存在
+    registry = root / ".data" / "templates" / "registry.md"
     if registry.exists():
         for line in registry.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -514,7 +743,7 @@ def check_routing_integrity(root: Path) -> list[str]:
                         continue
                     proj_dir = root / d.rstrip("/")
                     if not proj_dir.is_dir():
-                        issues.append(f"[注册表断链] .data/registry.md 注册的项目目录 {d} 物理不存在。")
+                        issues.append(f"[注册表断链] .data/templates/registry.md 注册的项目目录 {d} 物理不存在。")
 
     # 3. 检查主题胶囊目录命名与结构（YYYYMMDD_主题）
     capsule_pattern = re.compile(r"^\d{8}_.+$")
@@ -549,7 +778,7 @@ def check_route_map_integrity(root: Path) -> list[str]:
     import json as _json
 
     issues = []
-    route_map = root / ".system" / "rules" / "route_map.json"
+    route_map = root / ".system" / "config" / "route_map.json"
     if not route_map.is_file():
         return issues
     try:
@@ -596,6 +825,11 @@ def main() -> int:
         ("14. Skill 软链健康度检查", check_skill_symlink_health, False),
         ("15. 项目注册表存在性检查", check_registry_exists, False),
         ("16. 确定性路由映射表完整性检查", check_route_map_integrity, True),
+        ("17. 规则文件行数预算检查", check_rule_budget, False),
+        ("18. 跨规则文件语义复述检查", check_rule_semantic_dedup, False),
+        ("19. .data/ 实例文件来源标记检查", check_data_provenance, False),
+        ("20. .data/ 路径与来源映射检查", check_data_source_mapping, False),
+        ("21. 结构化契约 schema 校验", check_schema_conformance, True),
     ]
 
     all_issues = []

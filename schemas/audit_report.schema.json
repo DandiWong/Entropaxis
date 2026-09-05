@@ -1,0 +1,80 @@
+{
+  "$comment": "审计报告的机器可读契约。此前该契约只存在于 check_audit_gate.py 的正则里——改规则的人无从得知自己在破坏一个解析器。真源定义见 rules/治理指令.md「审计」节第 5 条。",
+  "title": "audit_report",
+  "target": "05_审计报告.md / Audit_<ID>_主题方案审计.md",
+  "type": "object",
+  "required": ["front_matter", "issue_format"],
+  "additionalProperties": false,
+  "properties": {
+    "front_matter": {
+      "type": "object",
+      "required": ["type", "topic", "date", "author", "status", "independence"],
+      "additionalProperties": true,
+      "properties": {
+        "type": { "type": "string", "enum": ["Audit"] },
+        "topic": { "type": "string", "minLength": 1 },
+        "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "author": { "type": "string", "enum": ["Reviewer"] },
+        "status": { "type": "string", "enum": ["active", "completed"] },
+        "independence": {
+          "$comment": "必填且不得留空。缺失时 check_audit_gate.py 视为违规阻断（fail-closed）——此前缺失即放行，忘写字段就能绕过 Critical 关闭限制。",
+          "type": "string",
+          "pattern": "^(external:\\s*\\S.*|session-internal-downgraded \\(external: .+ (missing|failed)\\))$"
+        }
+      }
+    },
+    "issue_format": {
+      "$comment": "正文每条问题的行内标注格式，供 check_audit_gate.py 机械识别。中英文冒号均可。",
+      "type": "object",
+      "required": ["level_field", "status_field"],
+      "additionalProperties": false,
+      "properties": {
+        "level_field": {
+          "type": "object",
+          "required": ["pattern", "enum"],
+          "additionalProperties": false,
+          "properties": {
+            "pattern": { "type": "string", "enum": ["级别[:：]\\s*(Critical|Major|Minor)"] },
+            "enum": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["Critical", "Major", "Minor"] }
+            }
+          }
+        },
+        "status_field": {
+          "type": "object",
+          "required": ["pattern", "enum"],
+          "additionalProperties": false,
+          "properties": {
+            "pattern": { "type": "string", "enum": ["状态[:：]\\s*(待处理|已关闭)"] },
+            "enum": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["待处理", "已关闭"] }
+            }
+          }
+        }
+      }
+    }
+  },
+  "instance": {
+    "$comment": "本 schema 描述的规范实例，同时作为 validate_schema.py 的自检样例。",
+    "front_matter": {
+      "type": "Audit",
+      "topic": "某系统设计方案",
+      "date": "2026-09-05",
+      "author": "Reviewer",
+      "status": "active",
+      "independence": "external: some-reviewer-cli"
+    },
+    "issue_format": {
+      "level_field": {
+        "pattern": "级别[:：]\\s*(Critical|Major|Minor)",
+        "enum": ["Critical", "Major", "Minor"]
+      },
+      "status_field": {
+        "pattern": "状态[:：]\\s*(待处理|已关闭)",
+        "enum": ["待处理", "已关闭"]
+      }
+    }
+  }
+}

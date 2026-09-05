@@ -22,7 +22,7 @@ metadata:
 
 信息不足时允许填写“待补充”，但项目名称必须明确。
 
-初始化前先确认目标目录不存在；如需关联看板，使用工作区声明的主看板 Provider CLI（`.data/board_config.json` 的 `main` 角色；不手写 HTTP 请求，不走本地端口，子命令以其 `--help` 为准）：
+初始化前先确认目标目录不存在；如需关联看板，使用工作区声明的主看板 Provider CLI（`.data/templates/board_config.json` 的 `main` 角色；不手写 HTTP 请求，不走本地端口，子命令以其 `--help` 为准）：
 
 - 关联现有项目：`project get <id>` 确认项目存在，把项目 ID 写入本项目 `docs/.board.json`（结构见《看板联动.md》）。
 - 创建新项目：`project add --name "<项目名>"`，取响应中的项目 ID 写入 `docs/.board.json`。

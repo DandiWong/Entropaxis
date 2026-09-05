@@ -74,8 +74,15 @@ class CheckAuditGateTests(unittest.TestCase):
     def test_check_report_passes_for_external_reviewer(self) -> None:
         self.assertEqual(check_report(EXTERNAL_REVIEWER_WITH_CLOSED_CRITICAL), [])
 
-    def test_check_report_passes_without_independence_declared(self) -> None:
-        self.assertEqual(check_report(NO_FRONT_MATTER), [])
+    def test_check_report_blocks_when_independence_undeclared(self) -> None:
+        """fail-closed：缺 independence 不再放行。
+
+        原断言把 fail-open 写成了契约——缺字段即通过，等于「忘写声明」比「如实上报
+        会话内降级」更容易过关，奖励漏报。改为缺字段即阻断。
+        """
+        issues = check_report(NO_FRONT_MATTER)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("未声明 independence", issues[0])
 
 
 if __name__ == "__main__":

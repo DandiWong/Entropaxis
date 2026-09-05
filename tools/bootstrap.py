@@ -2,7 +2,7 @@
 """
 工作区根入口与系统配置初始化工具 (Bootstrap)
 用于一键同步工作区根目录的 AGENTS.md / CLAUDE.md 入口文件，自动检测宿主机安装的应用程序，
-生成/维护各类文件格式的默认打开器关联配置 (.data/file-opener.json)，并自适应引导环境。
+生成/维护各类文件格式的默认打开器关联配置 (.data/templates/file-opener.json)，并自适应引导环境。
 """
 import os
 import sys
@@ -34,7 +34,7 @@ def render_instance_configs(
             templates_dir = system_dir / "templates"
         if data_dir is None:
             data_dir = ws_root / ".data"
-    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "templates").mkdir(parents=True, exist_ok=True)
 
     if ws_name is None:
         ws_name = data_dir.parent.name or "workspace"
@@ -43,15 +43,18 @@ def render_instance_configs(
     rendered = 0
 
 
-    # 仅渲染真正属于 .data/ 的实例模板；templates/ 目录下还有项目级脚手架模板（README/AGENTS 等），由 init_project / init_app 走，不在此处处理
-    DATA_INSTANCE_TEMPLATES = {"board_config.template.json", "workspace-config.template.md"}
+    # templates/data/ 即实例模板白名单——目录按消费方划分，无需硬编码名单
+    # （项目脚手架在 templates/project/，由 init_project / init_app 消费）
+    data_templates = templates_dir / "data"
+    if not data_templates.is_dir():
+        if verbose:
+            print(f"ℹ️ 未找到实例模板目录 {data_templates}，跳过渲染")
+        return True
 
-
-    for tpl in sorted(templates_dir.glob("*.template.json")):
-        if tpl.name not in DATA_INSTANCE_TEMPLATES:
-            continue
+    for tpl in sorted(data_templates.glob("*.template.json")):
         target_name = tpl.name.replace(".template.json", ".json")
-        target = data_dir / target_name
+        # 模板渲染产物一律落 .data/templates/，与源模板同名，路径即来源指针
+        target = data_dir / "templates" / target_name
         if target.exists():
             continue
         try:
@@ -62,18 +65,14 @@ def render_instance_configs(
             )
             rendered += 1
             if verbose:
-                print(f"✅ 已从模板渲染 .data/{target_name}（首次，空 providers）")
+                print(f"✅ 已从模板渲染 .data/templates/{target_name}（首次，空 providers）")
         except Exception as exc:
             if verbose:
                 print(f"❌ 渲染 {target_name} 失败: {exc}", file=sys.stderr)
             success = False
-    for tpl in sorted(templates_dir.glob("*.template.md")):
-        if tpl.name not in DATA_INSTANCE_TEMPLATES:
-            continue
-
-
+    for tpl in sorted(data_templates.glob("*.template.md")):
         target_name = tpl.name.replace(".template.md", ".md")
-        target = data_dir / target_name
+        target = data_dir / "templates" / target_name
         if target.exists():
             continue
         try:
@@ -91,14 +90,14 @@ def render_instance_configs(
             rendered_content = rendered_content.replace("{{ORG_SHARED_PURPOSE_3}}", "待填：用途")
             # 原子写入
             with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", delete=False, dir=str(data_dir), prefix=f".{target_name}.tmp."
+                mode="w", encoding="utf-8", delete=False, dir=str(data_dir / "templates"), prefix=f".{target_name}.tmp."
             ) as tmp:
                 tmp.write(rendered_content)
                 tmp_path = Path(tmp.name)
             tmp_path.replace(target)
             rendered += 1
             if verbose:
-                print(f"✅ 已从模板渲染 .data/{target_name}（首次，占位符已替换为目录名兜底）")
+                print(f"✅ 已从模板渲染 .data/templates/{target_name}（首次，占位符已替换为目录名兜底）")
         except Exception as exc:
             if verbose:
                 print(f"❌ 渲染 {target_name} 失败: {exc}", file=sys.stderr)
@@ -109,25 +108,25 @@ def render_instance_configs(
     return success
 
 
-def sync_root_configs(verbose: bool = True) -> bool:
+def sync_entrypoints(verbose: bool = True) -> bool:
     """
-    将 .system/root-configs 下的入口配置物理同步至工作区根目录。
+    将 .system/entrypoints 下的根入口真源物理同步至工作区根目录。
     为避免 Synology Drive / 云同步网盘在跨平台同步时对软链接产生 Conflict 冲突，
     采用幂等文件复制（shutil.copy2）作为标准同步策略。
     """
     tools_dir = Path(__file__).resolve().parent
     system_dir = tools_dir.parent
     ws_root = system_dir.parent
-    root_configs = system_dir / "root-configs"
+    entrypoints = system_dir / "entrypoints"
 
-    if not root_configs.exists():
+    if not entrypoints.exists():
         if verbose:
-            print(f"❌ 错误: 未找到配置源目录 {root_configs}", file=sys.stderr)
+            print(f"❌ 错误: 未找到根入口源目录 {entrypoints}", file=sys.stderr)
         return False
 
     success = True
     for filename in ["AGENTS.md", "CLAUDE.md"]:
-        src = root_configs / filename
+        src = entrypoints / filename
         dst = ws_root / filename
 
         if not src.exists():
@@ -139,17 +138,13 @@ def sync_root_configs(verbose: bool = True) -> bool:
                 dst.unlink()
             shutil.copy2(src, dst)
             if verbose:
-                print(f"✅ 入口文件同步就绪: {filename} <- .system/root-configs/{filename}")
+                print(f"✅ 入口文件同步就绪: {filename} <- .system/entrypoints/{filename}")
         except Exception as e:
             if verbose:
                 print(f"❌ 入口同步失败 ({filename}): {e}", file=sys.stderr)
             success = False
 
     return success
-
-
-# 兼容旧接口命名
-setup_symlinks = sync_root_configs
 
 def check_dashboard_token() -> bool:
     """检查看板凭证是否就绪"""
@@ -248,13 +243,29 @@ def _build_opener_defaults(tpl_data: dict, detected_apps: set[str], cmd_key: str
             "command": selected_cmd,
             "available_candidates": [c["name"] for c in matched_candidates if c["is_installed"]],
         }
-        if verbose:
-            cands_str = f" (可选候选: {', '.join(config['associations'][fmt_id]['available_candidates'])})" if config['associations'][fmt_id]['available_candidates'] else ""
-            print(f"  • {fmt_info['name']} ({', '.join(fmt_info['extensions'])}): 匹配打开程序 -> [{selected_app_name}]{cands_str}")
     return config
 
+
+def _report_opener(config: dict) -> None:
+    """打印**实际生效**的打开器映射，并标注每项来源。
+
+    此前打印的是本机检测结果而非配置生效值——用户手工注册的程序（模板候选之外，
+    如自建 CLI）不会出现在检测结果里，于是每次运行都像被重置了一样，
+    进而诱导 Agent 去"修正"配置，把人工仲裁值真的覆盖掉。
+    """
+    print("📖 当前生效的文件打开器映射（.data/templates/file-opener.json）：")
+    for info in config.get("associations", {}).values():
+        mark = "🔒人工仲裁" if info.get("arbitrated") else "自动匹配"
+        exts = ", ".join(info.get("extensions", []))
+        print(f"  • {info.get('name', '?')} ({exts}): [{info.get('selected_app', '?')}] {mark}")
+
 def _merge_opener(existing: dict, defaults: dict) -> dict:
-    """合并保留策略：人工仲裁的 selected_app/command 原样保留，仅回填缺失格式与缺失字段。"""
+    """合并保留策略：人工仲裁的 selected_app/command 原样保留，仅回填缺失格式与缺失字段。
+
+    存量配置的 command 与本机检测默认值不一致，说明有人**刻意**改过（手工注册了模板候选
+    之外的程序），据此打上 `arbitrated` 标记。该标记既让人一眼看出哪些是人工决定，
+    也让后续任何 Agent 在写这个文件前看到"此项不得覆盖"。
+    """
     merged = json.loads(json.dumps(existing, ensure_ascii=False))
     assoc = merged.setdefault("associations", {})
     if not isinstance(assoc, dict):
@@ -269,6 +280,8 @@ def _merge_opener(existing: dict, defaults: dict) -> dict:
                 cur[key] = dflt.get(key)
         if not isinstance(cur.get("available_candidates"), list):
             cur["available_candidates"] = dflt.get("available_candidates", [])
+        if cur.get("arbitrated") is None and cur.get("command") != dflt.get("command"):
+            cur["arbitrated"] = True
     merged.setdefault("version", defaults.get("version", "1.0.0"))
     merged.setdefault("platform", defaults.get("platform", sys.platform))
     return merged
@@ -279,14 +292,14 @@ def _write_opener_config(target_file: Path, config: dict, verbose: bool) -> None
         with open(target_file, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
         if verbose:
-            print("✅ 已成功生成本机打开器配置: .data/file-opener.json")
+            print("✅ 已成功生成本机打开器配置: .data/templates/file-opener.json")
     except Exception as e:
         if verbose:
-            print(f"❌ 写入 .data/file-opener.json 失败: {e}", file=sys.stderr)
+            print(f"❌ 写入 .data/templates/file-opener.json 失败: {e}", file=sys.stderr)
 
 def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system_dir: Path | None = None) -> dict:
     """
-    初始化或自愈本机文件打开器关联配置 (.data/file-opener.json)。
+    初始化或自愈本机文件打开器关联配置 (.data/templates/file-opener.json)。
 
     合并保留策略（默认）：目标配置存在且合法时，仅回填缺失的格式与字段，
     人工仲裁的 selected_app/command 持久保留，内容无变化时不重写文件；
@@ -296,8 +309,8 @@ def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system
     tools_dir = Path(__file__).resolve().parent
     system_dir = Path(system_dir) if system_dir is not None else tools_dir.parent
     data_dir = system_dir.parent / ".data"
-    template_file = system_dir / "templates" / "file-opener.template.json"
-    target_file = data_dir / "file-opener.json"
+    template_file = system_dir / "templates" / "data" / "file-opener.template.json"
+    target_file = data_dir / "templates" / "file-opener.json"
 
     if not template_file.exists():
         if verbose:
@@ -320,62 +333,23 @@ def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system
         except Exception:
             existing = None
         if isinstance(existing, dict) and isinstance(existing.get("associations"), dict):
-            defaults = _build_opener_defaults(tpl_data, detect_host_apps(), cmd_key, verbose)
+            # 检测过程不打印：那是候选发现结果，不是生效配置，混淆二者会诱发误"修复"
+            defaults = _build_opener_defaults(tpl_data, detect_host_apps(), cmd_key, verbose=False)
             merged = _merge_opener(existing, defaults)
             if merged != existing:
                 _write_opener_config(target_file, merged, verbose)
-                if verbose:
-                    print("✅ 文件打开器配置已合并补全（人工仲裁项已保留）")
-            elif verbose:
-                print("✅ 本机文件打开器配置已就绪 (.data/file-opener.json)")
+            if verbose:
+                _report_opener(merged)
             return merged
         if verbose:
-            print("⚠️ 既有打开器配置损坏，自动重建自愈...")
+            print("⚠️ 既有打开器配置损坏（无法解析或结构非法），自动重建自愈...")
 
     config = _build_opener_defaults(tpl_data, detect_host_apps(), cmd_key, verbose)
     _write_opener_config(target_file, config, verbose)
+    if verbose:
+        _report_opener(config)
     return config
 
-def get_open_command(file_path: str, root: Path | None = None) -> str:
-    """
-    根据文件路径或格式获取本机打开命令。
-    优先读取 .data/file-opener.json 中的配置；缺失时优雅降级为系统默认命令。
-    """
-    path_obj = Path(file_path)
-    if path_obj.is_dir() or not path_obj.suffix:
-        if sys.platform == "darwin":
-            return f'open "{file_path}"'
-        elif sys.platform == "win32":
-            return f'explorer "{file_path}"'
-        else:
-            return f'xdg-open "{file_path}"'
-
-    ext = path_obj.suffix.lower()
-
-    if root is None:
-        tools_dir = Path(__file__).resolve().parent
-        root = tools_dir.parent.parent
-
-    config_file = root / ".data" / "file-opener.json"
-    if config_file.is_file():
-        try:
-            with open(config_file, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            for _, assoc in cfg.get("associations", {}).items():
-                if ext in assoc.get("extensions", []):
-                    cmd = assoc.get("command", "")
-                    if cmd:
-                        return f'{cmd} "{file_path}"'
-        except Exception:
-            pass
-
-    # 默认兜底
-    if sys.platform == "darwin":
-        return f'open "{file_path}"'
-    elif sys.platform == "win32":
-        return f'start "" "{file_path}"'
-    else:
-        return f'xdg-open "{file_path}"'
 
 def print_windows_hints() -> None:
     print("""
@@ -397,7 +371,7 @@ if __name__ == "__main__":
 
 
 
-    if setup_symlinks(verbose=True):
+    if sync_entrypoints(verbose=True):
         token_ready = check_dashboard_token()
         if token_ready:
             print("✅ 看板 API Token 已就绪。")

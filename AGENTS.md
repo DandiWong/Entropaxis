@@ -8,18 +8,20 @@
 ## 职责划分
 
 - `rules/`：跨项目通用规则真源（零具体系统绑定，纯架构与行为约束）。
+- `config/`：由规则正文派生、供工具消费的机器可读控制面数据。
+- `schemas/`：机器配置与文档元数据的结构化契约。
 - `templates/`：脚手架模板（项目/应用/契约模板，变量严格闭合）。
 - `tools/`：工作区治理、自愈、脚手架与体检脚本。
 - `skills/`：自包含 Agent 能力真源（含 `SKILL.md` 与触发元数据）。
-- `root-configs/`：根入口唯一物理源（`AGENTS.md`、`CLAUDE.md`）。
+- `entrypoints/`：根入口唯一物理源（`AGENTS.md`、`CLAUDE.md`）。
 
 ## 自迭代标准闭环 (SOP)
 
-1. **归属判别与最小修改**：按元规则确认内容唯一归属；修改 `root-configs/AGENTS.md` 时同步工作区根 `AGENTS.md`。
+1. **归属判别与最小修改**：按元规则确认内容唯一归属；修改 `entrypoints/AGENTS.md` 时同步工作区根 `AGENTS.md`。
 2. **单一真源与去重**：禁止在 `rules/` 中出现具体业务系统名称或在项目入口复制规则正文。
 3. **双重体检门禁（必须通过）**：
-   - 单元测试：`python3 -m unittest discover -s tests`（在 `.system` 目录下）
-   - 工作区体检：`python3 tools/lint_workspace.py`（14 项指标全部 100% 绿灯）
+   - 单元测试：`python3 -m unittest discover -s tests -t .`（在 `.system` 目录下）
+   - 工作区体检：`python3 tools/lint_workspace.py`（全部阻断项与治理建议项通过）
 4. **五维架构评估**：每次系统自迭代完成后，必须对照完备性、通用性、安全性、健壮性与可移植性进行评估并输出结论。
 5. **自动 Git 交付与同步（仅限 .system 本身）**：
    - 精确 `git add <file>` 暂存 `.system/` 变更文件；

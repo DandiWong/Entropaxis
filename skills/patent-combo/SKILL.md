@@ -31,7 +31,7 @@ python3 "<skill-dir>/scripts/check_env.py" --fix
 ## 实例配置（先读）
 
 ```bash
-cat "<工作区根>/.data/patent_combo_config.json"
+cat "<工作区根>/.data/skills/patent-combo/config.json"
 ```
 
 | 配置键 | 必需 | 含义 |

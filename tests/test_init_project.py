@@ -21,7 +21,7 @@ from tools.lint_workspace import (
 )
 
 
-TEMPLATES = SYSTEM_ROOT / "templates"
+TEMPLATES = SYSTEM_ROOT / "templates" / "project"
 
 
 class InitProjectTests(TestCase):

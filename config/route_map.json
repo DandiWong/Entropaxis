@@ -1,0 +1,296 @@
+{
+  "_meta": {
+    "purpose": "确定性关键词路由索引，供 tools/hook_route_match.py 在 UserPromptSubmit 阶段做字面命中的前置注入；语义/转述命中仍依赖模型对根 AGENTS.md 路由表与本文件的理解，本表只兜底提升字面命中的召回率，不替代语义判断。",
+    "source_of_truth": "本表关键词逐条摘自 .system/rules/工作流指令.md、.system/rules/治理指令.md 与 .system/rules/文件交付.md 中已声明的“触发意图/触发场景”原文，不新增未在规则正文出现过的措辞；新增机制的显式触发词时须同步在此登记，避免字面命中漏检。",
+    "deliberate_omissions": "规则正文枚举的裸词“任务”未纳入（过于通用，逐字匹配会在几乎所有工作汇报语境下误触发，违反元规则3“薄入口/按需”），改用更具体的“建个任务/记个任务/登记任务”子串；“记录/沉淀”“复盘”等仍按原文保留，存在一定误触发容忍度。",
+    "exclude_semantics": "exclude 列出该机制的抑制词：命中任一即判定为他机制语义，本机制不触发。用于消解子串包含造成的误触发（如「根据审计修正」含「审计」但属于修正机制）。"
+  },
+  "routes": [
+    {
+      "mechanism": "工作区初始化",
+      "files": [
+        ".system/rules/工作流指令.md"
+      ],
+      "anchor": "## 工作区初始化 / 新机配置",
+      "keywords": [
+        "初始化",
+        "新电脑",
+        "我是新人",
+        "配置工作区",
+        "系统初始化",
+        "配置打开方式",
+        "修改打开程序"
+      ],
+      "exclude": [
+        "报销初始化"
+      ]
+    },
+    {
+      "mechanism": "定位查找文件",
+      "files": [
+        ".system/rules/工作流指令.md",
+        ".system/rules/文件交付.md"
+      ],
+      "anchor": "## 定位 / 查找文件 | ### 4.2 触发场景",
+      "keywords": [
+        "文件在哪",
+        "找一下",
+        "所在目录",
+        "所在文件夹"
+      ]
+    },
+    {
+      "mechanism": "会议纪要",
+      "files": [
+        ".system/rules/工作流指令.md"
+      ],
+      "anchor": "## 会议纪要",
+      "keywords": [
+        "整理会议纪要",
+        "生成会议纪要",
+        "写会议纪要",
+        "会议纪要"
+      ]
+    },
+    {
+      "mechanism": "审计",
+      "files": [
+        ".system/rules/治理指令.md"
+      ],
+      "anchor": "## 审计",
+      "keywords": [
+        "审计",
+        "方案审计",
+        "审核方案",
+        "评审方案",
+        "审修"
+      ],
+      "exclude": [
+        "根据审计",
+        "响应审计报告",
+        "审计修正"
+      ]
+    },
+    {
+      "mechanism": "修正",
+      "files": [
+        ".system/rules/治理指令.md"
+      ],
+      "anchor": "## 修正",
+      "keywords": [
+        "修正方案",
+        "根据审计修正",
+        "响应审计报告",
+        "审修"
+      ]
+    },
+    {
+      "mechanism": "系统自检",
+      "files": [
+        ".system/rules/治理指令.md",
+        ".system/rules/01_根系统治理.md"
+      ],
+      "anchor": "## 系统自检",
+      "keywords": [
+        "系统自检",
+        "自检",
+        "entropaxis 自检",
+        "entropaxis自检"
+      ]
+    },
+    {
+      "mechanism": "新迭代",
+      "files": [
+        ".system/rules/治理指令.md",
+        ".system/rules/软件工程.md"
+      ],
+      "anchor": "## 新迭代 / 新 Feature",
+      "keywords": [
+        "新迭代",
+        "新feature",
+        "new feature",
+        "开始新迭代",
+        "开新分支"
+      ]
+    },
+    {
+      "mechanism": "机制转工具",
+      "files": [
+        ".system/rules/治理指令.md",
+        ".system/rules/工具设计.md"
+      ],
+      "anchor": "## 机制转工具 / 制作工具 (Tool Crafter)",
+      "keywords": [
+        "机制转工具",
+        "制作工具",
+        "创建工具",
+        "机制工具化",
+        "tool-crafter",
+        "toolify",
+        "自动化"
+      ],
+      "exclude": [
+        "自动化测试",
+        "自动化部署",
+        "自动化构建",
+        "自动化流水线"
+      ]
+    },
+    {
+      "mechanism": "注册Skill",
+      "files": [
+        ".system/rules/治理指令.md",
+        ".system/rules/技能设计.md"
+      ],
+      "anchor": "## 注册 Skill / 注册到 Entropaxis / 注册到根系统",
+      "keywords": [
+        "注册到entropaxis",
+        "注册到根系统",
+        "注册skill",
+        "安装并注册skill",
+        "纳入entropaxis"
+      ]
+    },
+    {
+      "mechanism": "同步任务",
+      "files": [
+        ".system/rules/工作流指令.md",
+        ".system/rules/看板联动.md"
+      ],
+      "anchor": "## 同步任务",
+      "keywords": [
+        "同步任务"
+      ]
+    },
+    {
+      "mechanism": "同步",
+      "files": [
+        ".system/rules/工作流指令.md",
+        ".system/rules/看板联动.md"
+      ],
+      "anchor": "## 同步",
+      "keywords": [
+        "同步"
+      ]
+    },
+    {
+      "mechanism": "任务登记",
+      "files": [
+        ".system/rules/工作流指令.md",
+        ".system/rules/看板联动.md"
+      ],
+      "anchor": "## 任务",
+      "keywords": [
+        "建个任务",
+        "记个任务",
+        "登记任务"
+      ]
+    },
+    {
+      "mechanism": "记录沉淀",
+      "files": [
+        ".system/rules/工作流指令.md",
+        ".system/rules/知识沉淀.md"
+      ],
+      "anchor": "## 记录 / 沉淀",
+      "keywords": [
+        "记录",
+        "沉淀"
+      ]
+    },
+    {
+      "mechanism": "复盘",
+      "files": [
+        ".system/rules/工作流指令.md"
+      ],
+      "anchor": "## 复盘",
+      "keywords": [
+        "复盘"
+      ]
+    },
+    {
+      "mechanism": "tip",
+      "files": [
+        ".system/rules/工作流指令.md"
+      ],
+      "anchor": "## Tip",
+      "match_type": "exact",
+      "keywords": [
+        "tip"
+      ]
+    },
+    {
+      "mechanism": "报销归总",
+      "files": [
+        ".system/rules/工作流指令.md",
+        ".system/rules/财务报销.md"
+      ],
+      "anchor": "## 报销 / 整理发票",
+      "keywords": [
+        "报销",
+        "整理发票",
+        "报销归总",
+        "发票归总"
+      ]
+    },
+    {
+      "mechanism": "交付物落盘",
+      "files": [
+        ".system/rules/文件交付.md",
+        ".system/rules/角色协作.md"
+      ],
+      "anchor": "## 1. 文档落盘触发门禁 | ## AI 时代认知模态分工 (Cognitive Personas)",
+      "keywords": [
+        "落盘",
+        "落档",
+        "出方案",
+        "写方案",
+        "设计方案",
+        "出报告",
+        "写报告",
+        "生成报告",
+        "出调研",
+        "做调研",
+        "写调研",
+        "调研报告",
+        "出汇报",
+        "写汇报",
+        "写周报",
+        "双周报",
+        "出个方案",
+        "出份方案",
+        "写个方案",
+        "出个报告",
+        "出份报告",
+        "写个报告",
+        "做个调研",
+        "出个调研",
+        "出份调研",
+        "出个汇报",
+        "写个汇报"
+      ],
+      "exclude": [
+        "评审方案",
+        "审核方案",
+        "修正方案",
+        "方案审计"
+      ]
+    },
+    {
+      "mechanism": "落为Skill",
+      "files": [
+        ".system/rules/知识沉淀.md",
+        ".system/rules/技能设计.md"
+      ],
+      "anchor": "## 沉淀形态判定模型",
+      "keywords": [
+        "落成skill",
+        "做成skill",
+        "封装成skill",
+        "沉淀为skill",
+        "写个skill",
+        "做个skill"
+      ]
+    }
+  ]
+}

@@ -9,39 +9,32 @@ SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from tools.bootstrap import sync_root_configs, detect_host_apps, init_file_opener, get_open_command
+from tools.bootstrap import sync_entrypoints, detect_host_apps, init_file_opener
 
-# ponytail: sync_root_configs() 的路径由自身 __file__ 派生，无法用 monkeypatch 隔离到临时目录；
+# ponytail: sync_entrypoints() 的路径由自身 __file__ 派生，无法用 monkeypatch 隔离到临时目录；
 # 直接对真实工作区跑，并用 finally 恢复，覆盖幂等性与漂移自愈两条核心路径。
 
 
 class BootstrapSyncTests(TestCase):
     def test_sync_is_idempotent(self) -> None:
-        self.assertTrue(sync_root_configs(verbose=False))
-        self.assertTrue(sync_root_configs(verbose=False))
+        self.assertTrue(sync_entrypoints(verbose=False))
+        self.assertTrue(sync_entrypoints(verbose=False))
         for filename in ("AGENTS.md", "CLAUDE.md"):
-            source = SYSTEM_ROOT / "root-configs" / filename
+            source = SYSTEM_ROOT / "entrypoints" / filename
             target = SYSTEM_ROOT.parent / filename
             self.assertEqual(target.read_text(encoding="utf-8"), source.read_text(encoding="utf-8"))
 
     def test_sync_self_heals_drifted_target(self) -> None:
         target = SYSTEM_ROOT.parent / "AGENTS.md"
-        source = SYSTEM_ROOT / "root-configs" / "AGENTS.md"
+        source = SYSTEM_ROOT / "entrypoints" / "AGENTS.md"
         original = target.read_text(encoding="utf-8")
         try:
             target.write_text("drifted content", encoding="utf-8")
-            self.assertTrue(sync_root_configs(verbose=False))
+            self.assertTrue(sync_entrypoints(verbose=False))
             self.assertEqual(target.read_text(encoding="utf-8"), source.read_text(encoding="utf-8"))
         finally:
             target.write_text(original, encoding="utf-8")
 
-    def test_get_open_command_formats_and_dirs(self) -> None:
-        cmd_docx = get_open_command("01_test/doc.docx", SYSTEM_ROOT.parent)
-        self.assertIn("doc.docx", cmd_docx)
-        cmd_pptx = get_open_command("01_test/slide.pptx", SYSTEM_ROOT.parent)
-        self.assertIn("slide.pptx", cmd_pptx)
-        cmd_dir = get_open_command("01_test/dir/", SYSTEM_ROOT.parent)
-        self.assertIn("01_test/dir/", cmd_dir)
 
 
 class FileOpenerMergeTests(TestCase):
@@ -50,14 +43,15 @@ class FileOpenerMergeTests(TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="file-opener-"))
         self.system_dir = self.tmp / ".system"
-        (self.system_dir / "templates").mkdir(parents=True)
+        (self.system_dir / "templates" / "data").mkdir(parents=True)
         shutil.copy(
-            SYSTEM_ROOT / "templates" / "file-opener.template.json",
-            self.system_dir / "templates" / "file-opener.template.json",
+            SYSTEM_ROOT / "templates" / "data" / "file-opener.template.json",
+            self.system_dir / "templates" / "data" / "file-opener.template.json",
         )
         self.data_dir = self.tmp / ".data"
-        self.data_dir.mkdir()
-        self.config_path = self.data_dir / "file-opener.json"
+        (self.data_dir / "templates").mkdir(parents=True)
+        # 模板渲染产物落 .data/templates/，与源模板同名，路径即来源指针
+        self.config_path = self.data_dir / "templates" / "file-opener.json"
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)

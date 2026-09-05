@@ -8,6 +8,7 @@
 
 - 搜索用 `grep`/`find` 内置工具，多OR词用一次 `multi_grep`；必须走bash 时用 `rg`，不用 `grep`
 - 定位后用 `read` 的offset/limit 只读命中附近；工作区外已知文件直接read
+- 打开本地文件统一执行 `python3 .system/tools/open_file.py <path>`；不得直接调用 `open`、`start`、`xdg-open` 或应用 CLI 绕过 `.data/templates/file-opener.json`。
 
 ## 安全边界
 
@@ -19,9 +20,9 @@
 
 ## 会话提示
 
-- 每次会话首条对用户可见的回复末尾，若 `.data/tips.md` 存在且含有 `- TIP：` 条目，任选一条原文作为独立末行展示；文件缺失、为空或无法读取时静默跳过。
+- 每次会话首条对用户可见的回复末尾，若 `.data/rules/tips.md` 存在且含有 `- TIP：` 条目，任选一条原文作为独立末行展示；文件缺失、为空或无法读取时静默跳过。
 - Tips 仅提供操作提示，不替代规则、项目决策或原始依据；展示时不得修改 Tips 文件或推断新的项目事实。
-- 当用户指令仅为 `tip`（忽略首尾空白，不区分大小写）时，从 `.data/tips.md` 回显一条以 `- TIP：` 开头的原文；无有效条目时说明无可用 Tip，不触发其他动作。
+- 当用户指令仅为 `tip`（忽略首尾空白，不区分大小写）时，从 `.data/rules/tips.md` 回显一条以 `- TIP：` 开头的原文；无有效条目时说明无可用 Tip，不触发其他动作。
 
 ## 按需路由
 
@@ -30,18 +31,20 @@
 | 新建/生成/导出通用文件，或查找/定位文件位置 | `.system/rules/文件交付.md` |
 | 系统边界、项目目录结构与组织命名 | `.system/rules/项目组织.md` |
 | 代码开发、调试与自动化验证 | `.system/rules/软件工程.md` |
-| Spec、任务状态与外部看板联动 | `.system/rules/看板联动.md` |
-| 根系统、AGENTS 与元规则治理 | `.system/rules/01_根系统治理.md` |
+| 根系统治理与元规则 | `.system/rules/01_根系统治理.md`；布局与写入语义见 `.system/rules/控制面布局.md` |
 | 角色职责、跨角色交接与协作验收 | `.system/rules/角色协作.md` |
 | 工作区自然语言指令与任务解析 | `.system/rules/指令解析.md` |
+| 日常业务动作指令（同步/任务/沉淀/复盘/定位/初始化）| `.system/rules/工作流指令.md` |
+| 系统治理动作指令（审计/修正/自检/新迭代/工具化/Skill）| `.system/rules/治理指令.md` |
 | 表达文风与可视化 | `.system/rules/表达文风.md` |
 | 对外发布与审批 | `.system/rules/对外发布.md` |
-| 知识沉淀与 Wiki 录入 | `.system/rules/知识沉淀.md` |
-| Tool 与 Skill 的开发、治理与维护 | `.system/rules/工具技能.md` |
-| 分发 / 打包 Skill | `.system/rules/工具技能.md`（分发包契约）与 `.system/rules/文件交付.md`（打开 ZIP 所在目录） |
-| 任务看板 / 待办管理 | `.system/rules/看板联动.md`（按需调用看板 Skill 或本地适配器） |
-| 会议纪要生成 | `.system/rules/指令解析.md`（按需调用会议纪要 Skill） |
-| 财务报销与发票归总 | `.system/rules/财务报销.md` |
-| 项目注册表（工作区项目索引） | `.data/registry.md` |
+| 知识沉淀、Wiki 录入与能力形态判定 | `.system/rules/知识沉淀.md` |
+| Tool 准入判据与 ApX 工程契约 | `.system/rules/工具设计.md` |
+| Skill 设计、渐进披露与元数据 | `.system/rules/技能设计.md` |
+| 分发 / 打包 Skill | `.system/rules/技能设计.md`（分发包契约）与 `.system/rules/文件交付.md`（打开 ZIP 所在目录） |
+| Spec、任务状态、任务看板与待办管理 | `.system/rules/看板联动.md`（按需调用看板 Skill 或本地适配器） |
+| 会议纪要生成 | `.system/rules/工作流指令.md`（按需调用会议纪要 Skill） |
+| 报销 / 整理发票 | `.system/rules/工作流指令.md` 与 `.system/rules/财务报销.md` |
+| 项目注册表（工作区项目索引） | `.data/templates/registry.md` |
 
 进入具体项目后，先读最近的 `AGENTS.md`，再按其中路由读取 README、Spec 或操作文档。仅在任务涉及外部看板、联网、发布或特定工具时加载对应规则或 Skill。

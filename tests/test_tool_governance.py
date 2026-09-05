@@ -8,20 +8,28 @@ WORKSPACE_ROOT = SYSTEM_ROOT.parent
 
 class ToolGovernanceRuleTests(TestCase):
     def test_tool_governance_rule_contains_core_framework(self) -> None:
-        rule_path = SYSTEM_ROOT / "rules" / "工具技能.md"
-        self.assertTrue(rule_path.exists(), "工具技能.md must exist")
-        content = rule_path.read_text(encoding="utf-8")
+        """形态判定已并入《知识沉淀》七形态表；工具技能.md 因整节复述而退役。"""
+        self.assertFalse(
+            (SYSTEM_ROOT / "rules" / "工具技能.md").exists(),
+            "工具技能.md 已退役，其形态判定并入知识沉淀.md，红线各归真源",
+        )
+        taxonomy = (SYSTEM_ROOT / "rules" / "知识沉淀.md").read_text(encoding="utf-8")
+        self.assertIn("沉淀形态判定模型", taxonomy)
+        for form in ("落为规则 (Rule)", "生成 Skill", "转为 Tool", "声明 Schema", "局部 Script"):
+            self.assertIn(form, taxonomy)
 
-        self.assertIn("## 0. 能力扩展形态判定模型", content)
-        self.assertIn("# 第一篇：Tool 工具设计、准入与工程治理", content)
-        self.assertIn("# 第二篇：Skill 技能设计、架构与最佳实践", content)
-        self.assertIn("# 第三篇：共同合规红线", content)
-        self.assertIn("自由度阶梯匹配", content)
-        self.assertIn("渐进式披露架构", content)
-        self.assertIn("单跳引用与 500 行预算铁律", content)
-        self.assertIn("行动导向的错误契约", content)
-        self.assertIn("Local-First 纯标准库铁律", content)
-        self.assertIn("零系统绑定与声明外置", content)
+        tool_content = (SYSTEM_ROOT / "rules" / "工具设计.md").read_text(encoding="utf-8")
+        skill_content = (SYSTEM_ROOT / "rules" / "技能设计.md").read_text(encoding="utf-8")
+        self.assertIn("五维准入漏斗", tool_content)
+        self.assertIn("自由度阶梯匹配", skill_content)
+        self.assertIn("渐进式披露架构", skill_content)
+        self.assertIn("单跳引用与 500 行预算铁律", skill_content)
+        self.assertIn("行动导向的错误契约", tool_content)
+        # 红线归各自真源，不再由单一文件复述
+        governance = (SYSTEM_ROOT / "rules" / "01_根系统治理.md").read_text(encoding="utf-8")
+        layout = (SYSTEM_ROOT / "rules" / "控制面布局.md").read_text(encoding="utf-8")
+        self.assertIn("零系统绑定铁律", governance)
+        self.assertIn("credentials", layout)
 
     def test_tool_crafter_skill_metadata_and_structure(self) -> None:
         skill_dir = SYSTEM_ROOT / "skills" / "tool-crafter"
@@ -31,7 +39,7 @@ class ToolGovernanceRuleTests(TestCase):
         self.assertTrue(skill_md.exists(), "tool-crafter SKILL.md must exist")
         content = skill_md.read_text(encoding="utf-8")
         self.assertIn("name: tool-crafter", content)
-        self.assertIn("工具技能.md", content)
+        self.assertIn("工具设计.md", content)
 
         template_path = skill_dir / "templates" / "tool.template.py"
         self.assertTrue(template_path.exists(), "tool.template.py must exist")
@@ -47,20 +55,20 @@ class ToolGovernanceRuleTests(TestCase):
         agents_path = WORKSPACE_ROOT / "AGENTS.md"
         self.assertTrue(agents_path.exists(), "AGENTS.md must exist")
         agents_content = agents_path.read_text(encoding="utf-8")
-        self.assertIn(".system/rules/工具技能.md", agents_content)
+        self.assertIn(".system/rules/工具设计.md", agents_content)
 
-        parse_path = SYSTEM_ROOT / "rules" / "指令解析.md"
-        self.assertTrue(parse_path.exists(), "指令解析.md must exist")
+        parse_path = SYSTEM_ROOT / "rules" / "治理指令.md"
+        self.assertTrue(parse_path.exists(), "治理指令.md must exist")
         parse_content = parse_path.read_text(encoding="utf-8")
         self.assertIn("机制转工具 / 制作工具", parse_content)
         self.assertIn("tool-crafter", parse_content)
 
     def test_tips_contain_tool_crafter_hints(self) -> None:
-        tips_path = WORKSPACE_ROOT / ".data" / "tips.md"
+        tips_path = WORKSPACE_ROOT / ".data" / "rules" / "tips.md"
         self.assertTrue(tips_path.exists(), "tips.md must exist")
         content = tips_path.read_text(encoding="utf-8")
         self.assertIn("- TIP：你可以说“机制转工具”或“tool-crafter”", content)
-        self.assertIn("《工具技能》", content)
+        self.assertIn("《工具设计》", content)
 
 
 if __name__ == "__main__":

@@ -39,17 +39,28 @@ def find_closed_critical_blocks(text: str) -> list[str]:
 
 
 def check_report(text: str) -> list[str]:
-    """对审计报告全文做门禁核验，返回违规说明列表（空列表即通过）。"""
+    """对审计报告全文做门禁核验，返回违规说明列表（空列表即通过）。
+
+    fail-closed：independence 缺失时不再放行。此前缺字段即返回空列表，
+    等于「忘写声明」比「如实写会话内降级」更容易通过门禁——奖励了漏报。
+    字段契约见 .system/schemas/audit_report.schema.json。
+    """
     independence = extract_independence(text)
-    if not independence or not independence.startswith("session-internal-downgraded"):
-        return []
     closed = find_closed_critical_blocks(text)
     if not closed:
         return []
-    return [
-        f"independence={independence!r} 属于会话内降级，但检测到 {len(closed)} 处 Critical "
-        "问题标记为已关闭；会话内自评不可关闭 Critical，必须由外置 reviewer 复核或转人工仲裁。"
-    ]
+    if not independence:
+        return [
+            f"检测到 {len(closed)} 处 Critical 问题标记为已关闭，但 Front Matter 未声明 "
+            "independence。审计独立性无法核验的报告不得关闭 Critical；请按 "
+            "`external: <cli>` 或 `session-internal-downgraded (external: <cli> missing|failed)` 补齐。"
+        ]
+    if independence.startswith("session-internal-downgraded"):
+        return [
+            f"independence={independence!r} 属于会话内降级，但检测到 {len(closed)} 处 Critical "
+            "问题标记为已关闭；会话内自评不可关闭 Critical，必须由外置 reviewer 复核或转人工仲裁。"
+        ]
+    return []
 
 
 def main() -> int:

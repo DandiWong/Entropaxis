@@ -136,8 +136,10 @@ python3 .system/skills/ppt-design/templates/generate_deck.py --output "output/my
 
 ## 7. 交付收尾刚性门禁 (Mandatory Delivery Gate)
 
-遵循 [`.system/rules/文件交付.md`](../../rules/文件交付.md)：
-* **落盘后必开文件**：生成 `.pptx` 文件及相关配图后，在任务结束交付前，必须调用系统默认程序打开生成的 `.pptx` 文件：
-  * macOS：`open "<file_path>"`
-  * Windows：`start "" "<file_path>"`
-  * Linux：`xdg-open "<file_path>"`
+遵循 [`.system/rules/文件交付.md`](../../rules/文件交付.md)：生成 `.pptx` 文件及相关配图后，在任务结束交付前执行：
+
+```bash
+python3 .system/tools/open_file.py "<pptx_path>" "<image_path>"
+```
+
+必须核对每个文件的打开结果；不得直接调用平台默认打开命令绕过人工仲裁配置。

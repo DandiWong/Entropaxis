@@ -24,15 +24,16 @@ class RenderInstanceConfigsTests(TestCase):
         self.tmpdir = Path(_tempfile.mkdtemp(prefix="render-test-"))
         self.templates_dir = self.tmpdir / "templates"
         self.data_dir = self.tmpdir / ".data"
-        self.templates_dir.mkdir(parents=True, exist_ok=True)
+        (self.templates_dir / "data").mkdir(parents=True, exist_ok=True)
+        (self.templates_dir / "project").mkdir(parents=True, exist_ok=True)
 
         # 复制真实模板（避免在测试里硬编码两份）
-        real_templates = SYSTEM_ROOT / "templates"
+        real_templates = SYSTEM_ROOT / "templates" / "data"
         for name in ("board_config.template.json", "workspace-config.template.md"):
-            shutil.copy2(real_templates / name, self.templates_dir / name)
+            shutil.copy2(real_templates / name, self.templates_dir / "data" / name)
 
-        # 再加一个非白名单模板（模拟项目级脚手架）确保不被渲染
-        (self.templates_dir / "AGENTS.template.md").write_text(
+        # 项目脚手架放 project/，确保不被实例渲染流程碰到（目录即白名单，无需硬编码名单）
+        (self.templates_dir / "project" / "AGENTS.template.md").write_text(
             "# AGENTS\n{{ORG_FULL_NAME}}", encoding="utf-8"
         )
 
@@ -49,14 +50,14 @@ class RenderInstanceConfigsTests(TestCase):
         self.assertTrue(ok)
 
         # board_config.json 应被创建
-        board = self.data_dir / "board_config.json"
+        board = self.data_dir / "templates" / "board_config.json"
         self.assertTrue(board.exists())
         data = json.loads(board.read_text(encoding="utf-8"))
         self.assertIn("providers", data)
         self.assertEqual(data["providers"], {})
 
         # workspace-config.md 应被创建，且占位符被替换为 "Acme" 兜底
-        ws_cfg = self.data_dir / "workspace-config.md"
+        ws_cfg = self.data_dir / "templates" / "workspace-config.md"
         self.assertTrue(ws_cfg.exists())
         content = ws_cfg.read_text(encoding="utf-8")
         self.assertIn("Acme", content)
@@ -64,16 +65,16 @@ class RenderInstanceConfigsTests(TestCase):
         self.assertNotIn("{{ORG_FORBIDDEN_ABBR}}", content)
 
         # AGENTS.template.md 不在白名单 → 不应被渲染
-        agents = self.data_dir / "AGENTS.md"
+        agents = self.data_dir / "templates" / "AGENTS.md"
         self.assertFalse(
             agents.exists(),
             "AGENTS.template.md is not in whitelist, must not be rendered to .data/",
         )
 
     def test_existing_target_is_not_overwritten(self) -> None:
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        (self.data_dir / "templates").mkdir(parents=True, exist_ok=True)
         sentinel = "PRESERVED-BY-USER"
-        existing = self.data_dir / "board_config.json"
+        existing = self.data_dir / "templates" / "board_config.json"
         existing.write_text(sentinel, encoding="utf-8")
 
         render_instance_configs(
@@ -98,11 +99,11 @@ class RenderInstanceConfigsTests(TestCase):
         )
 
         # 仅白名单内的两个文件被渲染
-        self.assertTrue((self.data_dir / "board_config.json").exists())
-        self.assertTrue((self.data_dir / "workspace-config.md").exists())
+        self.assertTrue((self.data_dir / "templates" / "board_config.json").exists())
+        self.assertTrue((self.data_dir / "templates" / "workspace-config.md").exists())
         # 不在白名单的全部跳过
-        self.assertFalse((self.data_dir / "AGENTS.md").exists())
-        self.assertFalse((self.data_dir / "README.md").exists())
+        self.assertFalse((self.data_dir / "templates" / "AGENTS.md").exists())
+        self.assertFalse((self.data_dir / "templates" / "README.md").exists())
         self.assertFalse((self.data_dir / "registry.md").exists())
 
     def test_template_dir_missing_is_noop(self) -> None:
@@ -116,4 +117,4 @@ class RenderInstanceConfigsTests(TestCase):
         )
         self.assertTrue(ok)
         # .data/ 可能被 mkdir 但不应有产物
-        self.assertFalse(list(self.data_dir.glob("*")))
+        self.assertFalse(list((self.data_dir / "templates").glob("*")))
