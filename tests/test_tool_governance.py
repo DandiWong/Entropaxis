@@ -65,7 +65,10 @@ class ToolGovernanceRuleTests(TestCase):
 
     def test_tips_contain_tool_crafter_hints(self) -> None:
         tips_path = WORKSPACE_ROOT / ".data" / "rules" / "tips.md"
-        self.assertTrue(tips_path.exists(), "tips.md must exist")
+        if not tips_path.exists():
+            # tips.md 是工作区实例数据（.data/rules/ 桶无模板），新克隆的工作区首次使用前
+            # 并不存在。断言它必须存在会把 .system 的测试套件绑死在本机实例数据上。
+            self.skipTest("tips.md 尚未落地，属新工作区正常初始态")
         content = tips_path.read_text(encoding="utf-8")
         self.assertIn("- TIP：你可以说“机制转工具”或“tool-crafter”", content)
         self.assertIn("《工具设计》", content)

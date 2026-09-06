@@ -15,7 +15,7 @@
 
 2. **零门槛极简上手**  
    无需记忆复杂的命令行参数，只需**使用本地 Agent（如 Claude Code / OMP / Cursor / Codex）直接打开工作区根目录**，即可通过自然语言对话完成待办流转、看板管理、纪要生成与知识沉淀。  
-   *（新电脑或非技术同学亦可直接双击 `.system/tools/🚀_一键配置工作区.command` 或对 Agent 说“初始化”一键就绪）*。
+   *（新电脑或非技术同学亦可直接双击一键脚本，或对 Agent 说“初始化”一键就绪：macOS / Linux 用 `.system/tools/🚀_一键配置工作区.command`，Windows 用 `.system/tools/一键配置工作区.bat`）*。
 
 ---
 
@@ -51,6 +51,8 @@
 
 > 📌 **数据隔离说明**：工作区实例数据（业务项目注册表、内部战略、凭据）独立存放于 `.data/`（与 `.system/` 同级），严禁提交至公共系统仓库。
 
+> ⚠️ **分发信道（唯一合法路径）**：把本系统交付给他人时，只允许 `git clone`、`git archive` 或 GitHub 版本库 ZIP 下载。**严禁直接拷贝、压缩 `.system/` 目录或经网盘同步**——私有 Skill 靠自带 `.gitignore` 排除出版本库，它们在文件系统上依然物理存在，拷目录会连同内部端点与业务口径一并带走。契约见 [`rules/技能设计.md`](rules/技能设计.md) 6.2 节。
+
 ## 🩺 `.system` 健康度指标
 
 健康度是可执行门禁，不做主观打分。`python3 .system/tools/lint_workspace.py` 在既有工作区体检前先检查控制面。
@@ -59,7 +61,7 @@
 |---|---|---|
 | **结构完整性** | `entrypoints/`、`rules/`、`config/`、`schemas/`、`templates/`、`tools/`、`skills/`、`tests/` 及关键入口均存在 | 从版本库恢复缺失文件，不以项目文件替代系统真源 |
 | **根入口同步** | 工作区 `AGENTS.md`、`CLAUDE.md` 内容与 `entrypoints/` 一致 | 运行 `bootstrap.py` 恢复入口 |
-| **路由完整性** | `.system` 内显式 Markdown 本地链接均可解析 | 修正链接或补齐唯一真源 |
+| **路由完整性** | `.system` 内显式 Markdown 本地链接均可解析（指向 `.data/` 的实例声明按"待落地"计入建议项，不阻断新工作区）| 修正链接或补齐唯一真源 |
 | **模板契约** | 通用项目与软件应用脚手架所需模板齐全；变量闭合且属于声明集合 | 修复模板变量，避免生成未渲染文件 |
 | **Skill 可发现性** | 每个 Skill 有 `SKILL.md`，`name` 与目录名一致，包含 `description` 触发描述 | 补齐入口或修正元数据 |
 | **工具可执行性** | `tools/*.py` 均能通过 Python 编译 | 修复语法错误后再发布系统改动 |
@@ -78,6 +80,10 @@
 1. 用浏览器打开 `https://github.com/DandiWong/Entropaxis`（确保已登录 GitHub）
 2. 点击绿色的 **Code** 按钮 → **Download ZIP**
 3. 把下载好的 ZIP 文件交给 AI 助手，让它帮你解压到工作区
+
+### 一键初始化
+
+解压到位后，进入 `.system\tools\`，双击 **`一键配置工作区.bat`**（不是 `.command`，那个是 Mac 用的）。脚本会自动找 `py -3` / `python3` / `python`；提示没装 Python 时按提示装完再双击一次即可。
 
 ### 让 AI 助手帮你操作网页
 
@@ -106,6 +112,7 @@
 - **通用项目脚手架初始化**：`python3 .system/tools/init_project.py <项目名>`
 - **软件应用脚手架初始化**：`python3 .system/tools/init_app.py <app-name> --target-dir <项目路径>/02_开发`
 - **工作区规则与健康度体检**：`python3 .system/tools/lint_workspace.py`
+- **分发就绪核验（收件方视角）**：`python3 .system/tools/check_distribution.py`
 - **核心开发与联动规则**：
   - [`.system/rules/00_元规则.md`](rules/00_元规则.md)
   - [`.system/rules/01_根系统治理.md`](rules/01_根系统治理.md)
