@@ -2,9 +2,8 @@ __pycache__/
 *.py[cod]
 .DS_Store
 .pytest_cache/
-# 业务定制/私有 Skill（不纳入公共版本库）
-skills/internal-org-*/
-skills/internal-org-*
+# 私有 Skill 不在此登记：每个私有 Skill 目录自带 `.gitignore`（内容 `*`）自封装排除，
+# 公共版本库因此不含任何组织名或私有能力清单。契约见 rules/技能设计.md 6.2 节。
 
 # Skill 分发包构建产物（本地生成，不入库）
 skills/*.zip

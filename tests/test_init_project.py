@@ -11,6 +11,7 @@ from tools.backfill_frontmatter import classify
 from tools.init_app import AppInitError, init_app
 from tools.init_project import ProjectInitError, init_project
 from tools.lint_workspace import (
+    check_data_declaration_links,
     check_rules_zero_system_binding,
     check_system_entry_sync,
     check_system_layout,
@@ -153,6 +154,25 @@ class InitProjectTests(TestCase):
         ):
             self.assertEqual(check(workspace), [], check.__name__)
 
+    def test_missing_data_declaration_is_advisory_not_blocking(self) -> None:
+        """未落地的 .data/ 实例声明只进建议项——否则新克隆的工作区开箱即体检失败。"""
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            rules = workspace / ".system" / "rules"
+            rules.mkdir(parents=True)
+            (rules / "示例规则.md").write_text(
+                "参数见 [`.data/rules/示例配置.md`](../../.data/rules/示例配置.md)。\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(check_system_markdown_links(workspace), [])
+            advisories = check_data_declaration_links(workspace)
+            self.assertEqual(len(advisories), 1, advisories)
+            self.assertIn("实例声明待落地", advisories[0])
+
+            (workspace / ".data" / "rules").mkdir(parents=True)
+            (workspace / ".data" / "rules" / "示例配置.md").write_text("x\n", encoding="utf-8")
+            self.assertEqual(check_data_declaration_links(workspace), [])
+
     def test_zero_system_binding_flags_hardcoded_local_endpoint(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -164,7 +184,10 @@ class InitProjectTests(TestCase):
             self.assertTrue(any("硬编码本地端点" in issue for issue in issues), issues)
 
     def test_zero_system_binding_passes_on_real_workspace(self) -> None:
-        self.assertEqual(check_rules_zero_system_binding(SYSTEM_ROOT.parent), [])
+        # 断言的是"控制面无实体绑定"，而非返回空表：词表未落地时该检查会带一条降级留痕，
+        # 那是新工作区的正常初始态（见 tests/test_lint_binding.py 软降级用例）。
+        issues = check_rules_zero_system_binding(SYSTEM_ROOT.parent)
+        self.assertEqual([i for i in issues if "实体词表未声明" not in i], [])
 
     def test_app_initializer_refuses_to_overwrite_nonempty_target(self) -> None:
         with TemporaryDirectory() as temporary:

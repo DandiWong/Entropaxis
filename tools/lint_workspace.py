@@ -35,8 +35,10 @@ RULE_DUP_MAX_REPORTS = 8
 
 EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "repo/dify", "graphify-out")
 
-# 控制面零系统绑定/零真实实体禁词（小写匹配；lint 自身因定义检测常量而豁免）
-FORBIDDEN_BINDINGS = ("internal-org", "board-platform", "dev-platform", "研发协作平台", "某集团", "某医院", "内部操作手册")
+# 零系统绑定/零真实实体禁词按实例声明外置于 .data/rules/零系统绑定词表.md：
+# 词表写死在这里，等于让"防止硬编码组织名"的检查本身成为控制面里唯一硬编码组织名的
+# 文件，随版本库分发给每一个收件方（五维评估.md 通用性维度「已知盲区」已记载该悖论）。
+BINDING_WORDLIST = ".data/rules/零系统绑定词表.md"
 # 控制面禁止硬编码本地调试端点：外部系统交互必须经声明外置的看板/服务 CLI
 FORBIDDEN_HOST_PATTERN = re.compile(r"127\.0\.0\.1|localhost")
 
@@ -449,6 +451,29 @@ def _tracked_files(system: Path) -> set[Path] | None:
         return None
 
 
+def _forbidden_bindings(root: Path) -> list[str]:
+    """读取实例声明的禁用实体词表（每行一个 `- 词`），小写归一。
+
+    文件缺失或为空时返回空表：这是软降级——结构性检查（本地端点）继续生效，实体词检查
+    停用，由调用方留痕告警，不静默假装通过（《01_根系统治理》演进准则第 2 条）。
+    此处**不得**保留任何硬编码兜底词表：那等于把组织实体名重新写回控制面并随版本库分发，
+    正是本函数外置化要消除的东西（同准则第 3 条「检查器同受约束」）。
+    """
+    wordlist = root / BINDING_WORDLIST
+    try:
+        text = wordlist.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    terms = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("- ") and not line.startswith("- ["):
+            term = line[2:].split("（", 1)[0].split("#", 1)[0].strip().strip("`").lower()
+            if term:
+                terms.append(term)
+    return terms
+
+
 def check_rules_zero_system_binding(root: Path) -> list[str]:
     """控制面（rules/、entrypoints/、templates/、tools/、tests/、skills/*/SKILL.md）
     不得出现具体业务系统绑定或真实实体；tools/skills/tests 可执行内容额外禁止硬编码本地端点。
@@ -456,6 +481,13 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
     issues = []
     system = root / ".system"
     tracked = _tracked_files(system)
+    forbidden = _forbidden_bindings(root)
+    if not forbidden:
+        # 降级必须留痕：静默跳过会让"检查通过"与"检查没跑"在输出上无法区分
+        issues.append(
+            f"[实体词表未声明] 未读到 {BINDING_WORDLIST}，本轮仅执行结构性端点检查，"
+            "真实实体词检查已降级停用；新工作区请按《01_根系统治理》零系统绑定铁律补齐词表。"
+        )
 
     def _glob(base: Path, pattern: str) -> list[Path]:
         if not base.exists():
@@ -469,6 +501,8 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
     binding_targets += _glob(system / "rules", "*.md")
     binding_targets += _glob(system / "entrypoints", "*.md")
     binding_targets += _glob(system / "templates", "**/*")
+    # 词表外置后 lint 自身不再持有任何禁词，此前的自我豁免随之取消：
+    # 检查器与被检查者同一把尺子，控制面里再出现实体词就该被自己抓出来。
     operational_targets: list[Path] = [
         p for p in _glob(system / "tools", "*.py") if p.name != "lint_workspace.py"
     ]
@@ -481,7 +515,7 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
             content = rf.read_text(encoding="utf-8").lower()
         except Exception:
             continue
-        for keyword in FORBIDDEN_BINDINGS:
+        for keyword in forbidden:
             if keyword in content:
                 issues.append(
                     f"[规则系统绑定] {rf.relative_to(root)} 含禁用关键词「{keyword}」；应为零系统绑定。"
@@ -612,10 +646,9 @@ def check_system_entry_sync(root: Path) -> list[str]:
     return issues
 
 
-def check_system_markdown_links(root: Path) -> list[str]:
-    """检查 .system 内 Markdown 显式本地链接不指向不存在的路径。"""
+def _iter_local_links(root: Path):
+    """遍历 .system 内 Markdown 的显式本地链接，产出 (文档, 原始 target, 解析后路径)。"""
     system = root / ".system"
-    issues = []
     link_pattern = re.compile(r"\[[^\]]*]\(([^)\s]+)(?:\s+[^)]*)?\)")
     for document in system.rglob("*.md"):
         # Skill 包内随附的冻结参考文档（skills/<name>/references/**）不参与路由断链检查：
@@ -628,11 +661,54 @@ def check_system_markdown_links(root: Path) -> list[str]:
             if not target or target.startswith(("#", "/", "~", "http:", "https:", "mailto:")):
                 continue
             path = target.split("#", 1)[0]
+            if not path:
+                continue
             base = root if document.parent == system / "entrypoints" else document.parent
-            if path and not (base / path).exists():
-                issues.append(
-                    f"[路由断链] {document.relative_to(root)} → {target} 不存在。"
-                )
+            yield document, target, (base / path)
+
+
+def _points_into_data(path: Path, root: Path) -> bool:
+    """判断链接目标是否落在 .data/ 实例面内（两侧同样 resolve，兼容 /tmp 软链前缀）。"""
+    try:
+        path.resolve().relative_to((root / ".data").resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def check_system_markdown_links(root: Path) -> list[str]:
+    """检查 .system 内 Markdown 显式本地链接不指向不存在的路径。
+
+    指向 `.data/` 的实例声明引用交由第 22 项单独核验：`.data/rules/` 桶按定义无模板
+    （见 `控制面布局.md`「.data/ 目录结构」），首次使用前必然不存在——把它算作阻断项，
+    等于让分发出去的系统在新环境里开箱即红。
+    """
+    issues = []
+    for document, target, resolved in _iter_local_links(root):
+        if _points_into_data(resolved, root):
+            continue
+        if not resolved.exists():
+            issues.append(
+                f"[路由断链] {document.relative_to(root)} → {target} 不存在。"
+            )
+    return issues
+
+
+def check_data_declaration_links(root: Path) -> list[str]:
+    """核验规则正文引用的 `.data/` 实例声明在本工作区是否已落地。
+
+    `01_根系统治理.md` 审计流程第 2 步要求盘点"新初始化/分发场景下悬空的 .data/ 实例
+    声明引用"。这类文件由规则在首次使用时创建，缺失是合法初始态而非契约破损，故只报
+    建议不阻断；但必须报出来，否则系统分发到新环境后没人知道哪些声明还是空的。
+    """
+    issues = []
+    for document, target, resolved in _iter_local_links(root):
+        if not _points_into_data(resolved, root) or resolved.exists():
+            continue
+        issues.append(
+            f"[实例声明待落地] {document.relative_to(root)} → {target} 尚未创建；"
+            "该文件由引用它的规则在首次使用时生成，新工作区属正常初始态。"
+        )
     return issues
 
 
@@ -830,6 +906,7 @@ def main() -> int:
         ("19. .data/ 实例文件来源标记检查", check_data_provenance, False),
         ("20. .data/ 路径与来源映射检查", check_data_source_mapping, False),
         ("21. 结构化契约 schema 校验", check_schema_conformance, True),
+        ("22. .data/ 实例声明落地检查", check_data_declaration_links, False),
     ]
 
     all_issues = []

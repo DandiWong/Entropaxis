@@ -264,6 +264,28 @@
     },
     {
       "kind": "positive",
+      "instruction": "这条记为案例",
+      "expect": [
+        "记为案例"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "刚才那个判断收录案例吧",
+      "expect": [
+        "记为案例"
+      ]
+    },
+    {
+      "kind": "paraphrase",
+      "instruction": "把刚才纠正你的这件事存下来以后别再犯",
+      "expect": [
+        "记为案例"
+      ],
+      "note": "「存下来/别再犯」非字面触发词"
+    },
+    {
+      "kind": "positive",
       "instruction": "这个流程每次都手工做，能不能自动化",
       "expect": [
         "机制转工具"

@@ -108,6 +108,29 @@ def render_instance_configs(
     return success
 
 
+def stamp_new_instances(verbose: bool = True) -> None:
+    """给刚渲染出来的 `.data/` 实例文件补盖来源与写入策略标记。
+
+    渲染与盖章分属两个工具，但对新工作区来说是同一件事的两半：不在初始化里闭合，
+    新人第一次体检就会看到几条"实例文件缺来源标记"建议，而这批文件恰恰是初始化
+    自己刚写下的。工具不可用时静默跳过，不阻断初始化。
+    """
+    tools_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(tools_dir))
+    try:
+        import stamp_data_provenance as provenance
+    except Exception as exc:  # noqa: BLE001 - 补盖失败不应阻断初始化
+        if verbose:
+            print(f"ℹ️ 来源标记工具不可用，跳过补盖：{exc}")
+        return
+    finally:
+        if str(tools_dir) in sys.path:
+            sys.path.remove(str(tools_dir))
+    stamped = sum(1 for p in provenance.target_files() if provenance.stamp(p))
+    if verbose and stamped:
+        print(f"✅ 已为 {stamped} 个 .data/ 实例文件补盖来源标记")
+
+
 def sync_entrypoints(verbose: bool = True) -> bool:
     """
     将 .system/entrypoints 下的根入口真源物理同步至工作区根目录。
@@ -147,15 +170,15 @@ def sync_entrypoints(verbose: bool = True) -> bool:
     return success
 
 def check_dashboard_token() -> bool:
-    """检查看板凭证是否就绪"""
+    """检查**本工作区**看板凭证是否就绪。
+
+    只认工作区自己的 `.data/credentials/`（凭据归属见《技能设计》）。此前还会兜底扫
+    宿主机 `~/.config/*dashboard*/token`，导致任意一个全新工作区都能借到同机其他工作区
+    的凭据，初始化时报出与本工作区无关的"已就绪"——假绿灯比没有灯更危险。
+    """
     ws_cred = Path(__file__).resolve().parent.parent.parent / ".data" / "credentials"
     if ws_cred.is_dir():
         for p in ws_cred.glob("*/token"):
-            if p.is_file() and len(p.read_text(encoding="utf-8").strip()) > 10:
-                return True
-    config_dir = Path.home() / ".config"
-    if config_dir.is_dir():
-        for p in config_dir.glob("*dashboard*/token"):
             if p.is_file() and len(p.read_text(encoding="utf-8").strip()) > 10:
                 return True
     return False
@@ -376,10 +399,16 @@ if __name__ == "__main__":
         if token_ready:
             print("✅ 看板 API Token 已就绪。")
         else:
-            print("ℹ️ 看板尚未配置 Token（可直接对 Agent 说「配置看板 Token」或让 Agent 执行 init.py）。")
-        render_instance_configs(verbose=True)
+            # 不提具体脚本名：看板 Skill 按实例安装，收件方环境里未必存在该脚本
+            print("ℹ️ 本工作区尚未配置看板 Token（可直接对 Agent 说「配置看板 Token」）。")
+        # 打开器配置必须先于通用模板渲染：file-opener.json 的生效结构由 init_file_opener
+        # 按本机探测生成，若让 render_instance_configs 先把模板原样落地，下一步就会把这份
+        # 刚写的文件判为"结构非法"并重建——首次初始化必打印一条自相矛盾的损坏告警，
+        # 恰是《控制面布局》写入规约第 4 条要防的"检测结果与生效配置混淆"。
         force_rescan_opener = "--force-rescan-opener" in sys.argv
         init_file_opener(verbose=True, force_rescan=force_rescan_opener)
+        render_instance_configs(verbose=True)
+        stamp_new_instances(verbose=True)
         print("\n✨ 工作区初始化与自愈完成！")
         if sys.platform == "win32":
             print_windows_hints()
