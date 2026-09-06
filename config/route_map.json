@@ -200,6 +200,20 @@
       ]
     },
     {
+      "mechanism": "记为案例",
+      "files": [
+        ".system/rules/工作流指令.md"
+      ],
+      "anchor": "## 记为案例",
+      "keywords": [
+        "记为案例",
+        "记个案例",
+        "收录案例",
+        "记入案例库",
+        "这条记下来"
+      ]
+    },
+    {
       "mechanism": "复盘",
       "files": [
         ".system/rules/工作流指令.md"
