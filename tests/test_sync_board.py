@@ -164,17 +164,28 @@ class ProviderFourStateTests(unittest.TestCase):
         self.assertEqual(m.call_count, 1)  # 只查询一次，未触发创建调用
 
     def test_upsert_todo_found_calls_set_not_add(self) -> None:
-        """FOUND 分支必须真的发一次更新调用，不能只回读 ID 就当完成。"""
+        """FOUND 分支必须真的发一次更新调用，且写后回读确认响应 stage 与期望一致。"""
         list_payload = json.dumps([{"id": 7}])
+        set_payload = json.dumps({"id": 7, "stage": "active"})
         with patch("subprocess.run", side_effect=[_fake_completed(stdout=list_payload),
-                                                     _fake_completed(stdout="{}")]) as m:
+                                                     _fake_completed(stdout=set_payload)]) as m:
             result = upsert_todo({"main_id": "dp", "ns": "N"}, "M1", "新标题", "active", None, None, cwd="/tmp")
         self.assertEqual(result.status, "FOUND")
         self.assertEqual(result.id, 7)
+        self.assertIsNone(result.error)
         self.assertEqual(m.call_count, 2)
         set_call_args = m.call_args_list[1][0][0]
         self.assertIn("set", set_call_args)
-        self.assertNotIn("add", set_call_args)
+
+    def test_upsert_todo_found_but_patch_response_missing_stage_not_silently_success(self) -> None:
+        """第 6 轮实测抓到：PATCH 响应缺 stage 字段时，旧逻辑把"缺失"当"None 即放行"
+        宣称成功；缺失与不一致必须同等对待——都不能确认更新已生效。"""
+        list_payload = json.dumps([{"id": 7}])
+        with patch("subprocess.run", side_effect=[_fake_completed(stdout=list_payload),
+                                                     _fake_completed(stdout="{}")]):
+            result = upsert_todo({"main_id": "dp", "ns": "N"}, "M1", "新标题", "active", None, None, cwd="/tmp")
+        self.assertIsNotNone(result.error)
+        self.assertIn("缺 stage", result.error)
 
     def test_upsert_todo_not_found_calls_add(self) -> None:
         with patch("subprocess.run", side_effect=[_fake_completed(stdout="[]"),

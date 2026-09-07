@@ -267,7 +267,11 @@ def upsert_todo(bd, task, title, stage, due, people, cwd=None) -> ProviderResult
             updated = json.loads(r.stdout or "{}")
         except json.JSONDecodeError:
             return ProviderResult(status="FOUND", id=found.id, error="更新响应非法 JSON，未能核实是否生效", retryable=True)
-        if isinstance(updated, dict) and updated.get("stage") not in (None, stage):
+        # stage 键缺失与"值不一致"同等对待：都无法确认更新已生效，不能算成功
+        # （第 6 轮实测：PATCH 返回 {} 时旧逻辑把"缺失"当"None 即放行"，宣称成功）。
+        if not isinstance(updated, dict) or "stage" not in updated:
+            return ProviderResult(status="FOUND", id=found.id, error="更新响应缺 stage 字段，未能核实是否生效", retryable=True)
+        if updated.get("stage") != stage:
             return ProviderResult(
                 status="FOUND", id=found.id,
                 error=f"更新响应 stage={updated.get('stage')!r}，与期望 {stage!r} 不一致", retryable=True,

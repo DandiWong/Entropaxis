@@ -33,24 +33,41 @@ except ImportError:  # 以脚本方式直接运行时 tools/ 自身在 sys.path 
 
 FRONT_MATTER_PATTERN = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
 
-# 单条问题块：从"级别 : X"起，到下一个标题/分隔线/文末为止。冒号前允许空格、
-# 级别词大小写不敏感（第 5 轮外置复核实测抓到 `级别 : Critical` 因冒号前紧邻不容
-# 空格而整块不被识别；自查又发现 `级别: critical` 小写同样会让整块从 _iter_issue_
-# blocks() 里彻底消失——不是"判成 Major/Minor"，是直接不存在，比枚举校验失败更
-# 危险，因为后续任何状态检查都不会触发。这是本文件第三处"正则比真实解析器更
-# 脆弱"的实例，前两处是 schema_version 判别与冒号前空格，已分别修复）。
-# group(1)=块全文，group(2)=级别（原始大小写，供 _iter_issue_blocks 规范化）。
+# 允许取值的唯一机器真源是 schema 顶层 level_enum/status_enum，此处直接读取，不再
+# 在代码里另存一份硬编码——三轮外置复核先后抓到 schema_version 判别、冒号前空格、
+# 级别词大小写三处"正则比统一解析器/契约更脆弱"的漂移（R6-M3 指出旧结构的
+# pattern/enum 从未被本文件读取，等于两份定义各自维护，只会继续分裂）。
+_AUDIT_SCHEMA = vs.load_schema("audit_report")
+LEVEL_ENUM = tuple(_AUDIT_SCHEMA["level_enum"])
+V2_STATUS_ENUM = tuple(_AUDIT_SCHEMA["status_enum"])
+
+# 单条问题块：从"级别 : X"起，到下一个标题/分隔线/文末为止。冒号前允许空格。
+# **只负责定位块边界，不在这一步校验级别取值**——级别是否合法留给下方枚举校验；
+# 此前正则把"定位"和"校验"合并成同一个捕获组，导致非法/缺失级别的问题块从
+# _iter_issue_blocks() 里彻底消失而不是被判定为违规（R6-C3：`级别: Blocker`
+# 或整行删除都会让该块隐身，不产生任何错误）。
+# group(1)=块全文，group(2)=级别原始文本（可能不合法，交枚举校验判定）。
 ISSUE_BLOCK_PATTERN = re.compile(
-    r"(级别\s*[:：]\s*(Critical|Major|Minor).*?)(?=\n#{1,6}\s|\n---|\Z)", re.DOTALL | re.IGNORECASE
+    r"(级别\s*[:：]\s*(\S+).*?)(?=\n#{1,6}\s|\n---|\Z)", re.DOTALL
 )
+# ponytail: 锚点仍是"级别:"这一行本身——若整行被删除（不是留空、不是写错值，而是
+# 整条标注都不存在），本块从锚点扫描的角度就不存在，check_report() 无法区分"这不是
+# 问题块"与"这是被人为抹掉级别的问题块"。改用标题结构重新分段可以堵上这个口子，
+# 但需要能可靠识别"这是问题标题"而不误伤文档里其它 ### 小节，会引入更大的过匹配
+# 面；且这一遗漏在人眼审阅时非常显眼（整条标注消失），不像冒号/大小写变体那样能
+# 以假乱真。层面上仍有 治理指令.md 要求的人工签字兜底，此处不再展开架构重排，
+# 升级路径：若未来出现真实滥用案例，改为按 markdown 标题分段 + 段内字段完整性校验。
 ISSUE_ID_PATTERN = re.compile(r"ID\s*[:：]\s*(\S+)")
 STATUS_VALUE_PATTERN = re.compile(r"状态\s*[:：]\s*(\S+)")
 LEGACY_CLOSED_PATTERN = re.compile(r"状态\s*[:：]\s*(已关闭|closed)", re.IGNORECASE)
-V2_STATUS_ENUM = ("open", "closed", "waived_by_user")
 
 # critical_ack 确认块：### critical_ack <问题ID> 后跟 target_sha256/确认事件/适用范围 三行。
+# ID 允许紧跟一个可选冒号（`### critical_ack C-1:` 与 `### critical_ack: C-1` 两种
+# 常见笔误），捕获后统一去掉首尾冒号，否则会和正文 `ID: C-1` 的纯净值比不上，
+# 把本该通过的确认块误判为"未找到"（R6-m1，过度阻断而非安全绕过，但同样是
+# 契约不一致）。
 ACK_BLOCK_PATTERN = re.compile(
-    r"###\s*critical_ack\s+(\S+)\s*\n(.*?)(?=\n#{1,3}\s|\Z)", re.DOTALL
+    r"###\s*critical_ack\s*[:：]?\s*(\S+?):?\s*\n(.*?)(?=\n#{1,3}\s|\Z)", re.DOTALL
 )
 
 
@@ -83,16 +100,28 @@ def extract_independence(text: str) -> str | None:
     return str(val).strip() if val is not None else None
 
 
+def _normalize_level(raw: str) -> str | None:
+    """大小写不敏感匹配 LEVEL_ENUM，返回规范值；不合法返回 None（由调用方判定违规）。"""
+    for canonical in LEVEL_ENUM:
+        if raw.lower() == canonical.lower():
+            return canonical
+    return None
+
+
 def _iter_issue_blocks(text: str):
-    """逐条产出问题块 (级别, 块全文)；级别规范化为首字母大写（Critical/Major/Minor），
-    与原始大小写无关，配合 ISSUE_BLOCK_PATTERN 的 re.IGNORECASE 使用。"""
+    """逐条产出问题块 (级别原始文本, 块全文)。级别是否合法不在此处判定——ISSUE_BLOCK_
+    PATTERN 只按"级别: <任意非空串>"定位块边界，非法/不规范的级别值原样传出，由
+    调用方用 _normalize_level() 判定（R6-C3 修复：定位与校验解耦）。"""
     for m in ISSUE_BLOCK_PATTERN.finditer(text):
-        yield m.group(2).capitalize(), m.group(1)
+        yield m.group(2), m.group(1)
 
 
 def find_closed_critical_blocks(text: str) -> list[str]:
     """返回正文中已标注关闭（旧契约"已关闭"/"closed"）的 Critical 问题块。"""
-    return [b for level, b in _iter_issue_blocks(text) if level == "Critical" and LEGACY_CLOSED_PATTERN.search(b)]
+    return [
+        b for raw_level, b in _iter_issue_blocks(text)
+        if _normalize_level(raw_level) == "Critical" and LEGACY_CLOSED_PATTERN.search(b)
+    ]
 
 
 def find_ack_blocks(text: str) -> dict[str, dict[str, str]]:
@@ -101,9 +130,9 @@ def find_ack_blocks(text: str) -> dict[str, dict[str, str]]:
     for issue_id, body in ACK_BLOCK_PATTERN.findall(text):
         fields: dict[str, str] = {}
         for key, pattern in (
-            ("target_sha256", r"target_sha256[:：]\s*([0-9a-f]{64})"),
-            ("确认事件", r"确认事件[:：]\s*(\S.*)"),
-            ("适用范围", r"适用范围[:：]\s*(\S.*)"),
+            ("target_sha256", r"target_sha256\s*[:：]\s*([0-9a-f]{64})"),
+            ("确认事件", r"确认事件\s*[:：]\s*(\S.*)"),
+            ("适用范围", r"适用范围\s*[:：]\s*(\S.*)"),
         ):
             m = re.search(pattern, body)
             if m:
@@ -148,22 +177,31 @@ def check_report_v2(text: str) -> list[str]:
     reviewer_mode = fm.get("reviewer_mode")
     target_sha256 = fm.get("target_sha256")
     acks = find_ack_blocks(text)
+    seen_ids: dict[str, int] = {}
 
-    for level, block in _iter_issue_blocks(text):
+    for raw_level, block in _iter_issue_blocks(text):
         id_match = ISSUE_ID_PATTERN.search(block)
         status_match = STATUS_VALUE_PATTERN.search(block)
         # 3) v2 issue_format 声明 id_field/status_field 为必填；此前缺失时直接跳过
         #    该块全部校验（第 5 轮实测：缺 ID 或缺状态行的块可静默通过）。
         if id_match is None:
-            issues.append(f"[{level} 问题块] 缺少可识别的 `ID:` 标注，v2 契约要求每条问题有稳定 ID。")
+            issues.append(f"[{raw_level} 问题块] 缺少可识别的 `ID:` 标注，v2 契约要求每条问题有稳定 ID。")
             continue
         issue_id = id_match.group(1)
+        seen_ids[issue_id] = seen_ids.get(issue_id, 0) + 1
+
+        # 4) 级别枚举强制校验：定位与校验解耦后，非法/缺失级别在此报违规而非静默隐身（R6-C3）。
+        level = _normalize_level(raw_level)
+        if level is None:
+            issues.append(f"[{issue_id}] 级别={raw_level!r} 不在枚举 {LEVEL_ENUM} 内。")
+            continue
+
         if status_match is None:
             issues.append(f"[{issue_id}] 缺少可识别的 `状态:` 标注。")
             continue
         status = status_match.group(1)
 
-        # 4) 状态枚举强制校验：v2 只认 open/closed/waived_by_user，其余（含 challenged）一律违规。
+        # 5) 状态枚举强制校验：v2 只认 open/closed/waived_by_user，其余（含 challenged）一律违规。
         if status not in V2_STATUS_ENUM:
             issues.append(f"[{issue_id}] 状态={status!r} 不在 v2 枚举 {V2_STATUS_ENUM} 内。")
             continue
@@ -187,6 +225,13 @@ def check_report_v2(text: str) -> list[str]:
                     f"[{issue_id}] critical_ack.target_sha256={ack.get('target_sha256')!r} "
                     f"与报告 target_sha256={target_sha256!r} 不一致，复核对象已变化。"
                 )
+
+    # 6) 问题 ID 唯一性：重复 ID 会让一个 critical_ack 确认块同时"覆盖"多条不同问题，
+    #    破坏逐问题人工豁免绑定（R6-C4：两条不同 Critical 共用同一 ID 时，各自都能
+    #    取到同一个确认块而被判定为已豁免）。
+    for dup_id, count in seen_ids.items():
+        if count > 1:
+            issues.append(f"[{dup_id}] 问题 ID 在本报告内重复出现 {count} 次；事件内 ID 必须唯一。")
     return issues
 
 
@@ -213,10 +258,16 @@ def check_candidate_commit(candidate_text: str, commit_path: Path) -> list[str]:
     先跑 check_report()（含完整 Front Matter 校验），字段本身缺失/非法已在那一步拦截；
     这里只做 check_report() 管不到的"文件系统事实校验"——target_path 是否真实存在、
     其内容哈希是否与声明一致。
+
+    **本接口只接受 v2 候选**：legacy（无 schema_version 键）候选只走 independence
+    的粗粒度检查，没有指纹绑定与完整字段校验，若放行会让"新写入的关闭动作"伪装成
+    旧格式绕过 v2 门禁（R6-C1：一份不含 schema_version、伪造 independence 的候选能
+    直接通过原子写入）。旧报告仍可通过只读的 check_report()/main() 单路径模式核验，
+    只是不能再经这个"拟写入关闭状态"的原子入口。
     """
-    issues = check_report(candidate_text)
     if not is_v2(candidate_text):
-        return issues
+        return ["--candidate/--commit 原子接口只接受 schema_version>=2 的候选；legacy 格式不得用于写入新的关闭/豁免状态。"]
+    issues = check_report(candidate_text)
     fm = parse_front_matter(candidate_text)
     target_path, target_sha256 = fm.get("target_path"), fm.get("target_sha256")
     if not target_path or not target_sha256:

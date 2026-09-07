@@ -584,16 +584,20 @@ CREDENTIAL_KEY_MARKERS = ("token", "password", "secret", "apikey", "api_key", "a
 # 未命中不代表安全，只代表本检查没找到。
 
 
-def _iter_leaves(value, key=None):
-    """递归产出 (字段名, 字符串叶子值)；字段名用于命中 CREDENTIAL_KEY_MARKERS。"""
-    if isinstance(value, str):
-        yield key, value
-    elif isinstance(value, dict):
+def _iter_nodes(value, path=()):
+    """递归产出 (完整祖先字段名路径, 节点值)，覆盖 dict/list 的每一层——不只是字符串
+    叶子。此前只传递"当前一层"的字段名，递归下探一层就把父字段名覆盖丢失：
+    `{"token": {"value": "abc"}}` 会被看成字段名 "value"（无凭证特征）+ 值
+    "abc"（也无凭证特征），"token" 这个真正暴露意图的字段名从未被检查过
+    （第 6 轮实测抓到，R6-M2）。list 不增加路径段（列表项和其所属字段同属一路径）。
+    """
+    yield path, value
+    if isinstance(value, dict):
         for k, v in value.items():
-            yield from _iter_leaves(v, key=k)
+            yield from _iter_nodes(v, path + (k,))
     elif isinstance(value, list):
         for v in value:
-            yield from _iter_leaves(v, key=key)
+            yield from _iter_nodes(v, path)
 
 
 def check_board_config_no_credentials(root: Path) -> list[str]:
@@ -601,9 +605,9 @@ def check_board_config_no_credentials(root: Path) -> list[str]:
 
     board_config.json 的 providers[*] 会被拼进 subprocess 直接执行或读取；任何字段
     （不限于 cli 数组）出现看起来像凭证参数的字符串，或字段名本身就是凭证类命名
-    （token/password/secret/headers 等，即便值本身不含标志性子串），都等于把凭证
-    写进磁盘配置明文，与凭证只经无回显交互录入、只存 .data/credentials/ 的口径冲突，
-    一律阻断。JSON 解析失败按 fail-closed 处理：无法确认干净就不放行，不静默通过。
+    （token/password/secret/headers 等，即便值本身不含标志性子串、不是字符串类型），
+    都等于把凭证写进磁盘配置明文，与凭证只经无回显交互录入、只存 .data/credentials/
+    的口径冲突，一律阻断。JSON 解析失败按 fail-closed 处理：无法确认干净就不放行。
     """
     path = root / ".data" / "templates" / "board_config.json"
     if not path.is_file():
@@ -614,16 +618,21 @@ def check_board_config_no_credentials(root: Path) -> list[str]:
         return [f"[board_config.json 无法解析] {path}: {exc}；解析失败时不放行，需人工核实内容后再体检。"]
     issues = []
     for role, spec in (data.get("providers") or {}).items():
-        for field_name, s in _iter_leaves(spec):
-            low = s.lower()
-            key_hit = field_name and any(marker in field_name.lower() for marker in CREDENTIAL_KEY_MARKERS)
-            value_hit = any(marker in low for marker in CREDENTIAL_VALUE_MARKERS)
-            if key_hit or value_hit:
-                reason = f"字段名 {field_name!r} 疑似凭证字段" if key_hit else f"值含疑似凭证参数 {s!r}"
-                issues.append(
-                    f"[Provider 凭证泄漏] .data/templates/board_config.json providers.{role} "
-                    f"{reason}；凭证只能经无回显交互录入并存 .data/credentials/，不得写入此文件。"
-                )
+        for field_path, node in _iter_nodes(spec):
+            # 只在"刚引入该字段名"这一层判定 key_hit（看最后一段），不对每层深度
+            # 重复报告同一个祖先字段——既覆盖任意嵌套深度，又不产生一堆重复告警。
+            key_hit = bool(field_path) and any(
+                marker in field_path[-1].lower() for marker in CREDENTIAL_KEY_MARKERS
+            )
+            value_hit = isinstance(node, str) and any(marker in node.lower() for marker in CREDENTIAL_VALUE_MARKERS)
+            if not (key_hit or value_hit):
+                continue
+            field_name = ".".join(field_path) if field_path else "<root>"
+            reason = f"字段名 {field_name!r} 疑似凭证字段" if key_hit else f"字段 {field_name!r} 值含疑似凭证参数 {node!r}"
+            issues.append(
+                f"[Provider 凭证泄漏] .data/templates/board_config.json providers.{role} "
+                f"{reason}；凭证只能经无回显交互录入并存 .data/credentials/，不得写入此文件。"
+            )
     return issues
 
 

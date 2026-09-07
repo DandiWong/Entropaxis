@@ -50,9 +50,14 @@ def validate(data, schema: dict, path: str = "$") -> list[str]:
         if py and (not isinstance(data, py) or (expected in ("integer", "number") and isinstance(data, bool))):
             return [f"{path}: 期望 {expected}，实得 {type(data).__name__}"]
 
+    # enum 对任意可比较类型生效（不限字符串）：此前只在 isinstance(data, str) 分支里
+    # 检查，导致 {"type": "integer", "enum": [2]} 对整数值形同虚设——schema_version: 3
+    # 这类非法整数会先通过上面的 type 检查（int 满足 type: integer），再因 enum 检查被
+    # 跳过而彻底放行（第 6 轮外置复核实测抓到，R6-C2）。
+    if "enum" in schema and data not in schema["enum"]:
+        errs.append(f"{path}: 取值 {data!r} 不在允许集 {schema['enum']}")
+
     if isinstance(data, str):
-        if "enum" in schema and data not in schema["enum"]:
-            errs.append(f"{path}: 取值 {data!r} 不在允许集 {schema['enum']}")
         if "pattern" in schema and not re.search(schema["pattern"], data):
             errs.append(f"{path}: 取值 {data!r} 不匹配 /{schema['pattern']}/")
         if "minLength" in schema and len(data) < schema["minLength"]:

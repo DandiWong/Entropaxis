@@ -3,7 +3,7 @@
   "title": "audit_report",
   "target": "05_审计报告.md / Audit_<ID>_主题方案审计.md",
   "type": "object",
-  "required": ["front_matter", "issue_format"],
+  "required": ["front_matter", "issue_format", "level_enum", "status_enum"],
   "additionalProperties": false,
   "properties": {
     "front_matter": {
@@ -18,9 +18,9 @@
         "author": { "type": "string", "enum": ["Reviewer"] },
         "status": { "type": "string", "enum": ["active", "completed"] },
         "schema_version": {
-          "$comment": "新旧判别的唯一依据：本次契约为 2。不靠日期、不靠字段共现推断。",
+          "$comment": "新旧判别的唯一依据，取值仅 2（当前唯一在用版本）。此前用 minimum:2 声明，实际却只在恰好等于 2 时触发 conditional_required 的必填字段——schema_version:3 之类的值会通过类型/范围检查但绕开必填校验（第 6 轮外置复核实测抓到，R6-C2）。改用 enum 强制单值，未来新增版本时同步扩展 enum 与 conditional_required，不再允许'通过范围检查但未接线必填规则'的中间态。",
           "type": "integer",
-          "minimum": 2
+          "enum": [2]
         },
         "reviewer_mode": {
           "type": "string",
@@ -60,48 +60,21 @@
       ]
     },
     "issue_format": {
-      "$comment": "正文每条问题的行内标注格式，供 check_audit_gate.py 机械识别。中英文冒号均可。",
+      "$comment": "正文每条问题的行内标注格式说明（人读文档，冒号前可有空格、级别词大小写不敏感，实际运行时正则见 check_audit_gate.py）。允许取值的唯一机器真源是本文件顶层 level_enum/status_enum——check_audit_gate.py 直接读取这两个数组构建校验逻辑，不再在代码里另存一份硬编码枚举（第 6 轮外置复核指出旧结构的 pattern/enum 从未被检查器读取，等于两份独立维护、只会继续漂移，R6-M3）。ID 无固定格式，仅要求事件内稳定、跨轮不复用、不重编号。",
       "type": "object",
       "required": ["level_field", "id_field", "status_field"],
       "additionalProperties": false,
       "properties": {
-        "level_field": {
-          "type": "object",
-          "required": ["pattern", "enum"],
-          "additionalProperties": false,
-          "properties": {
-            "pattern": { "type": "string", "enum": ["级别[:：]\\s*(Critical|Major|Minor)"] },
-            "enum": {
-              "type": "array",
-              "items": { "type": "string", "enum": ["Critical", "Major", "Minor"] }
-            }
-          }
-        },
-        "id_field": {
-          "$comment": "事件内稳定问题 ID（如 C-1、N-M2），跨轮不复用、不重编号。",
-          "type": "object",
-          "required": ["pattern"],
-          "additionalProperties": false,
-          "properties": {
-            "pattern": { "type": "string", "enum": ["ID[:：]\\s*(\\S+)"] }
-          }
-        },
-        "status_field": {
-          "$comment": "取代旧的「待处理/已关闭」二值。waived_by_user 需另配正文 critical_ack 确认块（问题ID/target_sha256/确认事件/适用范围四项齐备），该结构完整性同样由 check_audit_gate.py 校验，检查器只能验证声明完整与指纹匹配，不能验证确认动作真实发生。",
-          "type": "object",
-          "required": ["pattern", "enum"],
-          "additionalProperties": false,
-          "properties": {
-            "pattern": { "type": "string", "enum": ["状态[:：]\\s*(open|closed|waived_by_user)"] },
-            "enum": {
-              "type": "array",
-              "items": { "type": "string", "enum": ["open", "closed", "waived_by_user"] }
-            }
-          }
-        }
+        "level_field": { "type": "string" },
+        "id_field": { "type": "string" },
+        "status_field": { "type": "string" }
       }
-    }
+    },
+    "level_enum": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "status_enum": { "type": "array", "minItems": 1, "items": { "type": "string" } }
   },
+  "level_enum": ["Critical", "Major", "Minor"],
+  "status_enum": ["open", "closed", "waived_by_user"],
   "instance": {
     "$comment": "本 schema 描述的规范实例，同时作为 validate_schema.py 的自检样例。",
     "front_matter": {
@@ -117,17 +90,11 @@
       "target_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
     },
     "issue_format": {
-      "level_field": {
-        "pattern": "级别[:：]\\s*(Critical|Major|Minor)",
-        "enum": ["Critical", "Major", "Minor"]
-      },
-      "id_field": {
-        "pattern": "ID[:：]\\s*(\\S+)"
-      },
-      "status_field": {
-        "pattern": "状态[:：]\\s*(open|closed|waived_by_user)",
-        "enum": ["open", "closed", "waived_by_user"]
-      }
-    }
+      "level_field": "级别: <Critical|Major|Minor>（冒号前可留空格，大小写不敏感）",
+      "id_field": "ID: <事件内稳定问题ID>",
+      "status_field": "状态: <open|closed|waived_by_user>（冒号前可留空格）"
+    },
+    "level_enum": ["Critical", "Major", "Minor"],
+    "status_enum": ["open", "closed", "waived_by_user"]
   }
 }

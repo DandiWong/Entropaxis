@@ -248,6 +248,59 @@ class CheckAuditGateV2FailOpenRegressionTests(unittest.TestCase):
         self.assertTrue(any("缺少可识别的 `状态:`" in i for i in issues))
 
 
+class CheckAuditGateRound6RegressionTests(unittest.TestCase):
+    """第 6 轮外置复核系统性排查发现的 4 Critical + 1 Minor，逐条锁定。"""
+
+    def test_r6c1_legacy_candidate_rejected_by_atomic_interface(self) -> None:
+        """legacy（无 schema_version）候选不得经原子接口写入，即便伪造了 independence。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "02_方案.md"
+            target.write_text("x", encoding="utf-8")
+            commit_path = Path(tmp) / "05_审计报告.md"
+            legacy_bad = "---\nindependence: external: fake\n---\n### 问题 1\n级别: Critical\n状态: 已关闭\n"
+            issues = check_candidate_commit(legacy_bad, commit_path)
+            self.assertTrue(issues)
+            self.assertFalse(commit_path.exists())
+
+    def test_r6c2_schema_version_above_two_still_requires_v2_fields(self) -> None:
+        """schema_version: 3 曾经绕过 conditional_required（when 精确匹配 2），
+        改为 enum:[2] 后任何非 2 值本身就不合法。"""
+        text = ("---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+                "schema_version: 3\nreviewer_mode: external\n---\n"
+                "### 问题 1\n级别: Critical\nID: C-1\n状态: closed\n")
+        issues = check_report(text)
+        self.assertTrue(any("schema_version" in i for i in issues))
+
+    def test_r6c3_invalid_level_value_reported_not_invisible(self) -> None:
+        text = V2_EXTERNAL_CLOSED_CRITICAL.format(sha=SHA_A).replace("级别: Critical", "级别: Blocker")
+        issues = check_report(text)
+        self.assertTrue(any("级别='Blocker'" in i or "级别=\"Blocker\"" in i for i in issues))
+
+    def test_r6c4_duplicate_issue_id_blocked(self) -> None:
+        """重复 ID 会让一份 critical_ack 同时"覆盖"多条不同问题，破坏逐问题豁免绑定。"""
+        text = (
+            "---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+            "schema_version: 2\nreviewer_mode: session\nfallback_reason: not_configured\n"
+            "reviewer_ref: session\ntarget_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n---\n"
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: waived_by_user\n\n"
+            "### 问题 2\n级别: Critical\nID: C-1\n状态: waived_by_user\n\n"
+            "### critical_ack C-1\n- target_sha256: " + SHA_A + "\n- 确认事件: x\n- 适用范围: x\n"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("重复出现" in i for i in issues))
+
+    def test_r6m1_ack_heading_colon_variant_still_matches(self) -> None:
+        """`### critical_ack: C-1`（冒号在前）不应被误判为"未找到确认块"。"""
+        text = (
+            "---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+            "schema_version: 2\nreviewer_mode: session\nfallback_reason: not_configured\n"
+            "reviewer_ref: session\ntarget_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n---\n"
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: waived_by_user\n\n"
+            "### critical_ack: C-1\n- target_sha256: " + SHA_A + "\n- 确认事件: x\n- 适用范围: x\n"
+        )
+        self.assertEqual(check_report(text), [])
+
+
 class CheckAuditGateAtomicTests(unittest.TestCase):
     def test_candidate_commit_rejects_target_hash_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -66,6 +66,33 @@ class BoardConfigCredentialLintTests(unittest.TestCase):
             self.assertEqual(len(issues), 1)
             self.assertIn("字段名", issues[0])
 
+    def test_token_field_with_nested_object_value_still_flagged(self) -> None:
+        """第 6 轮实测抓到：{"token": {"value": "abc"}} 递归时父字段名 token 曾被子键
+        value 覆盖丢失，两层都查不出凭证特征。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_board_config(root, {"main": {"cli": ["dash.py"], "token": {"value": "abc123"}}})
+            issues = check_board_config_no_credentials(root)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("token", issues[0])
+
+    def test_token_field_with_non_string_value_still_flagged(self) -> None:
+        """{"token": 123456}：值不是字符串，此前完全不产出叶子、不被检查。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_board_config(root, {"main": {"cli": ["dash.py"], "token": 123456}})
+            issues = check_board_config_no_credentials(root)
+            self.assertEqual(len(issues), 1)
+
+    def test_headers_with_custom_auth_key_not_over_flagged(self) -> None:
+        """headers 本身命中即可报一次；子键（如 X-Auth）不需要单独再命中，
+        不应产生重复告警。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_board_config(root, {"main": {"cli": ["dash.py"], "headers": {"X-Auth": "abc123"}}})
+            issues = check_board_config_no_credentials(root)
+            self.assertEqual(len(issues), 1)
+
     def test_nested_headers_authorization_field_flagged(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
