@@ -570,15 +570,35 @@ def check_skill_symlink_health(root: Path) -> list[str]:
     return issues
 
 
-CREDENTIAL_CLI_FLAGS = ("--token", "--password", "--secret", "--api-key", "--apikey")
+CREDENTIAL_MARKERS = (
+    "--token", "--password", "--secret", "--api-key", "--apikey", "--access-token",
+    "-t ", "token=", "apikey=", "api_key=", "secret=", "password=",
+)
+# ponytail: 子串/前缀匹配覆盖常见 CLI 凭证写法；无法穷尽任意 shell 拼接形态
+# （如包进 `sh -c "cmd --token x"` 的单个字符串），那类需要真正的 shell 语法解析，
+# 超出本检查的确定性范围——命中即阻断，未命中不代表安全，只代表本检查没找到。
+
+
+def _iter_strings(value):
+    """递归产出 dict/list 结构中的所有字符串叶子值。"""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _iter_strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _iter_strings(v)
 
 
 def check_board_config_no_credentials(root: Path) -> list[str]:
     """看板联动.md「Provider 四态结果契约」前置约束：凭证不进配置正文。
 
-    board_config.json 的 providers[*].cli 是要被 subprocess 直接执行的命令数组；
-    出现 --token 等凭证参数即等于把 Token 写进磁盘配置明文，与凭证只经无回显交互
-    录入、只存 .data/credentials/ 的口径冲突，一律阻断。
+    board_config.json 的 providers[*] 会被拼进 subprocess 直接执行或读取；任何字段
+    （不限于 cli 数组）出现看起来像凭证参数的字符串，都等于把 Token 写进磁盘配置
+    明文，与凭证只经无回显交互录入、只存 .data/credentials/ 的口径冲突，一律阻断。
+    扫描范围从 `cli` 单字段扩大到整个 provider 声明，防止把凭证换个字段名（token/env/
+    headers）就绕过检查（第 4 轮外置复核实测抓到该绕过面）。
     """
     path = root / ".data" / "templates" / "board_config.json"
     if not path.is_file():
@@ -589,14 +609,12 @@ def check_board_config_no_credentials(root: Path) -> list[str]:
         return []
     issues = []
     for role, spec in (data.get("providers") or {}).items():
-        cli = spec.get("cli") if isinstance(spec, dict) else None
-        if not isinstance(cli, list):
-            continue
-        for token in cli:
-            if any(str(token).lower().startswith(flag) for flag in CREDENTIAL_CLI_FLAGS):
+        for s in _iter_strings(spec):
+            low = s.lower()
+            if any(marker in low for marker in CREDENTIAL_MARKERS):
                 issues.append(
-                    f"[Provider 凭证泄漏] .data/templates/board_config.json providers.{role}.cli "
-                    f"含凭证参数 {token!r}；凭证只能经无回显交互录入并存 .data/credentials/，不得写入此文件。"
+                    f"[Provider 凭证泄漏] .data/templates/board_config.json providers.{role} "
+                    f"含疑似凭证参数 {s!r}；凭证只能经无回显交互录入并存 .data/credentials/，不得写入此文件。"
                 )
     return issues
 

@@ -113,28 +113,42 @@ def load_board(project_dir):
     }
 
 
-def _run_role_raw(role, args, cwd, timeout=60):
-    """按角色执行已声明 Provider CLI，返回原始 CompletedProcess 或 None（未声明/异常）。
+class ProviderUnavailable(Exception):
+    """_run_role_raw 无法拿到 CompletedProcess 时抛出，携带四态契约要求的 status/error。
 
-    退出码/异常到状态的映射（见 看板联动.md「Provider 四态结果契约」）由调用方
-    （find_issue/find_todo_by_source_ref/upsert_*）翻译为 ProviderResult：
-      未声明 Provider 或 OSError/TimeoutExpired → 此处返回 None，调用方归 FAILED；
-      退出码非 0 → FAILED；退出码 0 但非法 JSON → FAILED；退出码 0 且解析成功 → FOUND/NOT_FOUND。
+    区分 OSError（CLI 不存在/不可执行 → FAILED，不可重试）与 TimeoutExpired
+    （UNKNOWN，可重试）；此前两者被一并折叠成 None，调用方无从区分（第 4 轮外置
+    复核实测：超时被错误归为 FAILED，UNKNOWN 状态从未被任何调用方观测到过）。
     """
+
+    def __init__(self, status: str, error: str, retryable: bool = False):
+        super().__init__(error)
+        self.status = status
+        self.error = error
+        self.retryable = retryable
+
+
+def _run_role_raw(role, args, cwd, timeout=60):
+    """按角色执行已声明 Provider CLI，返回原始 CompletedProcess；不可用时抛 ProviderUnavailable。"""
     cli = _provider_cli(role)
     if not cli:
-        return None
+        raise ProviderUnavailable("FAILED", f"Provider 未声明: {role}")
     try:
         return subprocess.run([*cli, *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    except OSError as exc:
+        raise ProviderUnavailable("FAILED", str(exc)) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ProviderUnavailable("UNKNOWN", str(exc), retryable=True) from exc
+
+
 
 
 def find_issue(mp, task, cwd) -> ProviderResult:
     """按稳定回读键（Dev 端：issue 标题前缀 [<TaskID>]）查找，遍历 cursor 直到耗尽。"""
-    r = _run_role_raw("dev", ["issue", "list", "--project", mp, "--output", "json"], cwd, 30)
-    if r is None:
-        return ProviderResult(status="FAILED", error="dev Provider 未声明或不可执行", retryable=False)
+    try:
+        r = _run_role_raw("dev", ["issue", "list", "--project", mp, "--output", "json"], cwd, 30)
+    except ProviderUnavailable as exc:
+        return ProviderResult(status=exc.status, error=exc.error, retryable=exc.retryable)
     if r.returncode != 0:
         return ProviderResult(status="FAILED", error=(r.stderr or "").strip(), retryable=False)
     try:
@@ -157,6 +171,7 @@ def find_issue(mp, task, cwd) -> ProviderResult:
 
 
 def upsert_dev(bd, project_dir, task, title, mstatus, spec):
+    """四态严格分支：FAILED/UNKNOWN 均不创建；FOUND 走更新；只有 NOT_FOUND 才创建一次。"""
     mp = bd.get("dev_id")
     if not mp:
         return None, ProviderResult(status="FAILED", error="dev_id 未配置", retryable=False)
@@ -167,31 +182,52 @@ def upsert_dev(bd, project_dir, task, title, mstatus, spec):
             raise SystemExit(f"spec 不存在：{Path(project_dir) / spec}")
         args += ["--description-file", spec]
     found = find_issue(mp, task, cwd)
-    if found.status == "FAILED":
-        return None, found  # 查询失败不得进入创建分支
+    if found.status in ("FAILED", "UNKNOWN"):
+        return None, found  # 查询失败或结果未知：不得进入创建分支
+
     if found.status == "FOUND":
         iid = found.id
-        r = _run_role_raw("dev", ["issue", "update", iid, *args], cwd, 60)
-        if r is None or r.returncode != 0:
-            return iid, ProviderResult(status="FAILED", error="更新失败", retryable=True)
+        try:
+            r = _run_role_raw("dev", ["issue", "update", iid, *args], cwd, 60)
+        except ProviderUnavailable as exc:
+            return iid, ProviderResult(status=exc.status, id=iid, error=exc.error, retryable=exc.retryable)
+        if r.returncode != 0:
+            return iid, ProviderResult(status="FAILED", id=iid, error="更新失败", retryable=True)
     else:  # NOT_FOUND：唯一允许创建的状态
-        r = _run_role_raw("dev", ["issue", "create", "--project", mp, *args, "--output", "json"], cwd, 60)
-        if r is None or r.returncode != 0 or not r.stdout:
+        try:
+            r = _run_role_raw("dev", ["issue", "create", "--project", mp, *args, "--output", "json"], cwd, 60)
+        except ProviderUnavailable as exc:
+            return None, ProviderResult(status=exc.status, error=exc.error, retryable=exc.retryable)
+        if r.returncode != 0 or not r.stdout:
             return None, ProviderResult(status="FAILED", error="创建失败", retryable=True)
         try:
             iid = json.loads(r.stdout).get("id")
         except json.JSONDecodeError:
             return None, ProviderResult(status="FAILED", error="创建响应非法 JSON", retryable=False)
-    if iid:
-        _run_role_raw("dev", ["issue", "status", iid, mstatus], cwd)
-    return iid, ProviderResult(status="FOUND" if iid else "UNKNOWN", id=iid)
+
+    if not iid:
+        return None, ProviderResult(status="UNKNOWN", error="未取得 issue id")
+    try:
+        status_r = _run_role_raw("dev", ["issue", "status", iid, mstatus], cwd)
+    except ProviderUnavailable as exc:
+        # 状态置位失败不代表整体失败（issue 已存在/已创建），但不得静默声称完全成功。
+        return iid, ProviderResult(status="FOUND", id=iid, error=f"状态置位失败: {exc.error}", retryable=True)
+    if status_r.returncode != 0:
+        return iid, ProviderResult(status="FOUND", id=iid, error="状态置位失败", retryable=True)
+    return iid, ProviderResult(status="FOUND", id=iid)
 
 
-def find_todo_by_source_ref(dp, source_ref, cwd) -> ProviderResult:
-    """按稳定回读键（Main 端：source_ref）查找。"""
-    r = _run_role_raw("main", ["todo", "list", "--project", dp, "--source-ref", source_ref], cwd, 30)
-    if r is None:
-        return ProviderResult(status="FAILED", error="main Provider 未声明或不可执行", retryable=False)
+def find_todo_by_source_ref(source_ref, cwd) -> ProviderResult:
+    """按稳定回读键（Main 端：source_ref）查找。
+
+    dash.py `todo list` 无 `--project` 参数（客户端按 source_ref 过滤已含项目信息，
+    见 dash.py:todo list --source-ref），传入会导致 argparse 报 unrecognized arguments
+    直接非零退出——此前误传该参数，Main 端查询恒为 FAILED（第 4 轮外置复核实测抓到）。
+    """
+    try:
+        r = _run_role_raw("main", ["todo", "list", "--source-ref", source_ref], cwd, 30)
+    except ProviderUnavailable as exc:
+        return ProviderResult(status=exc.status, error=exc.error, retryable=exc.retryable)
     if r.returncode != 0:
         return ProviderResult(status="FAILED", error=(r.stderr or "").strip(), retryable=False)
     try:
@@ -204,16 +240,29 @@ def find_todo_by_source_ref(dp, source_ref, cwd) -> ProviderResult:
     return ProviderResult(status="NOT_FOUND")
 
 
-def upsert_todo(bd, task, title, stage, due, people, cwd=None):
+def upsert_todo(bd, task, title, stage, due, people, cwd=None) -> ProviderResult:
+    """四态严格分支：FAILED/UNKNOWN 均不创建；FOUND 走更新；只有 NOT_FOUND 才创建一次。"""
     dp = bd.get("main_id")
     if not dp or stage is None:
-        return None
+        return ProviderResult(status="FAILED", error="main_id 或 stage 未配置", retryable=False)
     source_ref = f'{dp}:{bd["ns"]}:{task}'
-    found = find_todo_by_source_ref(dp, source_ref, cwd)
-    if found.status == "FAILED":
-        return None  # 查询失败不创建
+    found = find_todo_by_source_ref(source_ref, cwd)
+    if found.status in ("FAILED", "UNKNOWN"):
+        return found  # 查询失败或结果未知：不创建，交调用方按状态回读/上报
     if found.status == "FOUND":
-        return found.id  # 已存在：回读即视为完成，不重复创建
+        set_args = ["todo", "set", str(found.id), "--content", f"[{task}] {title}", "--stage", stage]
+        if due:
+            set_args += ["--due", due]
+        if people:
+            set_args += ["--people", people]
+        try:
+            r = _run_role_raw("main", set_args, cwd, 30)
+        except ProviderUnavailable as exc:
+            return ProviderResult(status=exc.status, id=found.id, error=exc.error, retryable=exc.retryable)
+        if r.returncode != 0:
+            return ProviderResult(status="FAILED", id=found.id, error="更新失败", retryable=True)
+        return ProviderResult(status="FOUND", id=found.id)
+    # NOT_FOUND：唯一允许创建的状态
     args = [
         "todo", "add", "--project", dp, "--content", f"[{task}] {title}",
         "--stage", stage, "--source-ref", source_ref,
@@ -222,13 +271,16 @@ def upsert_todo(bd, task, title, stage, due, people, cwd=None):
         args += ["--due", due]
     if people:
         args += ["--people", people]
-    r = _run_role_raw("main", args, cwd, 30)
-    if r is None or r.returncode != 0 or not r.stdout:
-        return None
     try:
-        return json.loads(r.stdout).get("id")
+        r = _run_role_raw("main", args, cwd, 30)
+    except ProviderUnavailable as exc:
+        return ProviderResult(status=exc.status, error=exc.error, retryable=exc.retryable)
+    if r.returncode != 0 or not r.stdout:
+        return ProviderResult(status="FAILED", error="创建失败", retryable=True)
+    try:
+        return ProviderResult(status="FOUND", id=json.loads(r.stdout).get("id"))
     except json.JSONDecodeError:
-        return None
+        return ProviderResult(status="FAILED", error="创建响应非法 JSON", retryable=False)
 
 
 def sync_one(bd, project_dir, row):
@@ -241,9 +293,10 @@ def sync_one(bd, project_dir, row):
     status = norm_status(row.get("status", "plan"))
     mstatus, stage = STATUS_MAP[status]
     iid, dev_result = upsert_dev(bd, project_dir, task, title, mstatus, row.get("spec"))
-    tid = upsert_todo(bd, task, title, stage, row.get("due"), row.get("people"), cwd=str(project_dir))
-    dev_repr = (iid or "")[:8] if dev_result.status != "FAILED" else f"FAILED({dev_result.error})"
-    print(f"{task}\tdev={dev_repr}\tmain={tid or '-'}\tstatus={status}")
+    main_result = upsert_todo(bd, task, title, stage, row.get("due"), row.get("people"), cwd=str(project_dir))
+    dev_repr = (iid or "")[:8] if dev_result.status == "FOUND" else f"{dev_result.status}({dev_result.error})"
+    main_repr = main_result.id if main_result.status == "FOUND" else f"{main_result.status}({main_result.error})"
+    print(f"{task}\tdev={dev_repr}\tmain={main_repr}\tstatus={status}")
 
 
 def selftest():

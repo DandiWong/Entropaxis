@@ -7,8 +7,9 @@
   "additionalProperties": false,
   "properties": {
     "front_matter": {
+      "$comment": "required 只放老/新报告共有的基线字段；v2 专属字段放 conditional_required（when schema_version==2），否则 schema_version 缺失的历史报告一律校验失败——这正是第 4 轮审计实测抓到的回归（validate_schema.py 对现存 05_审计报告.md 报错缺 5 个 v2 字段）。",
       "type": "object",
-      "required": ["type", "topic", "date", "author", "status", "schema_version", "reviewer_mode", "reviewer_ref", "target_path", "target_sha256"],
+      "required": ["type", "topic", "date", "author", "status"],
       "additionalProperties": true,
       "properties": {
         "type": { "type": "string", "enum": ["Audit"] },
@@ -46,6 +47,11 @@
         }
       },
       "conditional_required": [
+        {
+          "when": { "schema_version": 2 },
+          "require": ["reviewer_mode", "reviewer_ref", "target_path", "target_sha256"],
+          "message": "schema_version 2 起，reviewer_mode/reviewer_ref/target_path/target_sha256 为必填"
+        },
         {
           "when": { "reviewer_mode": "session" },
           "require": ["fallback_reason"],

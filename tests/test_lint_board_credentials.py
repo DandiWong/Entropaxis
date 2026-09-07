@@ -33,6 +33,30 @@ class BoardConfigCredentialLintTests(unittest.TestCase):
             self.assertEqual(len(issues), 1)
             self.assertIn("凭证泄漏", issues[0])
 
+    def test_credential_in_non_cli_field_is_flagged(self) -> None:
+        """绕过面 1：把 Token 换个字段名（非 cli 数组）不能逃过检查。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_board_config(root, {"main": {"cli": ["dash.py"], "token": "abc123-token=xyz"}})
+            issues = check_board_config_no_credentials(root)
+            self.assertEqual(len(issues), 1)
+
+    def test_credential_embedded_in_shell_string_is_flagged(self) -> None:
+        """绕过面 2：整段拼进 shell -c 字符串也要能命中子串匹配。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_board_config(root, {"main": {"cli": ["sh", "-c", "dash.py --token secret"]}})
+            issues = check_board_config_no_credentials(root)
+            self.assertEqual(len(issues), 1)
+
+    def test_bare_short_flag_is_flagged(self) -> None:
+        """绕过面 3：无长选项前缀、用 -t 空格值的裸凭证参数。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_board_config(root, {"main": {"cli": ["dash.py", "-t secret"]}})
+            issues = check_board_config_no_credentials(root)
+            self.assertEqual(len(issues), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

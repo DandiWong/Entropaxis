@@ -15,6 +15,7 @@ from tools.sync_board import (
     load_providers,
     norm_status,
     upsert_dev,
+    upsert_todo,
 )
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent
@@ -119,10 +120,11 @@ class ProviderFourStateTests(unittest.TestCase):
         self.assertEqual(result.status, "FAILED")
 
     def test_find_issue_unknown_on_timeout(self) -> None:
+        """超时须映射为 UNKNOWN（可重试）而非 FAILED——此前两者被一并吞掉，四态形同虚设。"""
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="x", timeout=30)):
-            # find_issue 内部走 _run_role_raw，超时被其吞掉返回 None → FAILED（查询侧一律不重试创建）
             result = find_issue("proj", "M1", "/tmp")
-        self.assertEqual(result.status, "FAILED")
+        self.assertEqual(result.status, "UNKNOWN")
+        self.assertTrue(result.retryable)
 
     def test_upsert_dev_failed_query_does_not_create(self) -> None:
         with patch("subprocess.run", return_value=_fake_completed(returncode=1, stderr="boom")) as m:
@@ -153,11 +155,55 @@ class ProviderFourStateTests(unittest.TestCase):
         self.assertEqual(result.status, "FOUND")
         self.assertEqual(m.call_count, 3)  # list（命中） → update → status，不含 create
 
+    def test_upsert_dev_unknown_query_does_not_create(self) -> None:
+        """UNKNOWN（超时）不得进入创建分支——此前 else 分支会把它当 NOT_FOUND 误创建。"""
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="x", timeout=30)) as m:
+            iid, result = upsert_dev({"dev_id": "proj"}, "/tmp", "M1", "标题", "todo", None)
+        self.assertIsNone(iid)
+        self.assertEqual(result.status, "UNKNOWN")
+        self.assertEqual(m.call_count, 1)  # 只查询一次，未触发创建调用
+
+    def test_upsert_todo_found_calls_set_not_add(self) -> None:
+        """FOUND 分支必须真的发一次更新调用，不能只回读 ID 就当完成。"""
+        list_payload = json.dumps([{"id": 7}])
+        with patch("subprocess.run", side_effect=[_fake_completed(stdout=list_payload),
+                                                     _fake_completed(stdout="{}")]) as m:
+            result = upsert_todo({"main_id": "dp", "ns": "N"}, "M1", "新标题", "active", None, None, cwd="/tmp")
+        self.assertEqual(result.status, "FOUND")
+        self.assertEqual(result.id, 7)
+        self.assertEqual(m.call_count, 2)
+        set_call_args = m.call_args_list[1][0][0]
+        self.assertIn("set", set_call_args)
+        self.assertNotIn("add", set_call_args)
+
+    def test_upsert_todo_not_found_calls_add(self) -> None:
+        with patch("subprocess.run", side_effect=[_fake_completed(stdout="[]"),
+                                                     _fake_completed(stdout=json.dumps({"id": 9}))]) as m:
+            result = upsert_todo({"main_id": "dp", "ns": "N"}, "M1", "标题", "active", None, None, cwd="/tmp")
+        self.assertEqual(result.status, "FOUND")
+        self.assertEqual(result.id, 9)
+        add_call_args = m.call_args_list[1][0][0]
+        self.assertIn("add", add_call_args)
+
+    def test_upsert_todo_unknown_query_does_not_create(self) -> None:
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="x", timeout=30)) as m:
+            result = upsert_todo({"main_id": "dp", "ns": "N"}, "M1", "标题", "active", None, None, cwd="/tmp")
+        self.assertEqual(result.status, "UNKNOWN")
+        self.assertEqual(m.call_count, 1)
+
     def test_find_todo_by_source_ref_found_and_not_found(self) -> None:
         with patch("subprocess.run", return_value=_fake_completed(stdout=json.dumps([{"id": 7}]))):
-            self.assertEqual(find_todo_by_source_ref("dp", "ref", "/tmp").status, "FOUND")
+            self.assertEqual(find_todo_by_source_ref("ref", "/tmp").status, "FOUND")
         with patch("subprocess.run", return_value=_fake_completed(stdout=json.dumps([]))):
-            self.assertEqual(find_todo_by_source_ref("dp", "ref", "/tmp").status, "NOT_FOUND")
+            self.assertEqual(find_todo_by_source_ref("ref", "/tmp").status, "NOT_FOUND")
+
+    def test_find_todo_by_source_ref_does_not_pass_project_flag(self) -> None:
+        """回归防护：dash.py todo list 无 --project 参数，传入会被 argparse 拒绝（第 4 轮实测抓到）。"""
+        with patch("subprocess.run", return_value=_fake_completed(stdout="[]")) as m:
+            find_todo_by_source_ref("ref", "/tmp")
+        called_args = m.call_args[0][0]
+        self.assertNotIn("--project", called_args)
+        self.assertIn("--source-ref", called_args)
 
 
 if __name__ == "__main__":

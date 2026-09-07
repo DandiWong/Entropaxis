@@ -89,13 +89,20 @@ class CheckAuditGateTests(unittest.TestCase):
         self.assertIn("未声明 independence", issues[0])
 
 
-V2_SESSION_CLOSED_CRITICAL = """---
+_V2_BASE_FM = """---
 type: Audit
+topic: 测试方案
+date: 2026-09-08
+author: Reviewer
+status: active
 schema_version: 2
-reviewer_mode: session
-fallback_reason: not_configured
+reviewer_mode: {mode}
+reviewer_ref: {ref}
 target_path: 02_方案.md
-target_sha256: {sha}
+target_sha256: {{sha}}
+"""
+
+V2_SESSION_CLOSED_CRITICAL = _V2_BASE_FM.format(mode="session", ref="session") + """fallback_reason: not_configured
 ---
 
 ### 问题 1
@@ -104,13 +111,7 @@ ID: C-1
 状态: closed
 """
 
-V2_WAIVED_MISSING_ACK = """---
-type: Audit
-schema_version: 2
-reviewer_mode: session
-fallback_reason: not_configured
-target_path: 02_方案.md
-target_sha256: {sha}
+V2_WAIVED_MISSING_ACK = _V2_BASE_FM.format(mode="session", ref="session") + """fallback_reason: not_configured
 ---
 
 ### 问题 1
@@ -119,13 +120,7 @@ ID: C-1
 状态: waived_by_user
 """
 
-V2_WAIVED_WITH_ACK_TEMPLATE = """---
-type: Audit
-schema_version: 2
-reviewer_mode: session
-fallback_reason: not_configured
-target_path: 02_方案.md
-target_sha256: {sha}
+V2_WAIVED_WITH_ACK_TEMPLATE = _V2_BASE_FM.format(mode="session", ref="session") + """fallback_reason: not_configured
 ---
 
 ### 问题 1
@@ -139,14 +134,7 @@ ID: C-1
 - 适用范围: 仅本轮受审指纹
 """
 
-V2_EXTERNAL_CLOSED_CRITICAL = """---
-type: Audit
-schema_version: 2
-reviewer_mode: external
-reviewer_ref: some-cli --model x
-target_path: 02_方案.md
-target_sha256: {sha}
----
+V2_EXTERNAL_CLOSED_CRITICAL = _V2_BASE_FM.format(mode="external", ref="some-cli --model x") + """---
 
 ### 问题 1
 级别: Critical
@@ -181,6 +169,44 @@ class CheckAuditGateV2Tests(unittest.TestCase):
         issues = check_report(text)
         self.assertEqual(len(issues), 1)
         self.assertIn("复核对象已变化", issues[0])
+
+
+class CheckAuditGateV2FailOpenRegressionTests(unittest.TestCase):
+    """第 4 轮外置复核实测抓到的 4 处 fail-open；每条对应一个回归断言，防止再次悄悄放行。"""
+
+    def test_v2_missing_required_fields_blocked(self) -> None:
+        text = "---\ntype: Audit\nschema_version: 2\nreviewer_mode: external\n---\n" + \
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: closed\n"
+        self.assertTrue(check_report(text))
+
+    def test_v2_forbidden_independence_blocked(self) -> None:
+        text = V2_EXTERNAL_CLOSED_CRITICAL.format(sha=SHA_A).replace(
+            "---\n\n### 问题 1", "independence: external: x\n---\n\n### 问题 1"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("不得再声明 independence" in i for i in issues))
+
+    def test_v2_challenged_status_blocked(self) -> None:
+        text = V2_EXTERNAL_CLOSED_CRITICAL.format(sha=SHA_A).replace("状态: closed", "状态: challenged")
+        issues = check_report(text)
+        self.assertTrue(any("不在 v2 枚举" in i for i in issues))
+
+    def test_malformed_schema_version_does_not_downgrade_to_legacy(self) -> None:
+        text = ("---\ntype: Audit\nschema_version: banana\n"
+                "independence: session-internal-downgraded (external: x missing)\n---\n"
+                "### 问题 1\n级别: Critical\n状态: 已关闭\n")
+        self.assertTrue(check_report(text))
+
+    def test_candidate_commit_rejects_missing_required_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            commit_path = Path(tmp) / "05_审计报告.md"
+            text = "---\ntype: Audit\nschema_version: 2\nreviewer_mode: external\n---\n" + \
+                "### 问题 1\n级别: Critical\nID: C-1\n状态: closed\n"
+            self.assertTrue(check_candidate_commit(text, commit_path))
+
+    def test_legacy_report_without_schema_version_key_still_validates(self) -> None:
+        """回归防护：v2 校验不得误吞没有 schema_version 键的历史报告。"""
+        self.assertEqual(check_report(EXTERNAL_REVIEWER_WITH_CLOSED_CRITICAL), [])
 
 
 class CheckAuditGateAtomicTests(unittest.TestCase):

@@ -8,11 +8,13 @@
 两种用法：
   只读复核（兼容旧用法）：
     python3 .system/tools/check_audit_gate.py <审计报告路径>
-  原子校验并提交（拟写入的关闭后状态一次性校验+落盘）：
+  原子校验并提交（拟写入的关闭后状态一次性校验+落盘，closed 与 waived_by_user 均须过此关）：
     python3 .system/tools/check_audit_gate.py --candidate <候选报告路径> --commit <目标路径>
 
-字段契约见 .system/schemas/audit_report.schema.json。schema_version 缺失或 <2
-按旧 independence 契约只读解析；>=2 按新契约（reviewer_mode/critical_ack）解析。
+字段契约见 .system/schemas/audit_report.schema.json。schema_version 缺失
+按旧 independence 契约只读解析；**只要 Front Matter 出现 schema_version 键**（无论是否
+能解析为合法整数）即视为声明使用新契约，全量校验该契约——不会因为版本号写错就静默
+退回旧契约放行（第 4 轮外置复核实测抓到的 fail-open）。
 """
 
 from __future__ import annotations
@@ -24,20 +26,22 @@ import sys
 import tempfile
 from pathlib import Path
 
+try:
+    from tools import validate_schema as vs
+except ImportError:  # 以脚本方式直接运行时 tools/ 自身在 sys.path 上
+    import validate_schema as vs
+
 FRONT_MATTER_PATTERN = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
-INDEPENDENCE_PATTERN = re.compile(r"^independence:\s*(.+)$", re.MULTILINE)
-SCHEMA_VERSION_PATTERN = re.compile(r"^schema_version:\s*(\d+)$", re.MULTILINE)
-REVIEWER_MODE_PATTERN = re.compile(r"^reviewer_mode:\s*(\S+)$", re.MULTILINE)
-TARGET_PATH_PATTERN = re.compile(r"^target_path:\s*(\S+)$", re.MULTILINE)
-TARGET_SHA256_PATTERN = re.compile(r"^target_sha256:\s*([0-9a-f]{64})$", re.MULTILINE)
+SCHEMA_VERSION_KEY_PATTERN = re.compile(r"^schema_version:", re.MULTILINE)
 
 # 单条问题块：从"级别: X"起，到下一个标题/分隔线/文末为止。group(1)=块全文，group(2)=级别。
 ISSUE_BLOCK_PATTERN = re.compile(
     r"(级别[:：]\s*(Critical|Major|Minor).*?)(?=\n#{1,6}\s|\n---|\Z)", re.DOTALL
 )
 ISSUE_ID_PATTERN = re.compile(r"ID[:：]\s*(\S+)")
-CLOSED_PATTERN = re.compile(r"状态[:：]\s*(已关闭|closed)", re.IGNORECASE)
-WAIVED_PATTERN = re.compile(r"状态[:：]\s*waived_by_user", re.IGNORECASE)
+STATUS_VALUE_PATTERN = re.compile(r"状态[:：]\s*(\S+)")
+LEGACY_CLOSED_PATTERN = re.compile(r"状态[:：]\s*(已关闭|closed)", re.IGNORECASE)
+V2_STATUS_ENUM = ("open", "closed", "waived_by_user")
 
 # critical_ack 确认块：### critical_ack <问题ID> 后跟 target_sha256/确认事件/适用范围 三行。
 ACK_BLOCK_PATTERN = re.compile(
@@ -50,39 +54,23 @@ def _front_matter_text(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def parse_front_matter(text: str) -> dict:
+    """复用 validate_schema 的扁平 Front Matter 解析；无档头返回空字典。"""
+    return vs.parse_front_matter(text) or {}
+
+
+def is_v2(text: str) -> bool:
+    """Front Matter 出现 schema_version 键即为 v2 意图，不要求其值合法——
+    值是否合法由完整 schema 校验负责报错，不在此处静默降级。"""
+    fm = _front_matter_text(text)
+    return bool(fm and SCHEMA_VERSION_KEY_PATTERN.search(fm))
+
+
 def extract_independence(text: str) -> str | None:
     """读取 Front Matter 中的 independence 声明（旧契约）；未声明返回 None。"""
-    fm = _front_matter_text(text)
-    if fm is None:
-        return None
-    m2 = INDEPENDENCE_PATTERN.search(fm)
-    return m2.group(1).strip() if m2 else None
-
-
-def extract_schema_version(text: str) -> int:
-    """缺失或非数字一律视为 0（走旧契约分支）。"""
-    fm = _front_matter_text(text)
-    if fm is None:
-        return 0
-    m = SCHEMA_VERSION_PATTERN.search(fm)
-    return int(m.group(1)) if m else 0
-
-
-def extract_reviewer_mode(text: str) -> str | None:
-    fm = _front_matter_text(text)
-    if fm is None:
-        return None
-    m = REVIEWER_MODE_PATTERN.search(fm)
-    return m.group(1).strip() if m else None
-
-
-def extract_target(text: str) -> tuple[str | None, str | None]:
-    fm = _front_matter_text(text)
-    if fm is None:
-        return None, None
-    p = TARGET_PATH_PATTERN.search(fm)
-    h = TARGET_SHA256_PATTERN.search(fm)
-    return (p.group(1).strip() if p else None), (h.group(1).strip() if h else None)
+    fm = parse_front_matter(text)
+    val = fm.get("independence")
+    return str(val).strip() if val is not None else None
 
 
 def _iter_issue_blocks(text: str):
@@ -93,7 +81,7 @@ def _iter_issue_blocks(text: str):
 
 def find_closed_critical_blocks(text: str) -> list[str]:
     """返回正文中已标注关闭（旧契约"已关闭"/"closed"）的 Critical 问题块。"""
-    return [b for level, b in _iter_issue_blocks(text) if level == "Critical" and CLOSED_PATTERN.search(b)]
+    return [b for level, b in _iter_issue_blocks(text) if level == "Critical" and LEGACY_CLOSED_PATTERN.search(b)]
 
 
 def find_ack_blocks(text: str) -> dict[str, dict[str, str]]:
@@ -114,7 +102,7 @@ def find_ack_blocks(text: str) -> dict[str, dict[str, str]]:
 
 
 def check_report_legacy(text: str) -> list[str]:
-    """schema_version < 2：旧 independence 契约（会话内降级不可关闭 Critical）。"""
+    """无 schema_version 键：旧 independence 契约（会话内降级不可关闭 Critical）。"""
     independence = extract_independence(text)
     closed = find_closed_critical_blocks(text)
     if not closed:
@@ -133,23 +121,41 @@ def check_report_legacy(text: str) -> list[str]:
 
 
 def check_report_v2(text: str) -> list[str]:
-    """schema_version >= 2：reviewer_mode + critical_ack 契约。"""
+    """Front Matter 含 schema_version 键：完整 v2 契约校验，不允许部分校验后放行。"""
     issues: list[str] = []
-    reviewer_mode = extract_reviewer_mode(text)
-    target_path, target_sha256 = extract_target(text)
+    fm = parse_front_matter(text)
+
+    # 1) 完整 Front Matter 结构校验（必填字段、类型、枚举、条件必填）——
+    #    此前只做了零星正则抽取，缺字段/非法枚举/畸形版本号全部悄悄放行。
+    schema = vs.load_schema("audit_report")["properties"]["front_matter"]
+    issues += [f"Front Matter {e}" for e in vs.validate(fm, schema)]
+
+    # 2) v2 报告禁止再写已退役的 independence 字段（generic validator 不表达"字段互斥"）。
+    if "independence" in fm:
+        issues.append("schema_version>=2 的报告不得再声明 independence（已退役字段，只供历史报告只读兼容）。")
+
+    reviewer_mode = fm.get("reviewer_mode")
+    target_sha256 = fm.get("target_sha256")
     acks = find_ack_blocks(text)
 
     for level, block in _iter_issue_blocks(text):
         id_match = ISSUE_ID_PATTERN.search(block)
         issue_id = id_match.group(1) if id_match else "<未知ID>"
+        status_match = STATUS_VALUE_PATTERN.search(block)
+        status = status_match.group(1) if status_match else None
 
-        if level == "Critical" and CLOSED_PATTERN.search(block):
+        # 3) 状态枚举强制校验：v2 只认 open/closed/waived_by_user，其余（含 challenged）一律违规。
+        if status is not None and status not in V2_STATUS_ENUM:
+            issues.append(f"[{issue_id}] 状态={status!r} 不在 v2 枚举 {V2_STATUS_ENUM} 内。")
+            continue
+
+        if level == "Critical" and status == "closed":
             if reviewer_mode != "external":
                 issues.append(
                     f"[{issue_id}] 状态=closed 但 reviewer_mode={reviewer_mode!r}；"
                     "会话内承载不可将 Critical 置为 closed，必须由外置 reviewer 复核。"
                 )
-        if WAIVED_PATTERN.search(block):
+        if status == "waived_by_user":
             ack = acks.get(issue_id)
             if not ack:
                 issues.append(f"[{issue_id}] 状态=waived_by_user 但未找到对应 critical_ack 确认块。")
@@ -162,15 +168,12 @@ def check_report_v2(text: str) -> list[str]:
                     f"[{issue_id}] critical_ack.target_sha256={ack.get('target_sha256')!r} "
                     f"与报告 target_sha256={target_sha256!r} 不一致，复核对象已变化。"
                 )
-    if target_path and target_sha256 is None:
-        issues.append("Front Matter 声明了 target_path 但缺少 target_sha256。")
     return issues
 
 
 def check_report(text: str) -> list[str]:
-    """对审计报告全文做门禁核验，返回违规说明列表（空列表即通过）。按 schema_version 分支。"""
-    version = extract_schema_version(text)
-    return check_report_v2(text) if version >= 2 else check_report_legacy(text)
+    """对审计报告全文做门禁核验，返回违规说明列表（空列表即通过）。"""
+    return check_report_v2(text) if is_v2(text) else check_report_legacy(text)
 
 
 def _find_workspace_root(start: Path) -> Path | None:
@@ -186,26 +189,33 @@ def _find_workspace_root(start: Path) -> Path | None:
 
 
 def check_candidate_commit(candidate_text: str, commit_path: Path) -> list[str]:
-    """--candidate/--commit 原子接口的额外校验：target_sha256 与目标受审文件实测哈希一致。"""
+    """--candidate/--commit 原子接口的额外校验：target_sha256 与目标受审文件实测哈希一致。
+
+    先跑 check_report()（含完整 Front Matter 校验），字段本身缺失/非法已在那一步拦截；
+    这里只做 check_report() 管不到的"文件系统事实校验"——target_path 是否真实存在、
+    其内容哈希是否与声明一致。
+    """
     issues = check_report(candidate_text)
-    target_path, target_sha256 = extract_target(candidate_text)
-    version = extract_schema_version(candidate_text)
-    if version >= 2 and target_path:
-        # 受审对象多数与报告同容器目录（本轮实践即如此）；找不到时退化为按工作区根解析。
-        candidates = [commit_path.parent / target_path]
-        workspace_root = _find_workspace_root(commit_path.parent)
-        if workspace_root:
-            candidates.append(workspace_root / target_path)
-        actual_file = next((p for p in candidates if p.is_file()), None)
-        if actual_file is None:
-            issues.append(f"target_path 指向的受审文件不存在：{target_path}")
-        else:
-            actual_hash = hashlib.sha256(actual_file.read_bytes()).hexdigest()
-            if actual_hash != target_sha256:
-                issues.append(
-                    f"target_sha256={target_sha256!r} 与受审文件实测哈希 {actual_hash!r} 不一致；"
-                    "受审对象已变化，不得据此关闭问题。"
-                )
+    if not is_v2(candidate_text):
+        return issues
+    fm = parse_front_matter(candidate_text)
+    target_path, target_sha256 = fm.get("target_path"), fm.get("target_sha256")
+    if not target_path or not target_sha256:
+        return issues  # 缺字段已由 check_report() 的 schema 校验报出，这里不重复
+    candidates = [commit_path.parent / target_path]
+    workspace_root = _find_workspace_root(commit_path.parent)
+    if workspace_root:
+        candidates.append(workspace_root / target_path)
+    actual_file = next((p for p in candidates if p.is_file()), None)
+    if actual_file is None:
+        issues.append(f"target_path 指向的受审文件不存在：{target_path}")
+    else:
+        actual_hash = hashlib.sha256(actual_file.read_bytes()).hexdigest()
+        if actual_hash != target_sha256:
+            issues.append(
+                f"target_sha256={target_sha256!r} 与受审文件实测哈希 {actual_hash!r} 不一致；"
+                "受审对象已变化，不得据此关闭问题。"
+            )
     return issues
 
 

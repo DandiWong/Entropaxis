@@ -55,6 +55,21 @@ class SchemaValidatorTests(TestCase):
         self.assertEqual(fm["audit_max_rounds"], 3)
         self.assertIsNone(VS.parse_front_matter("没有 front matter"))
 
+    def test_deliberately_inconsistent_markdown_fixture_reports_specific_field(self) -> None:
+        """验收场景：规则正文改了但 Schema 示例未同步改——喂一份实拍 .md 文件，
+        必须非零结果并指出具体字段，不能只笼统说"校验失败"。"""
+        with tempfile.TemporaryDirectory() as td:
+            bad = Path(td) / "20260908_主题" / "02_方案.md"
+            bad.parent.mkdir(parents=True)
+            bad.write_text(
+                "---\ntype: Spec\ntopic: 测试\ndate: 2026-09-08\nauthor: Builder\n"
+                "status: draft\n---\n正文\n",
+                encoding="utf-8",
+            )  # type: Spec 但漏了 conditional_required 的 id 字段
+            errs = VS.check_markdown(bad)
+        self.assertTrue(errs)
+        self.assertTrue(any("id" in e for e in errs), errs)
+
 
 class AuditGateFailClosedTests(TestCase):
     CLOSED = "## 问题 1\n级别: Critical\n状态: 已关闭\n"

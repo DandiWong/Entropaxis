@@ -17,6 +17,7 @@ from pathlib import Path
 
 # 胶囊内新命名：04_Spec_<ID>.md 或 04_Spec_<ID>_中文主题.md，取第三段（下划线分隔）为 ID。
 CAPSULE_SPEC_RE = re.compile(r"^04_Spec_(.+)$")
+CAPSULE_DIR_RE = re.compile(r"^\d{8}_.+$")  # 主题工作胶囊容器目录：YYYYMMDD_主题
 # 独立 Spec 新命名：<ID>_中文主题.md（ID 前缀体系见 文件交付.md §2.3）。
 INDEPENDENT_SPEC_ID_RE = re.compile(r"^(Tech|Task|B|R|SC|M|Bug)-(\d+)_")
 
@@ -26,7 +27,9 @@ def classify(path: Path):
     name = path.name
     stem = path.stem
     m = CAPSULE_SPEC_RE.match(stem)
-    if m:
+    if m and CAPSULE_DIR_RE.match(path.parent.name):
+        # 父目录必须是 YYYYMMDD_主题 胶囊容器，否则任意位置的 04_Spec_*.md 都会被误判
+        # 为 Spec（第 4 轮外置复核指出的过宽正则）。
         id_ = m.group(1).split("_", 1)[0]
         return ("Spec", id_) if id_ else None
     if name.startswith("Spec_"):
