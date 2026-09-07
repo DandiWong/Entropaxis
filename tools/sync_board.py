@@ -144,7 +144,13 @@ def _run_role_raw(role, args, cwd, timeout=60):
 
 
 def find_issue(mp, task, cwd) -> ProviderResult:
-    """按稳定回读键（Dev 端：issue 标题前缀 [<TaskID>]）查找，遍历 cursor 直到耗尽。"""
+    """按稳定回读键（Dev 端：issue 标题前缀 [<TaskID>]）查找。
+
+    # ponytail: 未实现真实分页——当前已接入的 Dev Provider CLI 的 `issue list` 命令面
+    # 没有 --cursor/--page 参数，此处若"循环重试"只会拿同一页数据空转。诚实止步于
+    # 单页查询；Provider 具备分页参数后再在这里补真实的重跑逻辑，不要用一个不会
+    # 执行第二次的 while 循环制造"已支持分页"的假象（第 5 轮外置复核指出该问题）。
+    """
     try:
         r = _run_role_raw("dev", ["issue", "list", "--project", mp, "--output", "json"], cwd, 30)
     except ProviderUnavailable as exc:
@@ -157,17 +163,11 @@ def find_issue(mp, task, cwd) -> ProviderResult:
         return ProviderResult(status="FAILED", error=f"非法 JSON: {exc}", retryable=False)
     issues = data.get("issues", []) if isinstance(data, dict) else data
     pat = re.compile(r"^\[" + re.escape(task) + r"\]")
+    for it in issues or []:
+        if it and pat.match(it.get("title") or ""):
+            return ProviderResult(status="FOUND", id=it.get("id"))
     cursor = data.get("cursor") if isinstance(data, dict) else None
-    while True:
-        for it in issues or []:
-            if it and pat.match(it.get("title") or ""):
-                return ProviderResult(status="FOUND", id=it.get("id"))
-        if not cursor:
-            break
-        # 分页遍历直到耗尽：当前 Dev Provider 未返回 cursor，循环天然只跑一轮；
-        # ponytail: Provider 支持分页后在此补 --cursor 传参重跑，无需改调用方
-        break
-    return ProviderResult(status="NOT_FOUND")
+    return ProviderResult(status="NOT_FOUND", cursor=cursor)
 
 
 def upsert_dev(bd, project_dir, task, title, mstatus, spec):
@@ -261,6 +261,17 @@ def upsert_todo(bd, task, title, stage, due, people, cwd=None) -> ProviderResult
             return ProviderResult(status=exc.status, id=found.id, error=exc.error, retryable=exc.retryable)
         if r.returncode != 0:
             return ProviderResult(status="FAILED", id=found.id, error="更新失败", retryable=True)
+        # 写后回读：PATCH 响应即为更新后的资源现状（REST 惯例），直接核对 stage 是否
+        # 生效，不必再发一次 GET——对多用户生产看板重复查询是不必要的额外负载。
+        try:
+            updated = json.loads(r.stdout or "{}")
+        except json.JSONDecodeError:
+            return ProviderResult(status="FOUND", id=found.id, error="更新响应非法 JSON，未能核实是否生效", retryable=True)
+        if isinstance(updated, dict) and updated.get("stage") not in (None, stage):
+            return ProviderResult(
+                status="FOUND", id=found.id,
+                error=f"更新响应 stage={updated.get('stage')!r}，与期望 {stage!r} 不一致", retryable=True,
+            )
         return ProviderResult(status="FOUND", id=found.id)
     # NOT_FOUND：唯一允许创建的状态
     args = [
@@ -294,9 +305,18 @@ def sync_one(bd, project_dir, row):
     mstatus, stage = STATUS_MAP[status]
     iid, dev_result = upsert_dev(bd, project_dir, task, title, mstatus, row.get("spec"))
     main_result = upsert_todo(bd, task, title, stage, row.get("due"), row.get("people"), cwd=str(project_dir))
-    dev_repr = (iid or "")[:8] if dev_result.status == "FOUND" else f"{dev_result.status}({dev_result.error})"
-    main_repr = main_result.id if main_result.status == "FOUND" else f"{main_result.status}({main_result.error})"
+    dev_repr = _result_repr(iid, dev_result)
+    main_repr = _result_repr(main_result.id, main_result)
     print(f"{task}\tdev={dev_repr}\tmain={main_repr}\tstatus={status}")
+
+
+def _result_repr(display_id, result: ProviderResult) -> str:
+    """status=FOUND 不代表全程无恙——同一动作里子步骤（如状态置位）失败时
+    `.error` 仍会被置位，必须一并显示，不能让调用方只看 status 就宣称完全成功
+    （第 5 轮外置复核实测：Dev 状态置位失败时旧逻辑只看 status==FOUND，把
+    `.error` 完全吞掉，终端只显示成功的 issue id）。"""
+    base = (str(display_id) or "")[:8] if result.status == "FOUND" else result.status
+    return f"{base}!{result.error}" if result.error else base
 
 
 def selftest():
@@ -319,7 +339,7 @@ def main():
     ap.add_argument("--task", help="任务 ID，如 M1")
     ap.add_argument("--title", help="任务标题")
     ap.add_argument("--status", default="plan", help="plan/active/review/done/backlog 或 emoji")
-    ap.add_argument("--spec", help="spec 文件相对路径，如 docs/20260902_主题/Spec_M1_主题方案.md")
+    ap.add_argument("--spec", help="spec 文件相对路径，如 docs/20260902_主题/04_Spec_M1.md")
     ap.add_argument("--due", help="截止日 YYYY-MM-DD")
     ap.add_argument("--people", help="相关方")
     ap.add_argument("--stdin", action="store_true", help="从 stdin 读 JSON 数组批量同步")

@@ -57,6 +57,35 @@ class BoardConfigCredentialLintTests(unittest.TestCase):
             issues = check_board_config_no_credentials(root)
             self.assertEqual(len(issues), 1)
 
+    def test_credential_field_name_flagged_even_without_marker_in_value(self) -> None:
+        """第 5 轮实测抓到的绕过：值本身不含任何标志性子串，但字段名叫 token。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_board_config(root, {"main": {"cli": ["dash.py"], "token": "abc123"}})
+            issues = check_board_config_no_credentials(root)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("字段名", issues[0])
+
+    def test_nested_headers_authorization_field_flagged(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_board_config(
+                root, {"main": {"cli": ["dash.py"], "headers": {"Authorization": "Bearer abc123"}}}
+            )
+            issues = check_board_config_no_credentials(root)
+            self.assertGreaterEqual(len(issues), 1)
+
+    def test_malformed_json_fails_closed_not_silently(self) -> None:
+        """畸形 JSON 必须报违规，不能因为"解析不了"就悄悄放行。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            d = root / ".data" / "templates"
+            d.mkdir(parents=True)
+            (d / "board_config.json").write_text("{not valid json", encoding="utf-8")
+            issues = check_board_config_no_credentials(root)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("无法解析", issues[0])
+
 
 if __name__ == "__main__":
     unittest.main()

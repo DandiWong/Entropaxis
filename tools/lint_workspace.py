@@ -570,51 +570,59 @@ def check_skill_symlink_health(root: Path) -> list[str]:
     return issues
 
 
-CREDENTIAL_MARKERS = (
+CREDENTIAL_VALUE_MARKERS = (
     "--token", "--password", "--secret", "--api-key", "--apikey", "--access-token",
-    "-t ", "token=", "apikey=", "api_key=", "secret=", "password=",
+    "-t ", "token=", "apikey=", "api_key=", "secret=", "password=", "bearer ",
 )
-# ponytail: 子串/前缀匹配覆盖常见 CLI 凭证写法；无法穷尽任意 shell 拼接形态
-# （如包进 `sh -c "cmd --token x"` 的单个字符串），那类需要真正的 shell 语法解析，
-# 超出本检查的确定性范围——命中即阻断，未命中不代表安全，只代表本检查没找到。
+# 字段名本身即凭证信号：值不含 "--token" 之类子串也一样阻断（第 5 轮实测抓到
+# {"token": "abc123"}、{"headers": {"Authorization": "..."}} 两种绕过——按值扫描
+# 找不到任何标志性子串，但字段名已经把意图写得很清楚）。
+CREDENTIAL_KEY_MARKERS = ("token", "password", "secret", "apikey", "api_key", "authorization", "headers")
+# ponytail: 子串/前缀匹配覆盖常见 CLI 凭证写法与字段命名；无法穷尽任意 shell 拼接形态
+# （如包进 `sh -c "cmd --token x"` 的单个字符串——这类已用子串匹配覆盖，但更深的
+# shell 语法混淆仍需真正的 shell parser），超出本检查的确定性范围——命中即阻断，
+# 未命中不代表安全，只代表本检查没找到。
 
 
-def _iter_strings(value):
-    """递归产出 dict/list 结构中的所有字符串叶子值。"""
+def _iter_leaves(value, key=None):
+    """递归产出 (字段名, 字符串叶子值)；字段名用于命中 CREDENTIAL_KEY_MARKERS。"""
     if isinstance(value, str):
-        yield value
+        yield key, value
     elif isinstance(value, dict):
-        for v in value.values():
-            yield from _iter_strings(v)
+        for k, v in value.items():
+            yield from _iter_leaves(v, key=k)
     elif isinstance(value, list):
         for v in value:
-            yield from _iter_strings(v)
+            yield from _iter_leaves(v, key=key)
 
 
 def check_board_config_no_credentials(root: Path) -> list[str]:
     """看板联动.md「Provider 四态结果契约」前置约束：凭证不进配置正文。
 
     board_config.json 的 providers[*] 会被拼进 subprocess 直接执行或读取；任何字段
-    （不限于 cli 数组）出现看起来像凭证参数的字符串，都等于把 Token 写进磁盘配置
-    明文，与凭证只经无回显交互录入、只存 .data/credentials/ 的口径冲突，一律阻断。
-    扫描范围从 `cli` 单字段扩大到整个 provider 声明，防止把凭证换个字段名（token/env/
-    headers）就绕过检查（第 4 轮外置复核实测抓到该绕过面）。
+    （不限于 cli 数组）出现看起来像凭证参数的字符串，或字段名本身就是凭证类命名
+    （token/password/secret/headers 等，即便值本身不含标志性子串），都等于把凭证
+    写进磁盘配置明文，与凭证只经无回显交互录入、只存 .data/credentials/ 的口径冲突，
+    一律阻断。JSON 解析失败按 fail-closed 处理：无法确认干净就不放行，不静默通过。
     """
     path = root / ".data" / "templates" / "board_config.json"
     if not path.is_file():
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"[board_config.json 无法解析] {path}: {exc}；解析失败时不放行，需人工核实内容后再体检。"]
     issues = []
     for role, spec in (data.get("providers") or {}).items():
-        for s in _iter_strings(spec):
+        for field_name, s in _iter_leaves(spec):
             low = s.lower()
-            if any(marker in low for marker in CREDENTIAL_MARKERS):
+            key_hit = field_name and any(marker in field_name.lower() for marker in CREDENTIAL_KEY_MARKERS)
+            value_hit = any(marker in low for marker in CREDENTIAL_VALUE_MARKERS)
+            if key_hit or value_hit:
+                reason = f"字段名 {field_name!r} 疑似凭证字段" if key_hit else f"值含疑似凭证参数 {s!r}"
                 issues.append(
                     f"[Provider 凭证泄漏] .data/templates/board_config.json providers.{role} "
-                    f"含疑似凭证参数 {s!r}；凭证只能经无回显交互录入并存 .data/credentials/，不得写入此文件。"
+                    f"{reason}；凭证只能经无回显交互录入并存 .data/credentials/，不得写入此文件。"
                 )
     return issues
 

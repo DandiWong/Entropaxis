@@ -208,6 +208,38 @@ class CheckAuditGateV2FailOpenRegressionTests(unittest.TestCase):
         """回归防护：v2 校验不得误吞没有 schema_version 键的历史报告。"""
         self.assertEqual(check_report(EXTERNAL_REVIEWER_WITH_CLOSED_CRITICAL), [])
 
+    def test_schema_version_with_space_before_colon_still_detected_as_v2(self) -> None:
+        """第 5 轮实测抓到：`schema_version : 2`（冒号前带空格）曾被误判为旧契约，
+        配合伪造 independence 即可放行 session 模式关闭 Critical。"""
+        text = ("---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+                "schema_version : 2\nreviewer_mode: session\nfallback_reason: not_configured\n"
+                "reviewer_ref: session\ntarget_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n"
+                "independence: external: fake-cli\n---\n"
+                "### 问题 1\n级别: Critical\nID: C-1\n状态: closed\n")
+        issues = check_report(text)
+        self.assertTrue(any("会话内承载不可将 Critical 置为 closed" in i for i in issues))
+        self.assertTrue(any("不得再声明 independence" in i for i in issues))
+
+    def test_status_with_space_before_colon_still_detected(self) -> None:
+        text = V2_SESSION_CLOSED_CRITICAL.format(sha=SHA_A).replace("状态: closed", "状态 : closed")
+        issues = check_report(text)
+        self.assertTrue(any("会话内承载不可将 Critical 置为 closed" in i for i in issues))
+
+    def test_level_with_space_before_colon_still_detected(self) -> None:
+        text = V2_SESSION_CLOSED_CRITICAL.format(sha=SHA_A).replace("级别: Critical", "级别 : Critical")
+        issues = check_report(text)
+        self.assertTrue(any("会话内承载不可将 Critical 置为 closed" in i for i in issues))
+
+    def test_issue_block_missing_id_is_blocked(self) -> None:
+        text = V2_EXTERNAL_CLOSED_CRITICAL.format(sha=SHA_A).replace("ID: C-1\n", "")
+        issues = check_report(text)
+        self.assertTrue(any("缺少可识别的 `ID:`" in i for i in issues))
+
+    def test_issue_block_missing_status_is_blocked(self) -> None:
+        text = V2_EXTERNAL_CLOSED_CRITICAL.format(sha=SHA_A).replace("状态: closed\n", "")
+        issues = check_report(text)
+        self.assertTrue(any("缺少可识别的 `状态:`" in i for i in issues))
+
 
 class CheckAuditGateAtomicTests(unittest.TestCase):
     def test_candidate_commit_rejects_target_hash_mismatch(self) -> None:

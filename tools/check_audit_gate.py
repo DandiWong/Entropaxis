@@ -32,15 +32,18 @@ except ImportError:  # 以脚本方式直接运行时 tools/ 自身在 sys.path 
     import validate_schema as vs
 
 FRONT_MATTER_PATTERN = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
-SCHEMA_VERSION_KEY_PATTERN = re.compile(r"^schema_version:", re.MULTILINE)
 
-# 单条问题块：从"级别: X"起，到下一个标题/分隔线/文末为止。group(1)=块全文，group(2)=级别。
+# 单条问题块：从"级别 : X"起，到下一个标题/分隔线/文末为止。冒号前允许空格
+# （第 5 轮外置复核实测抓到：`级别 : Critical` 因冒号前紧邻不容空格而整块不被
+# 识别，导致状态判定被跳过——这是本文件里第二处"正则比真实解析器更脆弱"的
+# 实例，第一处是 schema_version 判别，已改为直接复用 parse_front_matter）。
+# group(1)=块全文，group(2)=级别。
 ISSUE_BLOCK_PATTERN = re.compile(
-    r"(级别[:：]\s*(Critical|Major|Minor).*?)(?=\n#{1,6}\s|\n---|\Z)", re.DOTALL
+    r"(级别\s*[:：]\s*(Critical|Major|Minor).*?)(?=\n#{1,6}\s|\n---|\Z)", re.DOTALL
 )
-ISSUE_ID_PATTERN = re.compile(r"ID[:：]\s*(\S+)")
-STATUS_VALUE_PATTERN = re.compile(r"状态[:：]\s*(\S+)")
-LEGACY_CLOSED_PATTERN = re.compile(r"状态[:：]\s*(已关闭|closed)", re.IGNORECASE)
+ISSUE_ID_PATTERN = re.compile(r"ID\s*[:：]\s*(\S+)")
+STATUS_VALUE_PATTERN = re.compile(r"状态\s*[:：]\s*(\S+)")
+LEGACY_CLOSED_PATTERN = re.compile(r"状态\s*[:：]\s*(已关闭|closed)", re.IGNORECASE)
 V2_STATUS_ENUM = ("open", "closed", "waived_by_user")
 
 # critical_ack 确认块：### critical_ack <问题ID> 后跟 target_sha256/确认事件/适用范围 三行。
@@ -61,9 +64,14 @@ def parse_front_matter(text: str) -> dict:
 
 def is_v2(text: str) -> bool:
     """Front Matter 出现 schema_version 键即为 v2 意图，不要求其值合法——
-    值是否合法由完整 schema 校验负责报错，不在此处静默降级。"""
-    fm = _front_matter_text(text)
-    return bool(fm and SCHEMA_VERSION_KEY_PATTERN.search(fm))
+    值是否合法由完整 schema 校验负责报错，不在此处静默降级。
+
+    直接复用 parse_front_matter()（等价 validate_schema 的解析语义：按首个冒号切分、
+    两侧 strip），不再用独立正则检测键是否存在——此前 `schema_version : 2`（冒号前带
+    空格）能被 parse_front_matter 正确解析出键，却被本函数的严格正则判定为"键不存在"，
+    致使整份 v2 报告被错误地当成旧契约放行（第 5 轮外置复核实测抓到的 fail-open）。
+    """
+    return "schema_version" in parse_front_matter(text)
 
 
 def extract_independence(text: str) -> str | None:
@@ -140,12 +148,20 @@ def check_report_v2(text: str) -> list[str]:
 
     for level, block in _iter_issue_blocks(text):
         id_match = ISSUE_ID_PATTERN.search(block)
-        issue_id = id_match.group(1) if id_match else "<未知ID>"
         status_match = STATUS_VALUE_PATTERN.search(block)
-        status = status_match.group(1) if status_match else None
+        # 3) v2 issue_format 声明 id_field/status_field 为必填；此前缺失时直接跳过
+        #    该块全部校验（第 5 轮实测：缺 ID 或缺状态行的块可静默通过）。
+        if id_match is None:
+            issues.append(f"[{level} 问题块] 缺少可识别的 `ID:` 标注，v2 契约要求每条问题有稳定 ID。")
+            continue
+        issue_id = id_match.group(1)
+        if status_match is None:
+            issues.append(f"[{issue_id}] 缺少可识别的 `状态:` 标注。")
+            continue
+        status = status_match.group(1)
 
-        # 3) 状态枚举强制校验：v2 只认 open/closed/waived_by_user，其余（含 challenged）一律违规。
-        if status is not None and status not in V2_STATUS_ENUM:
+        # 4) 状态枚举强制校验：v2 只认 open/closed/waived_by_user，其余（含 challenged）一律违规。
+        if status not in V2_STATUS_ENUM:
             issues.append(f"[{issue_id}] 状态={status!r} 不在 v2 枚举 {V2_STATUS_ENUM} 内。")
             continue
 
