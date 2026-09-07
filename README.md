@@ -14,9 +14,8 @@
    这是一套**彻底解放人操作鼠标动作的人机协作系统**。将繁琐的 UI 点选、表单录入、跨平台状态同步与重复性事务处理，全量转为“自然语言意图输入 + 受控 Agent 自动化生产与治理”的确定性闭环。
 
 2. **零门槛极简上手**  
-   无需记忆复杂的命令行参数，只需**使用本地 Agent（如 Claude Code / OMP / Cursor / Codex）直接打开工作区根目录**，即可通过自然语言对话完成待办流转、看板管理、纪要生成与知识沉淀。  
+   无需记忆复杂的命令行参数，只需**使用本地 Agent（如 Claude Code / OMP / Cursor / Codex）直接打开工作区根目录**，即可通过自然语言对话完成待办流转、方案审修（审计/修正）、多模态协作（自定义角色）、看板管理、纪要生成、发票报销与知识沉淀。  
    *（新电脑或非技术同学亦可直接双击一键脚本，或对 Agent 说“初始化”一键就绪：macOS / Linux 用 `.system/tools/🚀_一键配置工作区.command`，Windows 用 `.system/tools/一键配置工作区.bat`）*。
-
 ---
 
 ## 🤖 引导与初始化契约（面向 AI Agent）
@@ -108,15 +107,21 @@
 ## 🛠️ 常用开发与治理入口
 
 - **根入口配置同步/自愈**：`python3 .system/tools/bootstrap.py`
+- **角色模态与外部 Agent 交互配置**：`python3 .system/tools/setup_agents.py`（支持 `--scan` 探测 CLI、`--verify` 校验角色、`--apply-preset` 应用预设）
+- **指令路由与上下文成本审计**：`python3 .system/tools/audit_routing.py`（核验指令覆盖率与 Token 成本）
+- **工作区规则与健康度体检**：`python3 .system/tools/lint_workspace.py`
+- **分发就绪核验（收件方视角）**：`python3 .system/tools/check_distribution.py`
+- **方案审计门禁校验**：`python3 .system/tools/check_audit_gate.py <审计报告路径>`
 - **按配置打开文件**：`python3 .system/tools/open_file.py <path> [<path> ...]`
 - **通用项目脚手架初始化**：`python3 .system/tools/init_project.py <项目名>`
 - **软件应用脚手架初始化**：`python3 .system/tools/init_app.py <app-name> --target-dir <项目路径>/02_开发`
-- **工作区规则与健康度体检**：`python3 .system/tools/lint_workspace.py`
-- **分发就绪核验（收件方视角）**：`python3 .system/tools/check_distribution.py`
-- **核心开发与联动规则**：
+- **核心开发与治理规则**：
   - [`.system/rules/00_元规则.md`](rules/00_元规则.md)
   - [`.system/rules/01_根系统治理.md`](rules/01_根系统治理.md)
+  - [`.system/rules/角色协作.md`](rules/角色协作.md)
+  - [`.system/rules/治理指令.md`](rules/治理指令.md)
+  - [`.system/rules/工作流指令.md`](rules/工作流指令.md)
+  - [`.system/rules/五维评估.md`](rules/五维评估.md)
   - [`.system/rules/软件工程.md`](rules/软件工程.md)
   - [`.system/rules/看板联动.md`](rules/看板联动.md)
-
 修改系统规则前请先阅读本目录 `AGENTS.md`；业务项目实现细节应沉淀于项目自身的 README、Spec 或产物中，不反向污染系统抽象层。
