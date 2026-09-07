@@ -201,8 +201,8 @@ def audit_cost(routes: list[dict], root: Path = WORKSPACE_ROOT) -> dict:
             },
             "rule_files": rule_steps,
             "secondary_refs": sorted(secondary),
-            "total": resident_total + hook_tokens + rule_total,
-            "total_anchor_only": resident_total + hook_tokens + anchor_total,
+            "total": hook_tokens + rule_total,
+            "total_anchor_only": hook_tokens + anchor_total,
         })
 
     scenarios.sort(key=lambda s: s["total"], reverse=True)
@@ -246,19 +246,19 @@ def render(coverage: dict, cost: dict) -> str:
 
     out += ["## 二、上下文加载成本（token 量级估算）", ""]
     res = cost["resident"]
-    out.append(f"  常驻层（每轮固定）：{res['total']} tokens　" + "、".join(
+    out.append(f"  核心常驻（零动作基线）：{res['total']} tokens　" + "、".join(
         f"{x['file']} {x['tokens']}" for x in res["steps"]
     ))
     out.append("")
-    out.append(f"  {'机制':<14}{'常驻':>7}{'Hook':>7}{'规则读取':>10}{'合计':>8}{'仅读锚点':>10}{'可省':>8}")
-    out.append("  " + "-" * 66)
+    out.append(f"  {'机制':<14}{'Hook':>7}{'规则读取':>10}{'场景增量':>10}{'仅读锚点':>10}{'可省':>8}")
+    out.append("  " + "-" * 62)
     for sc in cost["scenarios"]:
         st = sc["steps"]
         saved = sc["total"] - sc["total_anchor_only"]
         pct = f"{saved * 100 // sc['total']}%" if sc["total"] else "-"
         out.append(
-            f"  {sc['mechanism']:<14}{st['1_常驻层']:>7}{st['2_Hook注入']:>7}"
-            f"{st['3_规则读取']:>10}{sc['total']:>8}{sc['total_anchor_only']:>10}{pct:>8}"
+            f"  {sc['mechanism']:<14}{st['2_Hook注入']:>7}"
+            f"{st['3_规则读取']:>10}{sc['total']:>10}{sc['total_anchor_only']:>10}{pct:>8}"
         )
     out.append("")
     out.append("  「仅读锚点」= 只读 anchor 指向的小节而非整篇。差额即整篇读取的浪费量。")
