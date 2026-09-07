@@ -230,6 +230,13 @@ class CheckAuditGateV2FailOpenRegressionTests(unittest.TestCase):
         issues = check_report(text)
         self.assertTrue(any("会话内承载不可将 Critical 置为 closed" in i for i in issues))
 
+    def test_lowercase_level_keyword_still_detected(self) -> None:
+        """自查发现：`级别: critical`（小写）此前会让整个问题块从 _iter_issue_blocks
+        彻底消失，比枚举校验失败更危险——不是被判错级别，是完全不存在。"""
+        text = V2_SESSION_CLOSED_CRITICAL.format(sha=SHA_A).replace("级别: Critical", "级别: critical")
+        issues = check_report(text)
+        self.assertTrue(any("会话内承载不可将 Critical 置为 closed" in i for i in issues))
+
     def test_issue_block_missing_id_is_blocked(self) -> None:
         text = V2_EXTERNAL_CLOSED_CRITICAL.format(sha=SHA_A).replace("ID: C-1\n", "")
         issues = check_report(text)

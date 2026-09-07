@@ -33,13 +33,15 @@ except ImportError:  # 以脚本方式直接运行时 tools/ 自身在 sys.path 
 
 FRONT_MATTER_PATTERN = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
 
-# 单条问题块：从"级别 : X"起，到下一个标题/分隔线/文末为止。冒号前允许空格
-# （第 5 轮外置复核实测抓到：`级别 : Critical` 因冒号前紧邻不容空格而整块不被
-# 识别，导致状态判定被跳过——这是本文件里第二处"正则比真实解析器更脆弱"的
-# 实例，第一处是 schema_version 判别，已改为直接复用 parse_front_matter）。
-# group(1)=块全文，group(2)=级别。
+# 单条问题块：从"级别 : X"起，到下一个标题/分隔线/文末为止。冒号前允许空格、
+# 级别词大小写不敏感（第 5 轮外置复核实测抓到 `级别 : Critical` 因冒号前紧邻不容
+# 空格而整块不被识别；自查又发现 `级别: critical` 小写同样会让整块从 _iter_issue_
+# blocks() 里彻底消失——不是"判成 Major/Minor"，是直接不存在，比枚举校验失败更
+# 危险，因为后续任何状态检查都不会触发。这是本文件第三处"正则比真实解析器更
+# 脆弱"的实例，前两处是 schema_version 判别与冒号前空格，已分别修复）。
+# group(1)=块全文，group(2)=级别（原始大小写，供 _iter_issue_blocks 规范化）。
 ISSUE_BLOCK_PATTERN = re.compile(
-    r"(级别\s*[:：]\s*(Critical|Major|Minor).*?)(?=\n#{1,6}\s|\n---|\Z)", re.DOTALL
+    r"(级别\s*[:：]\s*(Critical|Major|Minor).*?)(?=\n#{1,6}\s|\n---|\Z)", re.DOTALL | re.IGNORECASE
 )
 ISSUE_ID_PATTERN = re.compile(r"ID\s*[:：]\s*(\S+)")
 STATUS_VALUE_PATTERN = re.compile(r"状态\s*[:：]\s*(\S+)")
@@ -82,9 +84,10 @@ def extract_independence(text: str) -> str | None:
 
 
 def _iter_issue_blocks(text: str):
-    """逐条产出问题块 (级别, 块全文)。"""
+    """逐条产出问题块 (级别, 块全文)；级别规范化为首字母大写（Critical/Major/Minor），
+    与原始大小写无关，配合 ISSUE_BLOCK_PATTERN 的 re.IGNORECASE 使用。"""
     for m in ISSUE_BLOCK_PATTERN.finditer(text):
-        yield m.group(2), m.group(1)
+        yield m.group(2).capitalize(), m.group(1)
 
 
 def find_closed_critical_blocks(text: str) -> list[str]:
