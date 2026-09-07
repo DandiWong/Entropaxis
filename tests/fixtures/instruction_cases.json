@@ -32,6 +32,21 @@
     },
     {
       "kind": "positive",
+      "instruction": "自定义角色",
+      "expect": [
+        "自定义角色"
+      ]
+    },
+    {
+      "kind": "paraphrase",
+      "instruction": "帮我把 Builder 换个模型",
+      "expect": [
+        "自定义角色"
+      ],
+      "note": "「换个模型」语义命中但非字面触发词"
+    },
+    {
+      "kind": "positive",
       "instruction": "上周那份方案文件在哪",
       "expect": [
         "定位查找文件"

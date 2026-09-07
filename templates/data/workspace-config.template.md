@@ -24,12 +24,16 @@
 
 > 首次渲染后请把上述两个必填字段改为本工作区所属组织/公司的真实名称与禁用缩写；不改时新建文档默认使用工作区目录名兜底。
 
-## 审计角色外置 CLI 声明
+## 角色模态外置 CLI 与模型声明
 
-当 Reviewer 认知模态外置为独立 CLI/Agent 会话承担时（跨 CLI 审修协调，见 `.system/rules/角色协作.md` 方案审修协同闭环），本机生效的启动命令：
+当认知模态外置为独立 CLI/Agent 进程承担时（跨 CLI 协作，见 `.system/rules/角色协作.md`），本机生效的启动命令。未配置或指定为 `subagent` 时默认使用当前 Agent 的内置 Subagent 机制：
 
-| 角色 | 承载 CLI | 启动命令 |
-|---|---|---|
-| Reviewer（审计/红队） | {{ORG_REVIEWER_CLI}} | {{ORG_REVIEWER_CMD}} |
+| 角色模态 | 职责定位 | 承载 CLI | 启动命令 |
+|---|---|---|---|
+| Reviewer | 审计/红队/架构合规 | subagent | 内置 Subagent 机制 (auto) |
+| Researcher | 深度调研/文献综述 | subagent | 内置 Subagent 机制 (auto) |
+| Builder | 核心编码/重构实施 | subagent | 内置 Subagent 机制 (auto) |
+| Designer | 架构设计/方案规划 | subagent | 内置 Subagent 机制 (auto) |
+| Maintainer | 守门验收/证据核验 | subagent | 内置 Subagent 机制 (auto) |
 
-> 首次渲染时占位符会被替换为工作区目录名兜底；用户需填入实际使用的 reviewer CLI（如 omp / codex / cursor / 自研 CLI 等）及其启动命令。
+> 首次初始化后默认全部使用内置 Subagent。可通过 `python3 .system/tools/setup_agents.py` 交互式检测宿主机已安装的外部 Agent CLI 并自动配置。

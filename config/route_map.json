@@ -26,6 +26,19 @@
       ]
     },
     {
+      "mechanism": "自定义角色",
+      "files": [
+        ".system/rules/工作流指令.md"
+      ],
+      "anchor": "## 自定义角色",
+      "keywords": [
+        "自定义角色",
+        "配置角色",
+        "角色配置",
+        "配置角色承载"
+      ]
+    },
+    {
       "mechanism": "定位查找文件",
       "files": [
         ".system/rules/工作流指令.md",

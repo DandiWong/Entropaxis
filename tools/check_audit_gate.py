@@ -55,7 +55,7 @@ def check_report(text: str) -> list[str]:
             "independence。审计独立性无法核验的报告不得关闭 Critical；请按 "
             "`external: <cli>` 或 `session-internal-downgraded (external: <cli> missing|failed)` 补齐。"
         ]
-    if independence.startswith("session-internal-downgraded"):
+    if independence.startswith("session-internal"):
         return [
             f"independence={independence!r} 属于会话内降级，但检测到 {len(closed)} 处 Critical "
             "问题标记为已关闭；会话内自评不可关闭 Critical，必须由外置 reviewer 复核或转人工仲裁。"
