@@ -121,7 +121,6 @@
   - [`.system/rules/角色协作.md`](rules/角色协作.md)
   - [`.system/rules/治理指令.md`](rules/治理指令.md)
   - [`.system/rules/工作流指令.md`](rules/工作流指令.md)
-  - [`.system/rules/五维评估.md`](rules/五维评估.md)
   - [`.system/rules/软件工程.md`](rules/软件工程.md)
   - [`.system/rules/看板联动.md`](rules/看板联动.md)
 修改系统规则前请先阅读本目录 `AGENTS.md`；业务项目实现细节应沉淀于项目自身的 README、Spec 或产物中，不反向污染系统抽象层。

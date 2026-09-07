@@ -31,9 +31,8 @@
       "minimum": 1
     },
     "independence": {
-      "$comment": "仅 type: Audit 使用；会话内降级必须显式留痕，check_audit_gate.py 据此阻断 Critical 关闭",
-      "type": "string",
-      "pattern": "^(external:.+|session-internal-downgraded \\(external: .+ (missing|failed)\\))$"
+      "$comment": "已退役字段，仅 schema_version<2 的历史 Audit 报告使用只读兼容；新报告的字段契约唯一真源见 audit_report.schema.json。",
+      "type": "string"
     }
   },
   "conditional_required": [

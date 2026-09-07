@@ -1,14 +1,20 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.sync_board import (
     STATUS_MAP,
+    ProviderResult,
     _provider_cli,
+    find_issue,
+    find_todo_by_source_ref,
     load_board,
     load_providers,
     norm_status,
+    upsert_dev,
 )
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +28,12 @@ class SyncBoardTests(unittest.TestCase):
         self.assertEqual(norm_status("✅"), "done")
         with self.assertRaises(SystemExit):
             norm_status("bogus")
+
+    def test_in_progress_normalizes_to_active_but_external_mapping_unchanged(self) -> None:
+        """本地真源规范化：in_progress 输入 → active；外部端映射（STATUS_MAP 输出侧）不变。"""
+        self.assertEqual(norm_status("in_progress"), "active")
+        self.assertEqual(STATUS_MAP["in_progress"], ("in_progress", "active"))
+        self.assertEqual(STATUS_MAP[norm_status("in_progress")], ("in_progress", "active"))
 
     def test_load_board_nested_and_flat_compat(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -67,6 +79,85 @@ class SyncBoardTests(unittest.TestCase):
                 self.assertIsNone(_provider_cli("main"))
         finally:
             sync_board.PROVIDERS_FILE = original
+
+
+def _fake_completed(returncode=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+class ProviderFourStateTests(unittest.TestCase):
+    """Provider 四态契约：找到不创建、不存在才创建、失败不创建、结果未知先回读。"""
+
+    def setUp(self):
+        self._patch = patch.object(sync_board, "_provider_cli", return_value=["fake-cli"])
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+
+    def test_find_issue_found_when_title_matches(self) -> None:
+        payload = json.dumps({"issues": [{"id": "abc123", "title": "[M1] 标题"}]})
+        with patch("subprocess.run", return_value=_fake_completed(stdout=payload)):
+            result = find_issue("proj", "M1", "/tmp")
+        self.assertEqual(result.status, "FOUND")
+        self.assertEqual(result.id, "abc123")
+
+    def test_find_issue_not_found_when_no_match(self) -> None:
+        payload = json.dumps({"issues": []})
+        with patch("subprocess.run", return_value=_fake_completed(stdout=payload)):
+            result = find_issue("proj", "M1", "/tmp")
+        self.assertEqual(result.status, "NOT_FOUND")
+
+    def test_find_issue_failed_on_nonzero_exit(self) -> None:
+        with patch("subprocess.run", return_value=_fake_completed(returncode=1, stderr="boom")):
+            result = find_issue("proj", "M1", "/tmp")
+        self.assertEqual(result.status, "FAILED")
+
+    def test_find_issue_failed_on_invalid_json(self) -> None:
+        with patch("subprocess.run", return_value=_fake_completed(stdout="not json")):
+            result = find_issue("proj", "M1", "/tmp")
+        self.assertEqual(result.status, "FAILED")
+
+    def test_find_issue_unknown_on_timeout(self) -> None:
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="x", timeout=30)):
+            # find_issue 内部走 _run_role_raw，超时被其吞掉返回 None → FAILED（查询侧一律不重试创建）
+            result = find_issue("proj", "M1", "/tmp")
+        self.assertEqual(result.status, "FAILED")
+
+    def test_upsert_dev_failed_query_does_not_create(self) -> None:
+        with patch("subprocess.run", return_value=_fake_completed(returncode=1, stderr="boom")) as m:
+            iid, result = upsert_dev({"dev_id": "proj"}, "/tmp", "M1", "标题", "todo", None)
+        self.assertIsNone(iid)
+        self.assertEqual(result.status, "FAILED")
+        # 只应调用一次（查询失败即返回，不进入创建分支）
+        self.assertEqual(m.call_count, 1)
+
+    def test_upsert_dev_not_found_creates_once(self) -> None:
+        list_payload = json.dumps({"issues": []})
+        create_payload = json.dumps({"id": "new-id"})
+        calls = [_fake_completed(stdout=list_payload), _fake_completed(stdout=create_payload),
+                 _fake_completed(stdout="{}")]
+        with patch("subprocess.run", side_effect=calls) as m:
+            iid, result = upsert_dev({"dev_id": "proj"}, "/tmp", "M1", "标题", "todo", None)
+        self.assertEqual(iid, "new-id")
+        self.assertEqual(result.status, "FOUND")
+        self.assertEqual(m.call_count, 3)  # list（查无） → create → status
+
+    def test_upsert_dev_found_updates_not_create(self) -> None:
+        list_payload = json.dumps({"issues": [{"id": "abc123", "title": "[M1] 旧标题"}]})
+        calls = [_fake_completed(stdout=list_payload), _fake_completed(stdout="{}"),
+                 _fake_completed(stdout="{}")]
+        with patch("subprocess.run", side_effect=calls) as m:
+            iid, result = upsert_dev({"dev_id": "proj"}, "/tmp", "M1", "新标题", "todo", None)
+        self.assertEqual(iid, "abc123")
+        self.assertEqual(result.status, "FOUND")
+        self.assertEqual(m.call_count, 3)  # list（命中） → update → status，不含 create
+
+    def test_find_todo_by_source_ref_found_and_not_found(self) -> None:
+        with patch("subprocess.run", return_value=_fake_completed(stdout=json.dumps([{"id": 7}]))):
+            self.assertEqual(find_todo_by_source_ref("dp", "ref", "/tmp").status, "FOUND")
+        with patch("subprocess.run", return_value=_fake_completed(stdout=json.dumps([]))):
+            self.assertEqual(find_todo_by_source_ref("dp", "ref", "/tmp").status, "NOT_FOUND")
 
 
 if __name__ == "__main__":

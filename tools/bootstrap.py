@@ -169,20 +169,6 @@ def sync_entrypoints(verbose: bool = True) -> bool:
 
     return success
 
-def check_dashboard_token() -> bool:
-    """检查**本工作区**看板凭证是否就绪。
-
-    只认工作区自己的 `.data/credentials/`（凭据归属见《技能设计》）。此前还会兜底扫
-    宿主机 `~/.config/*dashboard*/token`，导致任意一个全新工作区都能借到同机其他工作区
-    的凭据，初始化时报出与本工作区无关的"已就绪"——假绿灯比没有灯更危险。
-    """
-    ws_cred = Path(__file__).resolve().parent.parent.parent / ".data" / "credentials"
-    if ws_cred.is_dir():
-        for p in ws_cred.glob("*/token"):
-            if p.is_file() and len(p.read_text(encoding="utf-8").strip()) > 10:
-                return True
-    return False
-
 def detect_host_apps() -> set[str]:
     """检测宿主机已安装的应用程序"""
     detected = set()
@@ -395,12 +381,8 @@ if __name__ == "__main__":
 
 
     if sync_entrypoints(verbose=True):
-        token_ready = check_dashboard_token()
-        if token_ready:
-            print("✅ 看板 API Token 已就绪。")
-        else:
-            # 不提具体脚本名：看板 Skill 按实例安装，收件方环境里未必存在该脚本
-            print("ℹ️ 本工作区尚未配置看板 Token（可直接对 Agent 说「配置看板 Token」）。")
+        # 看板 Token 检查延后到首次实际使用看板 Skill 时触发（见《工作流指令》初始化章节），
+        # 初始化阶段不再读取或回显凭证状态。
         # 打开器配置必须先于通用模板渲染：file-opener.json 的生效结构由 init_file_opener
         # 按本机探测生成，若让 render_instance_configs 先把模板原样落地，下一步就会把这份
         # 刚写的文件判为"结构非法"并重建——首次初始化必打印一条自相矛盾的损坏告警，

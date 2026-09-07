@@ -1,5 +1,5 @@
 {
-  "$comment": "审计报告的机器可读契约。此前该契约只存在于 check_audit_gate.py 的正则里——改规则的人无从得知自己在破坏一个解析器。真源定义见 rules/治理指令.md「审计」节第 5 条。",
+  "$comment": "审计报告的机器可读契约。此前该契约只存在于 check_audit_gate.py 的正则里——改规则的人无从得知自己在破坏一个解析器。真源定义见 rules/角色协作.md「问题终态三分」与 rules/治理指令.md「审计」节第 5 条。schema_version 2 起字段契约见下；schema_version 缺失或 <2 的历史报告按旧 independence 字段只读兼容解析，不受本 schema 的必填约束（不批量改写冻结报告）。independence 字段与 schema_version>=2 互斥，该跨字段校验由 check_audit_gate.py 专门实现，本通用校验器不表达'字段互斥'语义。",
   "title": "audit_report",
   "target": "05_审计报告.md / Audit_<ID>_主题方案审计.md",
   "type": "object",
@@ -8,7 +8,7 @@
   "properties": {
     "front_matter": {
       "type": "object",
-      "required": ["type", "topic", "date", "author", "status", "independence"],
+      "required": ["type", "topic", "date", "author", "status", "schema_version", "reviewer_mode", "reviewer_ref", "target_path", "target_sha256"],
       "additionalProperties": true,
       "properties": {
         "type": { "type": "string", "enum": ["Audit"] },
@@ -16,17 +16,47 @@
         "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
         "author": { "type": "string", "enum": ["Reviewer"] },
         "status": { "type": "string", "enum": ["active", "completed"] },
-        "independence": {
-          "$comment": "必填且不得留空。缺失时 check_audit_gate.py 视为违规阻断（fail-closed）——此前缺失即放行，忘写字段就能绕过 Critical 关闭限制。",
+        "schema_version": {
+          "$comment": "新旧判别的唯一依据：本次契约为 2。不靠日期、不靠字段共现推断。",
+          "type": "integer",
+          "minimum": 2
+        },
+        "reviewer_mode": {
           "type": "string",
-          "pattern": "^(external:\\s*\\S.*|session-internal-downgraded \\(external: .+ (missing|failed)\\))$"
+          "enum": ["external", "session"]
+        },
+        "reviewer_ref": {
+          "$comment": "外置 CLI 启动命令原文，或会话承载标识。",
+          "type": "string",
+          "minLength": 1
+        },
+        "fallback_reason": {
+          "$comment": "reviewer_mode: session 时必填；conditional_required 见下方声明。",
+          "type": "string",
+          "pattern": "^(not_configured|not_executable|launch_failed|timeout|no_valid_output)(:.*)?$"
+        },
+        "target_path": { "type": "string", "minLength": 1 },
+        "target_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "independence": {
+          "$comment": "已退役字段，仅 schema_version<2 的历史报告使用；schema_version>=2 的新报告写此字段属违规，由 check_audit_gate.py 拒绝。",
+          "type": "string"
         }
-      }
+      },
+      "conditional_required": [
+        {
+          "when": { "reviewer_mode": "session" },
+          "require": ["fallback_reason"],
+          "message": "reviewer_mode: session 时必须声明 fallback_reason"
+        }
+      ]
     },
     "issue_format": {
       "$comment": "正文每条问题的行内标注格式，供 check_audit_gate.py 机械识别。中英文冒号均可。",
       "type": "object",
-      "required": ["level_field", "status_field"],
+      "required": ["level_field", "id_field", "status_field"],
       "additionalProperties": false,
       "properties": {
         "level_field": {
@@ -41,15 +71,25 @@
             }
           }
         },
+        "id_field": {
+          "$comment": "事件内稳定问题 ID（如 C-1、N-M2），跨轮不复用、不重编号。",
+          "type": "object",
+          "required": ["pattern"],
+          "additionalProperties": false,
+          "properties": {
+            "pattern": { "type": "string", "enum": ["ID[:：]\\s*(\\S+)"] }
+          }
+        },
         "status_field": {
+          "$comment": "取代旧的「待处理/已关闭」二值。waived_by_user 需另配正文 critical_ack 确认块（问题ID/target_sha256/确认事件/适用范围四项齐备），该结构完整性同样由 check_audit_gate.py 校验，检查器只能验证声明完整与指纹匹配，不能验证确认动作真实发生。",
           "type": "object",
           "required": ["pattern", "enum"],
           "additionalProperties": false,
           "properties": {
-            "pattern": { "type": "string", "enum": ["状态[:：]\\s*(待处理|已关闭)"] },
+            "pattern": { "type": "string", "enum": ["状态[:：]\\s*(open|closed|waived_by_user)"] },
             "enum": {
               "type": "array",
-              "items": { "type": "string", "enum": ["待处理", "已关闭"] }
+              "items": { "type": "string", "enum": ["open", "closed", "waived_by_user"] }
             }
           }
         }
@@ -64,16 +104,23 @@
       "date": "2026-09-05",
       "author": "Reviewer",
       "status": "active",
-      "independence": "external: some-reviewer-cli"
+      "schema_version": 2,
+      "reviewer_mode": "external",
+      "reviewer_ref": "some-reviewer-cli --model some-model",
+      "target_path": ".data/docs/20260905_某方案/02_方案.md",
+      "target_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
     },
     "issue_format": {
       "level_field": {
         "pattern": "级别[:：]\\s*(Critical|Major|Minor)",
         "enum": ["Critical", "Major", "Minor"]
       },
+      "id_field": {
+        "pattern": "ID[:：]\\s*(\\S+)"
+      },
       "status_field": {
-        "pattern": "状态[:：]\\s*(待处理|已关闭)",
-        "enum": ["待处理", "已关闭"]
+        "pattern": "状态[:：]\\s*(open|closed|waived_by_user)",
+        "enum": ["open", "closed", "waived_by_user"]
       }
     }
   }

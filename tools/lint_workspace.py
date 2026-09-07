@@ -27,7 +27,7 @@ MAX_CURRENT_STATE_LINES = 120
 # 按需层预算：单个规则文件行数建议线。不设 rules/ 目录总量上限——规则数量随业务自然增长，
 # 总量封顶会逼迫把不相关内容塞进同一文件，反而破坏正交收敛。
 RULE_MAX_LINES = 120
-# 跨规则文件语义重复检测：归一化后连续重复字符数达该窗口即判定为复述（应改为引用）。
+# 跨规则文件连续文本重复检测（字符级窗口比对，不理解语义）：归一化后连续重复字符数达该窗口即判定为复述（应改为引用）。
 # 25 字约合一个完整分句：实测该阈值召回全部真实复述且零误报；再收紧会把中英双写等
 # 非复述形态一并命中（那属于《表达文风》L1 的处理范围，不应在此告警）。
 RULE_DUP_WINDOW = 25
@@ -37,7 +37,7 @@ EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "r
 
 # 零系统绑定/零真实实体禁词按实例声明外置于 .data/rules/零系统绑定词表.md：
 # 词表写死在这里，等于让"防止硬编码组织名"的检查本身成为控制面里唯一硬编码组织名的
-# 文件，随版本库分发给每一个收件方（五维评估.md 通用性维度「已知盲区」已记载该悖论）。
+# 文件，随版本库分发给每一个收件方（软件工程.md「检查按影响选」通用性维度「已知盲区」已记载该悖论）。
 BINDING_WORDLIST = ".data/rules/零系统绑定词表.md"
 # 控制面禁止硬编码本地调试端点：外部系统交互必须经声明外置的看板/服务 CLI
 FORBIDDEN_HOST_PATTERN = re.compile(r"127\.0\.0\.1|localhost")
@@ -172,7 +172,7 @@ def check_rule_budget(root: Path) -> list[str]:
 
 
 def _normalize_rule_text(content: str) -> str:
-    """归一化规则正文，供跨文件复述检测使用。
+    """归一化规则正文，供跨文件连续文本重复检测使用。
 
     剔除代码块与行内代码：命令原文允许跨文件重复（漂移代价高于 Token 收益）；
     剔除强调标记、标题井号与空白：不承载判据，否则同义片段会因排版差异漏检。
@@ -189,11 +189,12 @@ def _normalize_rule_text(content: str) -> str:
     return re.sub(r"[\s*_>#]", "", "".join(kept))
 
 
-def check_rule_semantic_dedup(root: Path) -> list[str]:
-    """检测跨规则文件的连续重复片段（复述），补足字面标题去重的盲区。
+def check_rule_text_repetition(root: Path) -> list[str]:
+    """检测跨规则文件的连续文本重复片段，补足字面标题去重的盲区。
 
-    check_rule_deduplication 只比对 `##` 标题字符串是否相同，语义复述完全不可见。
-    本检查以滑动窗口找出在 2 个以上文件中同时出现的连续片段，命中即应改为「见 X.md §N」引用。
+    check_rule_deduplication 只比对 `##` 标题字符串是否相同。本检查以滑动窗口找出在
+    2 个以上文件中同时出现的连续字符片段，命中即应改为「见 X.md §N」引用；这是字符级
+    重复检测，不理解语义，检测不到的表述不同但含义冲突的规则不在本检查覆盖范围内。
     """
     issues = []
     rules_dir = root / ".system" / "rules"
@@ -569,6 +570,37 @@ def check_skill_symlink_health(root: Path) -> list[str]:
     return issues
 
 
+CREDENTIAL_CLI_FLAGS = ("--token", "--password", "--secret", "--api-key", "--apikey")
+
+
+def check_board_config_no_credentials(root: Path) -> list[str]:
+    """看板联动.md「Provider 四态结果契约」前置约束：凭证不进配置正文。
+
+    board_config.json 的 providers[*].cli 是要被 subprocess 直接执行的命令数组；
+    出现 --token 等凭证参数即等于把 Token 写进磁盘配置明文，与凭证只经无回显交互
+    录入、只存 .data/credentials/ 的口径冲突，一律阻断。
+    """
+    path = root / ".data" / "templates" / "board_config.json"
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    issues = []
+    for role, spec in (data.get("providers") or {}).items():
+        cli = spec.get("cli") if isinstance(spec, dict) else None
+        if not isinstance(cli, list):
+            continue
+        for token in cli:
+            if any(str(token).lower().startswith(flag) for flag in CREDENTIAL_CLI_FLAGS):
+                issues.append(
+                    f"[Provider 凭证泄漏] .data/templates/board_config.json providers.{role}.cli "
+                    f"含凭证参数 {token!r}；凭证只能经无回显交互录入并存 .data/credentials/，不得写入此文件。"
+                )
+    return issues
+
+
 def check_registry_exists(root: Path) -> list[str]:
     """检查 .data/templates/registry.md 是否存在（lint 白名单完备性依赖它）。"""
     registry = root / ".data" / "templates" / "registry.md"
@@ -900,9 +932,10 @@ def main() -> int:
         ("13. rules/ 零系统绑定检查", check_rules_zero_system_binding, False),
         ("14. Skill 软链健康度检查", check_skill_symlink_health, False),
         ("15. 项目注册表存在性检查", check_registry_exists, False),
+        ("15b. 看板 Provider 凭证泄漏检查", check_board_config_no_credentials, True),
         ("16. 确定性路由映射表完整性检查", check_route_map_integrity, True),
         ("17. 规则文件行数预算检查", check_rule_budget, False),
-        ("18. 跨规则文件语义复述检查", check_rule_semantic_dedup, False),
+        ("18. 跨规则文件连续文本重复检查", check_rule_text_repetition, False),
         ("19. .data/ 实例文件来源标记检查", check_data_provenance, False),
         ("20. .data/ 路径与来源映射检查", check_data_source_mapping, False),
         ("21. 结构化契约 schema 校验", check_schema_conformance, True),
