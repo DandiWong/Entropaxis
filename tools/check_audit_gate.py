@@ -33,7 +33,7 @@ try:
 except ImportError:  # 以脚本方式直接运行时 tools/ 自身在 sys.path 上
     import validate_schema as vs
 
-FRONT_MATTER_PATTERN = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
+FRONT_MATTER_PATTERN = re.compile(r"^﻿?---\n(.*?)\n---", re.DOTALL)
 
 # 允许取值的唯一机器真源是 schema 顶层 level_enum/status_enum，此处直接读取，不再
 # 在代码里另存一份硬编码——三轮外置复核先后抓到 schema_version 判别、冒号前空格、
@@ -133,6 +133,32 @@ def extract_independence(text: str) -> str | None:
     val = fm.get("independence")
     return str(val).strip() if val is not None else None
 
+
+
+def _fm_duplicate_key_issues(text: str) -> list[str]:
+    """第 12 轮终验实测：FM 重复键被 dict 字面赋值静默取末值——先写
+    `reviewer_mode: session` 再补一行 `reviewer_mode: external`，会话报告
+    即获外置特权；重复 `schema_version: 3/2` 可令 v3 围栏被 v2 分支整体
+    忽略（原子接口实测可写入）。重复键即歧义载荷，任何版本分支一律拒绝。"""
+    fm_text = _front_matter_text(text)
+    if fm_text is None:
+        return []
+    seen: dict[str, int] = {}
+    for line in fm_text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        cuts = [i for i in (line.find(":"), line.find("：")) if i != -1]
+        if not cuts:
+            continue
+        k = unicodedata.normalize(
+            "NFKC", "".join(ch for ch in line[: min(cuts)] if unicodedata.category(ch) != "Cf")
+        ).strip()
+        seen[k] = seen.get(k, 0) + 1
+    return [
+        f"Front Matter 键 {k!r} 重复出现 {n} 次；重复键即歧义载荷，须恰好一次。"
+        for k, n in seen.items()
+        if n > 1
+    ]
 
 def _normalize_level(raw: str) -> str | None:
     """大小写不敏感匹配 LEVEL_ENUM，返回规范值；不合法返回 None（由调用方判定违规）。"""
@@ -467,7 +493,16 @@ def check_report_v3(text: str) -> list[str]:
     reviewer_mode = fm.get("reviewer_mode")
     target_sha256 = fm.get("target_sha256")
     seen_ids: dict[str, int] = {}
-    for item in state.get("issues") or []:
+    raw_issues = state.get("issues")
+    if not isinstance(raw_issues, list):
+        raw_issues = []  # 类型错误已由 schema 校验记录，这里只防迭代异常
+    raw_acks = state.get("critical_acks")
+    if not isinstance(raw_acks, list):
+        raw_acks = []
+    for item in raw_issues:
+        if not isinstance(item, dict):
+            issues.append(f"audit-state issues 元素必须是对象，实得 {type(item).__name__}。")
+            continue
         issue_id, level, status = item.get("id"), item.get("level"), item.get("status")
         if issue_id:
             seen_ids[issue_id] = seen_ids.get(issue_id, 0) + 1
@@ -485,7 +520,10 @@ def check_report_v3(text: str) -> list[str]:
             issues.append(f"[{dup_id}] 问题 ID 在 audit-state 内重复出现 {count} 次；事件内 ID 必须唯一。")
 
     acks: dict[str, dict] = {}
-    for ack in state.get("critical_acks") or []:
+    for ack in raw_acks:
+        if not isinstance(ack, dict):
+            issues.append(f"audit-state critical_acks 元素必须是对象，实得 {type(ack).__name__}。")
+            continue
         aid = ack.get("issue_id")
         if aid in acks:
             issues.append(f"[{aid}] critical_ack 出现多个，同一问题只能有一个确认。")
@@ -494,8 +532,8 @@ def check_report_v3(text: str) -> list[str]:
     for aid in acks:
         if aid not in seen_ids:
             issues.append(f"[{aid}] critical_ack 指向不存在的问题 ID。")
-    for item in state.get("issues") or []:
-        if item.get("status") == "waived_by_user":
+    for item in raw_issues:
+        if isinstance(item, dict) and item.get("status") == "waived_by_user":
             ack = acks.get(item.get("id"))
             if not ack:
                 issues.append(f"[{item.get('id')}] status=waived_by_user 但 critical_acks 中无对应确认。")
@@ -513,10 +551,14 @@ def check_report(text: str) -> list[str]:
     散文规范化。v2/legacy：匹配前先做文本规范化（剥 HTML 注释与 Cf 格式
     字符、NFKC 归一）——隐形载体类变体（注释包裹、零宽字符注入）视觉不变
     而模式失配，属整类收口；规范化只用于匹配，不回写文件。"""
+    # FM 重复键检测对三个分支统一前置：重复键被 dict 静默取末值，可让会话
+    # 报告凭第二行 `reviewer_mode: external` 获得外置特权，或令 v3 围栏被
+    # v2 分支整体忽略（第 12 轮终验实测，原子接口可被写入）。
+    dup = _fm_duplicate_key_issues(text)
     if is_v3(text):
-        return check_report_v3(text)
+        return dup + check_report_v3(text)
     canonical = _canonical(text)
-    return check_report_v2(canonical) if is_v2(canonical) else check_report_legacy(canonical)
+    return dup + (check_report_v2(canonical) if is_v2(canonical) else check_report_legacy(canonical))
 
 
 def _find_workspace_root(start: Path) -> Path | None:

@@ -667,6 +667,43 @@ class CheckAuditGateV3Tests(unittest.TestCase):
             issues = check_report(text)
             self.assertTrue(any("顶层必须是 JSON 对象" in i for i in issues), raw)
 
+    def test_v3_fm_duplicate_reviewer_mode_blocked(self) -> None:
+        """第 12 轮终验：session 后补写第二行 external 不得凭末值获得外置特权。"""
+        text = self._v3(mode="session").replace(
+            "reviewer_mode: session\n", "reviewer_mode: session\nreviewer_mode: external\n"
+        )
+        self.assertTrue(any("重复出现 2 次" in i for i in check_report(text)))
+
+    def test_v3_fm_duplicate_schema_version_blocked(self) -> None:
+        """第 12 轮终验：重复 schema_version 3/2 不得令 v3 围栏被 v2 分支忽略。"""
+        text = self._v3(mode="session").replace(
+            "schema_version: 3\n", "schema_version: 3\nschema_version: 2\n"
+        )
+        self.assertTrue(any("重复出现 2 次" in i for i in check_report(text)))
+
+    def test_v3_zero_width_schema_version_key_routes_correctly(self) -> None:
+        """第 12 轮终验：schema_version 键注入零宽字符不得降级 legacy 放行。"""
+        zw = "​"
+        text = self._v3(mode="session").replace(
+            "schema_version: 3\n", f"schema{zw}_version: 3\n"
+        )
+        self.assertTrue(check_report(text))
+
+    def test_v3_nested_item_type_errors_reported_not_raised(self) -> None:
+        """第 12 轮终验：issues/critical_acks 元素错型返回违规说明，不抛异常。"""
+        text = self._v3(mode="session").replace(
+            "{\"issues\": [{\"id\": \"C-1\", \"level\": \"Critical\", \"status\": \"closed\"}], \"critical_acks\": []}",
+            "{\"issues\": [null], \"critical_acks\": [42]}",
+        )
+        issues = check_report(text)
+        self.assertTrue(any("元素必须是对象" in i for i in issues))
+        text2 = self._v3(mode="session").replace(
+            "{\"issues\": [{\"id\": \"C-1\", \"level\": \"Critical\", \"status\": \"closed\"}], \"critical_acks\": []}",
+            "{\"issues\": \"oops\", \"critical_acks\": []}",
+        )
+        self.assertTrue(check_report(text2))
+
+
 
 if __name__ == "__main__":
     unittest.main()

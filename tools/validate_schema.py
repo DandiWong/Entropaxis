@@ -19,6 +19,7 @@ import argparse
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -26,7 +27,7 @@ SYSTEM_ROOT = HERE.parent
 WORKSPACE_ROOT = SYSTEM_ROOT.parent
 SCHEMA_DIR = SYSTEM_ROOT / "schemas"
 
-FRONT_MATTER_RE = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
+FRONT_MATTER_RE = re.compile(r"^﻿?---\n(.*?)\n---", re.DOTALL)
 _TYPES = {
     "object": dict, "array": list, "string": str,
     "integer": int, "number": (int, float), "boolean": bool, "null": type(None),
@@ -125,7 +126,13 @@ def parse_front_matter(text: str) -> dict | None:
         cut = min(cuts)
         k, v = line[:cut], line[cut + 1:]
         v = v.strip()
-        out[k.strip()] = int(v) if v.isdigit() else v
+        # 键规范化：剥 Cf 类格式字符（零宽/方向标记/BOM）再 NFKC 归一——
+        # 第 12 轮终验实测 schema_version 键注入零宽字符后整行落空，路由被
+        # 降级到 legacy 凭伪造 independence 放行。值不做规范化（保持原义）。
+        k = unicodedata.normalize(
+            "NFKC", "".join(ch for ch in k if unicodedata.category(ch) != "Cf")
+        ).strip()
+        out[k] = int(v) if v.isdigit() else v
     return out
 
 
