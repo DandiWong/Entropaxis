@@ -25,6 +25,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+import unicodedata
 
 try:
     from tools import validate_schema as vs
@@ -49,7 +50,12 @@ V2_STATUS_ENUM = tuple(_AUDIT_SCHEMA["status_enum"])
 # 空行分隔的连续文本天然属于同一段落，这是比"标题"更贴近排版事实本身的信号，
 # 不依赖某一种具体的标题语法。用 re.split 切分：分隔符（标题/---/空行）本身不
 # 进入任何分段，段内只要出现级别/ID/状态三者之一即视为候选问题段。
-_SECTION_BOUNDARY = re.compile(r"^(?:#{1,6}\s.*|-{3,}\s*|[ \t]*)$", re.MULTILINE)
+_SECTION_BOUNDARY_SPLIT = re.compile(r"^(#{1,6}\s.*|-{3,}\s*|[ \t]*)$", re.MULTILINE)
+# 问题式标题锚：`### 问题 1` / `### Issue 2` 形态的标题本身即声明"此处是问题
+# 记录"。第 11 轮第二批实测：字段行全部藏进 HTML 注释被规范化剥除后，段内
+# 不再有任何字段信号，若无标题锚点该段将整体逃过校验——字段被剥空恰恰必须
+# 报缺标注，而不是从校验范围消失。
+_CANDIDATE_HEADING = re.compile(r"^\s*#{1,6}\s*(?:问题|issue)\s*\d+", re.IGNORECASE)
 LEVEL_LINE_PATTERN = re.compile(r"^\s*级别\s*[:：]\s*(\S+)\s*$", re.MULTILINE)
 ID_LINE_PATTERN = re.compile(r"^\s*ID\s*[:：]\s*(\S+)\s*$", re.MULTILINE)
 STATUS_LINE_PATTERN = re.compile(r"^\s*状态\s*[:：]\s*(\S+)\s*$", re.MULTILINE)
@@ -136,19 +142,41 @@ def _body_text(text: str) -> str:
     m = FRONT_MATTER_PATTERN.search(text)
     return text[m.end():] if m else text
 
+# 第 11 轮第二批外置复核发现的两个"隐形载体"类绕过，按类收口（规范化，非逐
+# 变体枚举）：①HTML 注释包裹（`<!-- 级别: Critical -->`）让字段行在行首锚定下
+# 不可见；②Unicode 零宽/方向等格式字符（U+200B 等）插入字段名，视觉不变而
+# 模式失配。规范化只用于匹配，不回写文件；被揭示的字段行照常进入校验。
+_HTML_COMMENT_COMPLETE = re.compile(r"<!--.*?-->", re.DOTALL)
+_HTML_COMMENT_UNTERMINATED = re.compile(r"<!--.*$", re.MULTILINE)
+
+
+def _canonical(text: str) -> str:
+    """剥 HTML 注释与全部 Cf 类格式字符（零宽/方向标记/BOM 等），再 NFKC 归一。"""
+    text = _HTML_COMMENT_COMPLETE.sub("", text)
+    text = _HTML_COMMENT_UNTERMINATED.sub("", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    return unicodedata.normalize("NFKC", text)
+
 
 def _iter_candidate_sections(text: str):
-    """按空行/标题/---分隔线切分正文，只产出段内出现过至少一次 级别/ID/状态 标注的
-    候选问题段。纯叙述性段落（不含任何这三种标注）不作为候选，避免把文档其它内容
-    误当问题块；不要求标题存在，段落本身的空行边界就足以定位（R8-C1 修复）。
+    """按空行/标题/---分隔线切分正文，产出"疑似问题记录"候选段。
 
-    候选判定必须用"字段行"模式（只认字段名+冒号），不能用取值模式——第 11 轮
-    外置复核实测：三行字段全部写成行内重复（如 `级别: Critical 级别: open`）时，
-    任何一行都不满足取值正则，整段从候选集中消失，后续"恰好一次"校验全部
-    不执行，字段齐全的 Critical+closed 直接放行。取值不合法恰恰更该进校验，
-    而不是绕过它。"""
-    for section in _SECTION_BOUNDARY.split(text):
-        if (
+    候选判据（任一命中）：
+    ① 段内出现规范字段行（级别/ID/状态，只认字段名+冒号——第 11 轮实测行内
+       重复让取值正则全不满足时整段消失，取值不合法恰恰更该进校验）；
+    ② 段内出现语义等价变体字段行（級別/狀態/level/status，语言漂移兜底）；
+    ③ 段前分隔符是问题式标题（`### 问题 N`）——标题本身即声明问题记录，
+       字段全部藏进 HTML 注释被规范化剥空后，缺标注必须报出来（第 11 轮
+       第二批实测），不得让该段从校验范围消失。
+    纯叙述性段落（无任何上述信号）不作候选；不要求标题存在（R8-C1）。
+    分隔符在捕获组中保留，用于回看每段之前的问题式标题。"""
+    parts = _SECTION_BOUNDARY_SPLIT.split(text)
+    for i in range(0, len(parts), 2):
+        section = parts[i]
+        separator = parts[i - 1] if i >= 2 else ""
+        if separator and _CANDIDATE_HEADING.match(separator):
+            yield section or "\n"
+        elif (
             LEVEL_FIELD_PATTERN.search(section)
             or ID_FIELD_PATTERN.search(section)
             or STATUS_FIELD_PATTERN.search(section)
@@ -295,11 +323,14 @@ def check_report_v2(text: str) -> list[str]:
     issues += ack_block_issues
     seen_ids: dict[str, int] = {}
 
-    for section in _iter_candidate_sections(_body_text(text)):
+    # critical_ack 区块不参与问题候选段：其内的变体标注续行（如 status: ...）
+    # 曾被误判为问题段报缺标注（第 11 轮第二批外置复核实测误阻断）；ack 块由
+    # find_ack_blocks 单独校验。
+    body = ACK_BLOCK_PATTERN.sub("\n\n", _body_text(text))
+    for section in _iter_candidate_sections(body):
         header = section.splitlines()[0].strip().lstrip("#").strip() or "<无标题>"
         # 3) ID：字段行恰好一次（缺失/重复/空值重复都算），取值另校——
         #    计数取"字段名+冒号"的出现次数而非合法取值数（第 10 轮实测：一行合法
-        #    `ID: C-1` + 一行空值 `ID:` 的重复写法曾让计数回到 1，R7-C1 的防线被等价绕过）。
         id_fields = ID_FIELD_PATTERN.findall(section)
         if len(id_fields) != 1:
             issues.append(f"[{header}] `ID:` 标注出现 {len(id_fields)} 次，v2 契约要求恰好 1 次。")
@@ -369,8 +400,13 @@ def check_report_v2(text: str) -> list[str]:
 
 
 def check_report(text: str) -> list[str]:
-    """对审计报告全文做门禁核验，返回违规说明列表（空列表即通过）。"""
-    return check_report_v2(text) if is_v2(text) else check_report_legacy(text)
+    """对审计报告全文做门禁核验，返回违规说明列表（空列表即通过）。
+
+    匹配前先做文本规范化（剥 HTML 注释与 Cf 格式字符、NFKC 归一）——隐形
+    载体类变体（注释包裹、零宽字符注入）视觉不变而模式失配，属整类收口；
+    规范化只用于匹配，不回写文件。"""
+    canonical = _canonical(text)
+    return check_report_v2(canonical) if is_v2(canonical) else check_report_legacy(canonical)
 
 
 def _find_workspace_root(start: Path) -> Path | None:

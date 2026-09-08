@@ -529,9 +529,35 @@ class CheckAuditGateRound11RegressionTests(unittest.TestCase):
         issues = check_report(text)
         self.assertTrue(any("标注出现 0 次" in i for i in issues))
 
+    def test_html_comment_hidden_fields_blocked(self) -> None:
+        """第 11 轮第二批实测：`<!-- 级别: Critical -->` 注释包裹让字段行
+        在行首锚定下不可见；规范化剥注释后照常进入校验并拦截。"""
+        text = V2_SESSION_CLOSED_CRITICAL.format(sha=SHA_A).replace(
+            "级别: Critical\nID: C-1\n状态: closed\n",
+            "<!-- 级别: Critical -->\n<!-- ID: C-1 -->\n<!-- 状态: closed -->\n",
+        )
+        issues = check_report(text)
+        self.assertTrue(any("标注出现 0 次" in i for i in issues))
 
+    def test_zero_width_chars_in_field_names_blocked(self) -> None:
+        """零宽字符插入字段名（级<U+200B>别:）视觉不变而模式失配；规范化
+        剥除 Cf 类字符后按正常字段行校验。"""
+        zw = "​"
+        text = V2_SESSION_CLOSED_CRITICAL.format(sha=SHA_A).replace(
+            "级别: Critical\nID: C-1\n状态: closed\n",
+            f"级{zw}别: Critical\nI{zw}D: C-1\n状{zw}态: closed\n",
+        )
+        issues = check_report(text)
+        self.assertTrue(any("会话内承载不可将 Critical 置为 closed" in i for i in issues))
 
-
+    def test_ack_block_variant_continuation_not_flagged(self) -> None:
+        """ack 块内以变体标注开头的续行不得被误判为问题段（第 11 轮第二批
+        实测误阻断）。"""
+        text = V2_WAIVED_WITH_ACK_TEMPLATE.format(ack_sha=SHA_A, sha=SHA_A).replace(
+            "- 适用范围: 仅本轮受审指纹\n",
+            "- 适用范围: 仅本轮受审指纹\n  status: confirmed\n  level: noted\n",
+        )
+        self.assertEqual(check_report(text), [])
 
 
 if __name__ == "__main__":
