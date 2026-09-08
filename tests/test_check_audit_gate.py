@@ -656,6 +656,17 @@ class CheckAuditGateV3Tests(unittest.TestCase):
         )
         self.assertTrue(any("未声明字段" in i for i in check_report(text)))
 
+    def test_v3_non_object_top_level_reported_not_raised(self) -> None:
+        """第 12 轮第三批：围栏 JSON 顶层为 null/数组/字符串时返回违规说明，
+        不得抛未捕获异常（接口契约）。"""
+        for raw in ("null", "[]", '"closed"'):
+            text = self._v3().replace(
+                '{"issues": [{"id": "C-1", "level": "Critical", "status": "closed"}], "critical_acks": []}',
+                raw,
+            )
+            issues = check_report(text)
+            self.assertTrue(any("顶层必须是 JSON 对象" in i for i in issues), raw)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -457,6 +457,12 @@ def check_report_v3(text: str) -> list[str]:
         issues.append(f"audit-state 围栏不是合法 JSON（或含重复键）：{exc}（严格解析 fail-closed，不接受修复性解释）。")
         return issues
     issues += [f"audit-state {e}" for e in vs.validate(state, schema["properties"]["sidecar_format"])]
+    if not isinstance(state, dict):
+        # 第 12 轮第三批复核：顶层为 null/数组/字符串时类型错误已由上面记录，
+        # 但不能继续走 state.get()——那会抛未捕获 AttributeError 违反本函数
+        # "返回违规说明列表"的接口契约（阻断方向虽对，报错形态不对）。
+        issues.append(f"audit-state 顶层必须是 JSON 对象，实得 {type(state).__name__}。")
+        return issues
 
     reviewer_mode = fm.get("reviewer_mode")
     target_sha256 = fm.get("target_sha256")
