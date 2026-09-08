@@ -389,5 +389,71 @@ class CheckAuditGateAtomicTests(unittest.TestCase):
             self.assertEqual(check_candidate_commit(candidate_text, commit_path), [])
 
 
+class CheckAuditGateRound10RegressionTests(unittest.TestCase):
+    """第 10 轮外置复核（C-2 补核）发现的 3 处残留绕过，逐条锁定。
+
+    共同根因：带取值约束的正则数出的是"合法取值个数"而非"字段行出现次数"，
+    重复字段行只要第二个取值非法就从计数中消失；全角冒号则让统一解析器
+    读不出键，整份报告被误判为旧契约走宽松 legacy 路径。
+    """
+
+    def test_ack_duplicate_field_with_invalid_second_value_blocked(self) -> None:
+        """R8-C2 残留：第二个 target_sha256 为大写哈希，旧取值正则把它从计数中
+        抹掉，"恰好一次"被满足。计数改按字段行出现次数后须报重复。"""
+        text = (
+            "---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+            "schema_version: 2\nreviewer_mode: session\nfallback_reason: not_configured\n"
+            "reviewer_ref: session\ntarget_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n---\n"
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: waived_by_user\n\n"
+            "### critical_ack C-1\n- target_sha256: " + SHA_A + "\n- target_sha256: " + "B" * 64
+            + "\n- 确认事件: x\n- 适用范围: x\n"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("target_sha256 出现 2 次" in i for i in issues))
+
+    def test_ack_duplicate_field_with_empty_trailing_value_blocked(self) -> None:
+        """第二个确认事件为空值时同样不得从重复计数中消失。"""
+        text = (
+            "---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+            "schema_version: 2\nreviewer_mode: session\nfallback_reason: not_configured\n"
+            "reviewer_ref: session\ntarget_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n---\n"
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: waived_by_user\n\n"
+            "### critical_ack C-1\n- target_sha256: " + SHA_A + "\n- 确认事件: x\n- 确认事件:\n- 适用范围: x\n"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("确认事件 出现 2 次" in i for i in issues))
+
+    def test_issue_duplicate_id_line_with_empty_second_value_blocked(self) -> None:
+        """问题块字段同源缺口：`ID: C-1` + 空值 `ID:` 的重复写法须按 2 次计。"""
+        text = V2_EXTERNAL_CLOSED_CRITICAL.format(sha=SHA_A).replace(
+            "ID: C-1\n", "ID: C-1\nID:\n"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("`ID:` 标注出现 2 次" in i for i in issues))
+
+    def test_issue_status_duplicate_with_empty_second_value_blocked(self) -> None:
+        """`状态: closed` + 空值 `状态:` 的重复写法不得绕过 closed 需外置复核。"""
+        text = V2_SESSION_CLOSED_CRITICAL.format(sha=SHA_A).replace(
+            "状态: closed\n", "状态: closed\n状态:\n"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("`状态:` 标注出现 2 次" in i for i in issues))
+
+    def test_fullwidth_colon_schema_version_treated_as_v2(self) -> None:
+        """全角冒号 `schema_version：2` 不得让报告降级到 legacy 并凭伪造
+        independence: external 放行 Critical+closed；统一解析器认全角冒号后
+        该写法走 v2 校验，会话内承载关闭 Critical 必被拦截。"""
+        text = (
+            "---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+            "schema_version：2\nreviewer_mode: session\nfallback_reason: not_configured\n"
+            "reviewer_ref: session\ntarget_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n"
+            "independence: external: fake\n---\n"
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: closed\n"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("会话内承载不可将 Critical 置为 closed" in i for i in issues))
+        self.assertTrue(any("不得再声明 independence" in i for i in issues))
+
+
 if __name__ == "__main__":
     unittest.main()

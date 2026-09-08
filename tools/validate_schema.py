@@ -102,9 +102,16 @@ def parse_front_matter(text: str) -> dict | None:
         return None
     out: dict = {}
     for line in m.group(1).splitlines():
-        if not line.strip() or line.lstrip().startswith("#") or ":" not in line:
+        if not line.strip() or line.lstrip().startswith("#"):
             continue
-        k, v = line.split(":", 1)
+        # 分隔符取行内最先出现的 ASCII `:` 或全角 `：`：只认 ASCII 会让
+        # `schema_version：2` 这类全角写法整行静默落空，键不存在即被上游
+        # 判为旧契约（第 10 轮外置复核借此把只读校验降级到 legacy 放行）。
+        cuts = [i for i in (line.find(":"), line.find("：")) if i != -1]
+        if not cuts:
+            continue
+        cut = min(cuts)
+        k, v = line[:cut], line[cut + 1:]
         v = v.strip()
         out[k.strip()] = int(v) if v.isdigit() else v
     return out

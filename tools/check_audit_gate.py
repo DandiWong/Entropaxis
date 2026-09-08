@@ -53,6 +53,15 @@ _SECTION_BOUNDARY = re.compile(r"^(?:#{1,6}\s.*|-{3,}\s*|[ \t]*)$", re.MULTILINE
 LEVEL_LINE_PATTERN = re.compile(r"^\s*级别\s*[:：]\s*(\S+)\s*$", re.MULTILINE)
 ID_LINE_PATTERN = re.compile(r"^\s*ID\s*[:：]\s*(\S+)\s*$", re.MULTILINE)
 STATUS_LINE_PATTERN = re.compile(r"^\s*状态\s*[:：]\s*(\S+)\s*$", re.MULTILINE)
+# 第 10 轮外置复核（C-2 补核）抓到"恰好一次"的计数缺口：带取值约束的正则
+# （\S+、[0-9a-f]{64}）数出来的是"合法取值的个数"，不是"字段行的出现次数"——
+# 重复字段行只要第二个取值非法（空值、大写哈希、行尾空置），就从 findall()
+# 中消失，一行合法 + 一行非法重复 = 计数 1，恰好一次被"满足"。计数与取值
+# 校验必须分离：计数用"只认字段名+冒号"的出现模式（取值任意，含空），
+# 取值合法性另由上面的取值模式单独校验后给出独立报错。
+LEVEL_FIELD_PATTERN = re.compile(r"^\s*级别\s*[:：]", re.MULTILINE)
+ID_FIELD_PATTERN = re.compile(r"^\s*ID\s*[:：]", re.MULTILINE)
+STATUS_FIELD_PATTERN = re.compile(r"^\s*状态\s*[:：]", re.MULTILINE)
 LEGACY_CLOSED_PATTERN = re.compile(r"状态\s*[:：]\s*(已关闭|closed)", re.IGNORECASE)
 # 旧契约专用的宽松块定位（不要求标题锚点）：历史冻结报告格式不一，有的问题条目
 # 并非紧跟 markdown 标题。v2 的严格"恰好一次"架构只用于 v2 校验，不下沉到这里，
@@ -135,10 +144,17 @@ def find_closed_critical_blocks(text: str) -> list[str]:
     return blocks
 
 
-_ACK_FIELD_PATTERNS = {
-    "target_sha256": r"target_sha256\s*[:：]\s*([0-9a-f]{64})",
-    "确认事件": r"确认事件\s*[:：]\s*(\S.*)",
-    "适用范围": r"适用范围\s*[:：]\s*(\S.*)",
+# 字段行计数与取值校验分离（第 10 轮实测：第二个 target_sha256 为大写哈希时，
+# 旧取值正则把它从计数中抹掉，R8-C2 的"恰好一次"形同虚设）。
+_ACK_FIELD_OCCURRENCE = {
+    "target_sha256": re.compile(r"target_sha256\s*[:：]"),
+    "确认事件": re.compile(r"确认事件\s*[:：]"),
+    "适用范围": re.compile(r"适用范围\s*[:：]"),
+}
+_ACK_FIELD_VALUE = {
+    "target_sha256": re.compile(r"target_sha256\s*[:：]\s*([0-9a-f]{64})"),
+    "确认事件": re.compile(r"确认事件\s*[:：]\s*(\S.*)"),
+    "适用范围": re.compile(r"适用范围\s*[:：]\s*(\S.*)"),
 }
 
 
@@ -171,15 +187,22 @@ def find_ack_blocks(text: str) -> tuple[dict[str, dict[str, str] | None], list[s
         body = bodies[0]
         fields: dict[str, str] = {}
         field_ok = True
-        for key, pattern in _ACK_FIELD_PATTERNS.items():
-            matches = re.findall(pattern, body)
-            if len(matches) != 1:
+        for key in _ACK_FIELD_OCCURRENCE:
+            occ = len(_ACK_FIELD_OCCURRENCE[key].findall(body))
+            if occ != 1:
                 block_issues.append(
-                    f"[{issue_id}] critical_ack.{key} 出现 {len(matches)} 次，须恰好 1 次。"
+                    f"[{issue_id}] critical_ack.{key} 出现 {occ} 次，须恰好 1 次。"
                 )
                 field_ok = False
                 continue
-            fields[key] = matches[0].strip()
+            values = _ACK_FIELD_VALUE[key].findall(body)
+            if len(values) != 1:
+                block_issues.append(
+                    f"[{issue_id}] critical_ack.{key} 字段行唯一但取值为空或不符合格式。"
+                )
+                field_ok = False
+                continue
+            fields[key] = values[0].strip()
         acks[issue_id] = fields if field_ok else None
     return acks, block_issues
 
@@ -225,30 +248,42 @@ def check_report_v2(text: str) -> list[str]:
 
     for section in _iter_candidate_sections(text):
         header = section.splitlines()[0].strip().lstrip("#").strip() or "<无标题>"
+        # 3) ID：字段行恰好一次（缺失/重复/空值重复都算），取值另校——
+        #    计数取"字段名+冒号"的出现次数而非合法取值数（第 10 轮实测：一行合法
+        #    `ID: C-1` + 一行空值 `ID:` 的重复写法曾让计数回到 1，R7-C1 的防线被等价绕过）。
+        id_fields = ID_FIELD_PATTERN.findall(section)
+        if len(id_fields) != 1:
+            issues.append(f"[{header}] `ID:` 标注出现 {len(id_fields)} 次，v2 契约要求恰好 1 次。")
+            continue
         ids = ID_LINE_PATTERN.findall(section)
-        # 3) ID 必须恰好出现一次；缺失或重复都是违规，不取"第一个匹配"了事——
-        #    取第一个匹配正是 R5/R6 沿用至今却从未验证过的隐患：状态/级别一旦被
-        #    复制成两行，.search() 永远只看得见第一行（第 7 轮实测抓到，R7-C1）。
         if len(ids) != 1:
-            issues.append(f"[{header}] `ID:` 标注出现 {len(ids)} 次，v2 契约要求恰好 1 次。")
+            issues.append(f"[{header}] `ID:` 字段行唯一但取值为空或格式不符。")
             continue
         issue_id = ids[0]
         seen_ids[issue_id] = seen_ids.get(issue_id, 0) + 1
 
-        # 4) 级别：恰好一次 + 枚举校验（R6-C3 定位与校验解耦 + R7-C1 恰好一次校验）。
+        # 4) 级别：字段行恰好一次 + 取值枚举校验（R6-C3 定位与校验解耦 + R7-C1 恰好一次）。
+        level_fields = LEVEL_FIELD_PATTERN.findall(section)
+        if len(level_fields) != 1:
+            issues.append(f"[{issue_id}] `级别:` 标注出现 {len(level_fields)} 次，v2 契约要求恰好 1 次。")
+            continue
         levels = LEVEL_LINE_PATTERN.findall(section)
         if len(levels) != 1:
-            issues.append(f"[{issue_id}] `级别:` 标注出现 {len(levels)} 次，v2 契约要求恰好 1 次。")
+            issues.append(f"[{issue_id}] `级别:` 字段行唯一但取值为空或格式不符。")
             continue
         level = _normalize_level(levels[0])
         if level is None:
             issues.append(f"[{issue_id}] 级别={levels[0]!r} 不在枚举 {LEVEL_ENUM} 内。")
             continue
 
-        # 5) 状态：恰好一次 + 枚举校验；v2 只认 open/closed/waived_by_user，其余（含 challenged）一律违规。
+        # 5) 状态：字段行恰好一次 + 取值枚举校验；v2 只认 open/closed/waived_by_user，其余（含 challenged）一律违规。
+        status_fields = STATUS_FIELD_PATTERN.findall(section)
+        if len(status_fields) != 1:
+            issues.append(f"[{issue_id}] `状态:` 标注出现 {len(status_fields)} 次，v2 契约要求恰好 1 次。")
+            continue
         statuses = STATUS_LINE_PATTERN.findall(section)
         if len(statuses) != 1:
-            issues.append(f"[{issue_id}] `状态:` 标注出现 {len(statuses)} 次，v2 契约要求恰好 1 次。")
+            issues.append(f"[{issue_id}] `状态:` 字段行唯一但取值为空或格式不符。")
             continue
         status = statuses[0]
         if status not in V2_STATUS_ENUM:
