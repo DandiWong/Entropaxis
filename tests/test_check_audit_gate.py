@@ -512,6 +512,25 @@ class CheckAuditGateRound11RegressionTests(unittest.TestCase):
         issues = check_report(text)
         self.assertTrue(any("未定义字段" in i or "出现 0 次" in i for i in issues))
 
+    def test_all_english_label_variants_still_candidate(self) -> None:
+        """第 11 轮实测：Level:/Issue-ID:/Status: 全变体段不得从候选集消失。"""
+        text = V2_SESSION_CLOSED_CRITICAL.format(sha=SHA_A).replace(
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: closed\n",
+            "### Issue 1\nLevel: Critical\nIssue-ID: C-1\nStatus: closed\n",
+        )
+        issues = check_report(text)
+        self.assertTrue(any("标注出现 0 次" in i for i in issues))
+
+    def test_all_traditional_label_variants_still_candidate(self) -> None:
+        text = V2_SESSION_CLOSED_CRITICAL.format(sha=SHA_A).replace(
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: closed\n",
+            "### 問題 1\n級別: Critical\nID: C-1\n狀態: closed\n",
+        )
+        issues = check_report(text)
+        self.assertTrue(any("标注出现 0 次" in i for i in issues))
+
+
+
 
 
 

@@ -62,6 +62,18 @@ STATUS_LINE_PATTERN = re.compile(r"^\s*状态\s*[:：]\s*(\S+)\s*$", re.MULTILIN
 LEVEL_FIELD_PATTERN = re.compile(r"^\s*级别\s*[:：]", re.MULTILINE)
 ID_FIELD_PATTERN = re.compile(r"^\s*ID\s*[:：]", re.MULTILINE)
 STATUS_FIELD_PATTERN = re.compile(r"^\s*状态\s*[:：]", re.MULTILINE)
+# 第 11 轮外置复核实测：三个字段名全部换成英文/繁体变体（Level:/Status:/級別:/狀態:）
+# 时候选段完全不产出，字段齐全的 Critical+closed 直接放行。现实失效模式是生成端
+# 语言漂移（模型切到英文/繁中输出标注），属可能半意外发生的形态——候选判定按语义
+# 等价变体放宽，进入校验后仍要求规范中文标注，变体段以"标注出现 0 次"fail-closed。
+# `ID` 本身即英文，无需变体；行首变体标注可能让引用了英文字段行的叙述段落进入候选
+# 并报缺标注，属预期的保守失败（人工消歧），不是误放行。这是该类最后一个已知现实
+# 变体；再出现新格式变体即触发第 9 轮预登记的升级路径——机器状态移入结构化
+# sidecar，不再补正则。
+_CANDIDATE_LABEL_VARIANTS = re.compile(
+    r"^[ \t]*(?:级别|級別|level|状态|狀態|status)[ \t]*[:：]",
+    re.IGNORECASE | re.MULTILINE,
+)
 LEGACY_CLOSED_PATTERN = re.compile(r"状态\s*[:：]\s*(已关闭|closed)", re.IGNORECASE)
 # 旧契约专用的宽松块定位（不要求标题锚点）：历史冻结报告格式不一，有的问题条目
 # 并非紧跟 markdown 标题。v2 的严格"恰好一次"架构只用于 v2 校验，不下沉到这里，
@@ -117,6 +129,13 @@ def _normalize_level(raw: str) -> str | None:
             return canonical
     return None
 
+def _body_text(text: str) -> str:
+    """剥离 Front Matter 后的正文。第 11 轮变体候选判定引入后，FM 行
+    `status: active` 会命中 `^[ \t]*status...` 使整个档头被当成候选问题段
+    报缺标注（正控实测误伤）——候选段迭代只作用于正文，档头由 schema 校验。"""
+    m = FRONT_MATTER_PATTERN.search(text)
+    return text[m.end():] if m else text
+
 
 def _iter_candidate_sections(text: str):
     """按空行/标题/---分隔线切分正文，只产出段内出现过至少一次 级别/ID/状态 标注的
@@ -133,6 +152,7 @@ def _iter_candidate_sections(text: str):
             LEVEL_FIELD_PATTERN.search(section)
             or ID_FIELD_PATTERN.search(section)
             or STATUS_FIELD_PATTERN.search(section)
+            or _CANDIDATE_LABEL_VARIANTS.search(section)
         ):
             yield section
 
@@ -275,7 +295,7 @@ def check_report_v2(text: str) -> list[str]:
     issues += ack_block_issues
     seen_ids: dict[str, int] = {}
 
-    for section in _iter_candidate_sections(text):
+    for section in _iter_candidate_sections(_body_text(text)):
         header = section.splitlines()[0].strip().lstrip("#").strip() or "<无标题>"
         # 3) ID：字段行恰好一次（缺失/重复/空值重复都算），取值另校——
         #    计数取"字段名+冒号"的出现次数而非合法取值数（第 10 轮实测：一行合法
