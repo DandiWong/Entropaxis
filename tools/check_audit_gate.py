@@ -449,6 +449,8 @@ def check_report_v3(text: str) -> list[str]:
 
     raw, fence_issues = _extract_audit_state(text)
     issues += fence_issues
+    if raw is None:
+        return issues
     try:
         state = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
     except (json.JSONDecodeError, ValueError) as exc:

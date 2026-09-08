@@ -29,7 +29,7 @@ SCHEMA_DIR = SYSTEM_ROOT / "schemas"
 FRONT_MATTER_RE = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
 _TYPES = {
     "object": dict, "array": list, "string": str,
-    "integer": int, "number": (int, float), "boolean": bool,
+    "integer": int, "number": (int, float), "boolean": bool, "null": type(None),
 }
 
 
@@ -40,22 +40,26 @@ def load_schema(name: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-# `$` 前缀整体豁免曾被用来在数据实例里走私任意字段（第 12 轮外置复核：
-# sidecar 的 "$issues" 携带 closed 状态穿过 additionalProperties:false）。
-# 豁免只保留给标准 JSON-Schema 指令键——它们只应出现在 schema 文档里，
-# 不该是数据实例的通行证。
+# `$` 前缀键的豁免只对 schema 文档（含 schema 自检样例）生效，且仅限标准
+# JSON-Schema 指令键；数据实例（route_map、报告 Front Matter、audit-state
+# sidecar）一律不豁免——第 12 轮外置复核先后实测 "$issues" 走私字段与
+# "$comment" 携带状态文本穿过 additionalProperties:false。
 _SCHEMA_DIRECTIVE_KEYS = frozenset(
     {"$schema", "$comment", "$id", "$ref", "$defs", "$anchor", "$dynamicRef"}
 )
 
-def validate(data, schema: dict, path: str = "$") -> list[str]:
+
+def validate(data, schema: dict, path: str = "$", *, allow_schema_directives: bool = False) -> list[str]:
     """返回违规说明列表；空列表表示通过。"""
     errs: list[str] = []
     expected = schema.get("type")
     if expected:
-        py = _TYPES.get(expected)
-        # bool 是 int 的子类，整数校验必须显式排除，否则 true 会被当成合法整数
-        if py and (not isinstance(data, py) or (expected in ("integer", "number") and isinstance(data, bool))):
+        alternatives = expected if isinstance(expected, list) else [expected]
+        if not any(
+            kind in _TYPES and isinstance(data, _TYPES[kind])
+            and not (kind in ("integer", "number") and isinstance(data, bool))
+            for kind in alternatives
+        ):
             return [f"{path}: 期望 {expected}，实得 {type(data).__name__}"]
 
     # enum 对任意可比较类型生效（不限字符串）：此前只在 isinstance(data, str) 分支里
@@ -82,11 +86,11 @@ def validate(data, schema: dict, path: str = "$") -> list[str]:
         props = schema.get("properties", {})
         if schema.get("additionalProperties") is False:
             for key in data:
-                if key not in props and key not in _SCHEMA_DIRECTIVE_KEYS:
+                if key not in props and not (allow_schema_directives and key in _SCHEMA_DIRECTIVE_KEYS):
                     errs.append(f"{path}: 出现未声明字段 {key!r}（拼写错误或需先在 schema 中登记）")
         for key, sub in props.items():
             if key in data:
-                errs += validate(data[key], sub, f"{path}.{key}")
+                errs += validate(data[key], sub, f"{path}.{key}", allow_schema_directives=allow_schema_directives)
         for cond in schema.get("conditional_required", []):
             if all(data.get(k) == v for k, v in cond.get("when", {}).items()):
                 for key in cond.get("require", []):
@@ -99,7 +103,7 @@ def validate(data, schema: dict, path: str = "$") -> list[str]:
         item_schema = schema.get("items")
         if item_schema:
             for i, item in enumerate(data):
-                errs += validate(item, item_schema, f"{path}[{i}]")
+                errs += validate(item, item_schema, f"{path}[{i}]", allow_schema_directives=allow_schema_directives)
     return errs
 
 
@@ -142,7 +146,7 @@ def check_audit_report_schema_selftest() -> list[str]:
     instance = schema.get("instance")
     if not isinstance(instance, dict):
         return ["audit_report.schema.json 缺少 instance 自检样例"]
-    return [f"audit_report 自检样例 {e}" for e in validate(instance, schema)]
+    return [f"audit_report 自检样例 {e}" for e in validate(instance, schema, allow_schema_directives=True)]
 
 
 def check_markdown(path: Path) -> list[str]:
