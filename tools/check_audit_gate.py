@@ -433,7 +433,16 @@ def check_report_v2(text: str) -> list[str]:
 
 # ---------- schema_version 3：audit-state 围栏契约（第 12 轮用户裁定重构） ----------
 
-_AUDIT_STATE_FENCE = re.compile(r"```[ \t]*audit-state[ \t]*\r?\n(.*?)\r?\n?[ \t]*```", re.DOTALL)
+# 提取模式：严格 markdown 围栏语义——行首至多 3 空格缩进、``` 或 ~~~ 开栏
+# 且必须同型闭合、标签行恰为 audit-state（围栏 info string 独占一行）。
+# 与 _FENCE_INTENT 守卫共用同一套结构判定，保证"守卫 ⊇ 提取器"恒成立
+# （第 12 轮第十批实测：提取器容忍缩进围栏而守卫行首硬锚定，二者不一致
+# 即绕过面）。
+_AUDIT_STATE_FENCE = re.compile(
+    r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})[^\S\n]{0,3}audit-state[^\S\n]{0,3}\r?\n"
+    r"(?P<content>.*?)\r?\n[ \t]{0,3}(?P=fence)[^\S\n]{0,3}$",
+    re.DOTALL | re.MULTILINE,
+)
 
 # 守卫专用的"围栏意图"模式，结构化判定而非逐变体枚举：行首三反引号/波浪
 # 围栏标记 + audit→state 记号对（中间容忍至多 3 个任意非文字分隔符：空格/
@@ -442,13 +451,13 @@ _AUDIT_STATE_FENCE = re.compile(r"```[ \t]*audit-state[ \t]*\r?\n(.*?)\r?\n?[ \t
 # `audit - state` 等变体与零宽字符注入全部覆盖；`audit-statement` 类词尾
 # 延伸与行内字面引用（非行首围栏标记）不误伤。
 _FENCE_INTENT = re.compile(
-    r"^(?:`{3,}|~{3,})[^\S\n]{0,3}audit[^\w\n]{0,3}state[^\S\n]{0,3}$",
+    r"^[ \t]{0,3}(?:`{3,}|~{3,})[^\S\n]{0,3}audit[^\w\n]*state[^\S\n]{0,3}$",
     re.IGNORECASE | re.MULTILINE,
 )
 
 
 def _extract_audit_state(text: str) -> tuple[str | None, list[str]]:
-    fences = _AUDIT_STATE_FENCE.findall(text)
+    fences = [m.group("content") for m in _AUDIT_STATE_FENCE.finditer(text)]
     if len(fences) != 1:
         return None, [
             f"audit-state 围栏出现 {len(fences)} 次，schema_version>=3 的报告必须恰好包含 1 个"

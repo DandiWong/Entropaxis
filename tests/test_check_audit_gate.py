@@ -756,5 +756,17 @@ class CheckAuditGateV3Tests(unittest.TestCase):
         ))
 
 
+    def test_v3_fence_intent_superset_alignment(self) -> None:
+        """第 12 轮第十批：无界分隔记号对与 1-3 空格缩进围栏（提取器可接受）
+        不得绕过守卫——守卫 ⊇ 提取器恒成立。"""
+        base = self._v3(mode="session").replace("schema_version: 3\n", "schema_version: 2\n")
+        for fence, label in (("```", "audit    state"), ("```", "audit----state"), (" ```", "audit-state"), ("   ~~~", "audit-state")):
+            text = base.replace("```audit-state", fence + label)
+            self.assertTrue(any("schema_version 不是 3" in i for i in check_report(text)), label)
+        # 4 空格缩进的围栏示例不属于顶层围栏（markdown 语义），不触发守卫。
+        doc = base[: base.index("```audit-state")] + "\n    ```audit-state\n    {}\n    ```\n"
+        self.assertFalse(any("schema_version 不是 3" in i for i in check_report(doc)))
+
+
 if __name__ == "__main__":
     unittest.main()
