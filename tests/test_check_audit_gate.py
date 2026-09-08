@@ -739,5 +739,22 @@ class CheckAuditGateV3Tests(unittest.TestCase):
             self.assertTrue(any("schema_version 不是 3" in i for i in check_report(variant)))
 
 
+    def test_v3_fence_intent_structural_variants(self) -> None:
+        """第 12 轮第九批：Tab/双空格/Unicode 连字符/空格连字符标签变体与
+        版本字段攻击组合全部拦截；audit-statement 与行内字面引用不误伤。"""
+        base = self._v3(mode="session").replace("schema_version: 3\n", "schema_version: 2\n")
+        for label in ("AUDIT\tSTATE", "audit  state", "audit‒state", "audit - state"):
+            text = base.replace("```audit-state", "```" + label)
+            self.assertTrue(any("schema_version 不是 3" in i for i in check_report(text)), label)
+        prose = self._v3(mode="session").replace(
+            "schema_version: 3\n", "schema_version: 2\n"
+        ).replace("```audit-state\n", "").replace(
+            "\n```\n", "\n参考 `audit-statement` 与 audit-statement 词。\n"
+        )
+        self.assertTrue(check_report(prose) in ([], ) or not any(
+            "围栏" in i and "schema_version" in i for i in check_report(prose)
+        ))
+
+
 if __name__ == "__main__":
     unittest.main()

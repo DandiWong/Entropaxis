@@ -435,10 +435,16 @@ def check_report_v2(text: str) -> list[str]:
 
 _AUDIT_STATE_FENCE = re.compile(r"```[ \t]*audit-state[ \t]*\r?\n(.*?)\r?\n?[ \t]*```", re.DOTALL)
 
-# 守卫专用的"围栏意图"模式：比提取模式宽松（忽略大小写、容忍 ``` 与 ~~~、
-# 标签内连字符/下划线/空格变体），配合规范化文本使用——第 12 轮第八批实测
-# 版本字段删除与标签零宽字符/大小写/波浪围栏组合可绕过原始文本上的精确匹配。
-_FENCE_INTENT = re.compile(r"(?:`{3,}|~{3,})[ \t]*audit[-_ ]?state", re.IGNORECASE)
+# 守卫专用的"围栏意图"模式，结构化判定而非逐变体枚举：行首三反引号/波浪
+# 围栏标记 + audit→state 记号对（中间容忍至多 3 个任意非文字分隔符：空格/
+# 制表/U+2010 等连字符变体）+ 标签独占一行。配合规范化文本（剥 Cf/NFKC）
+# 使用——第 12-13 批实测的标签大小写、双空格、Tab、Unicode 连字符、
+# `audit - state` 等变体与零宽字符注入全部覆盖；`audit-statement` 类词尾
+# 延伸与行内字面引用（非行首围栏标记）不误伤。
+_FENCE_INTENT = re.compile(
+    r"^(?:`{3,}|~{3,})[^\S\n]{0,3}audit[^\w\n]{0,3}state[^\S\n]{0,3}$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _extract_audit_state(text: str) -> tuple[str | None, list[str]]:
