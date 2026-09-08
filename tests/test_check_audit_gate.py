@@ -1,4 +1,5 @@
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -558,6 +559,84 @@ class CheckAuditGateRound11RegressionTests(unittest.TestCase):
             "- 适用范围: 仅本轮受审指纹\n  status: confirmed\n  level: noted\n",
         )
         self.assertEqual(check_report(text), [])
+
+
+class CheckAuditGateV3Tests(unittest.TestCase):
+    """schema_version 3（audit-state 围栏）契约：第 12 轮 sidecar 重构。
+
+    机器状态唯一真源为正文内唯一 ```audit-state``` 围栏 JSON；散文问题清单
+    不再被解析。严格 JSON 解析：篡改要么照常解析受检，要么解析失败 fail-closed。
+    """
+
+    def _v3(self, mode="external", issues=None, acks=None):
+        state = {
+            "issues": issues if issues is not None else [
+                {"id": "C-1", "level": "Critical", "status": "closed"}
+            ],
+            "critical_acks": acks or [],
+        }
+        fm = (
+            "---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+            "schema_version: 3\nreviewer_mode: " + mode + "\n"
+            "reviewer_ref: " + ("some-cli --model x" if mode == "external" else "session") + "\n"
+            "target_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n"
+        )
+        if mode == "session":
+            fm += "fallback_reason: not_configured\n"
+        return fm + "---\n\n```audit-state\n" + json.dumps(state, ensure_ascii=False) + "\n```\n"
+
+    def test_valid_v3_external_closed_passes(self) -> None:
+        self.assertEqual(check_report(self._v3()), [])
+
+    def test_v3_session_cannot_close_critical(self) -> None:
+        issues = check_report(self._v3(mode="session"))
+        self.assertTrue(any("不可将 Critical 置为 closed" in i for i in issues))
+
+    def test_v3_missing_fence_blocked(self) -> None:
+        text = self._v3().split("```audit-state")[0]
+        self.assertTrue(any("围栏出现 0 次" in i for i in check_report(text)))
+
+    def test_v3_duplicate_fence_blocked(self) -> None:
+        text = self._v3() + "\n```audit-state\n{\"issues\": [], \"critical_acks\": []}\n```\n"
+        self.assertTrue(any("围栏出现 2 次" in i for i in check_report(text)))
+
+    def test_v3_invalid_json_fail_closed(self) -> None:
+        text = self._v3().replace("\"status\": \"closed\"", "\"status\": \"closed\",,")
+        self.assertTrue(any("不是合法 JSON" in i for i in check_report(text)))
+
+    def test_v3_duplicate_issue_id_blocked(self) -> None:
+        issues = check_report(self._v3(issues=[
+            {"id": "C-1", "level": "Critical", "status": "closed"},
+            {"id": "C-1", "level": "Major", "status": "open"},
+        ]))
+        self.assertTrue(any("重复出现" in i for i in issues))
+
+    def test_v3_waived_requires_matching_ack(self) -> None:
+        waived = [{"id": "M-1", "level": "Major", "status": "waived_by_user"}]
+        no_ack = check_report(self._v3(issues=waived))
+        self.assertTrue(any("无对应确认" in i for i in no_ack))
+        wrong_fp = check_report(self._v3(issues=waived, acks=[
+            {"issue_id": "M-1", "target_sha256": SHA_B, "confirm_event": "x", "scope": "y"}
+        ]))
+        self.assertTrue(any("复核对象已变化" in i for i in wrong_fp))
+
+    def test_v3_ack_unknown_issue_id_blocked(self) -> None:
+        issues = check_report(self._v3(acks=[
+            {"issue_id": "X-9", "target_sha256": SHA_A, "confirm_event": "x", "scope": "y"}
+        ]))
+        self.assertTrue(any("指向不存在的问题 ID" in i for i in issues))
+
+    def test_v3_prose_not_parsed(self) -> None:
+        """散文中的状态行不再是机器契约——围栏是唯一真源，散文仅供人读。
+        此前 5 轮外置复核的格式变体攻击面对 v3 整体不适用。"""
+        text = self._v3() + "\n### 问题 9\n级别: Critical\nID: C-9\n状态: closed\n"
+        self.assertEqual(check_report(text), [])
+
+    def test_v3_essay_weapons_only_fail_closed(self) -> None:
+        """对 v2 有效的散文绕过形态（注释隐藏/零宽/变体/Setext）对 v3 无效：
+        围栏标签被破坏时只会得到"围栏 0 次"的 fail-closed，不存在放行路径。"""
+        text = self._v3().replace("```audit-state\n", "```audit-state-broken\n")
+        self.assertTrue(any("围栏出现 0 次" in i for i in check_report(text)))
 
 
 if __name__ == "__main__":

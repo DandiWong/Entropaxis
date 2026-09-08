@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import sys
 import tempfile
@@ -108,6 +109,10 @@ def parse_front_matter(text: str) -> dict:
     """复用 validate_schema 的扁平 Front Matter 解析；无档头返回空字典。"""
     return vs.parse_front_matter(text) or {}
 
+def is_v3(text: str) -> bool:
+    """schema_version 恰为 3：机器状态走 audit-state 围栏契约。"""
+    return parse_front_matter(text).get("schema_version") == 3
+
 
 def is_v2(text: str) -> bool:
     """Front Matter 出现 schema_version 键即为 v2 意图，不要求其值合法——
@@ -118,7 +123,8 @@ def is_v2(text: str) -> bool:
     空格）能被 parse_front_matter 正确解析出键，却被本函数的严格正则判定为"键不存在"，
     致使整份 v2 报告被错误地当成旧契约放行（第 5 轮外置复核实测抓到的 fail-open）。
     """
-    return "schema_version" in parse_front_matter(text)
+    fm = parse_front_matter(text)
+    return "schema_version" in fm and fm.get("schema_version") != 3
 
 
 def extract_independence(text: str) -> str | None:
@@ -399,12 +405,97 @@ def check_report_v2(text: str) -> list[str]:
     return issues
 
 
+# ---------- schema_version 3：audit-state 围栏契约（第 12 轮用户裁定重构） ----------
+
+_AUDIT_STATE_FENCE = re.compile(r"```[ \t]*audit-state[ \t]*\r?\n(.*?)\r?\n?[ \t]*```", re.DOTALL)
+
+
+def _extract_audit_state(text: str) -> tuple[str | None, list[str]]:
+    fences = _AUDIT_STATE_FENCE.findall(text)
+    if len(fences) != 1:
+        return None, [
+            f"audit-state 围栏出现 {len(fences)} 次，schema_version>=3 的报告必须恰好包含 1 个"
+            "（机器状态唯一真源，多块即歧义）。"
+        ]
+    return fences[0], []
+
+
+def check_report_v3(text: str) -> list[str]:
+    """schema_version 3：机器状态唯一真源为正文内唯一 ```audit-state``` 围栏 JSON。
+
+    第 12 轮裁定（连续 5 轮外置复核证明散文格式变体攻击面无界）：散文问题清单
+    降级为人类叙事，不再被任何正则解析；门禁只消费围栏内 JSON——严格解析意味着
+    任何篡改形态要么照常解析并受检，要么解析失败 fail-closed，"格式变体"这一
+    攻击类整体消失。散文与围栏状态是否一致属人工审阅范畴，不再是机器契约。"""
+    issues: list[str] = []
+    fm = parse_front_matter(text)
+    schema = vs.load_schema("audit_report")
+    issues += [f"Front Matter {e}" for e in vs.validate(fm, schema["properties"]["front_matter"])]
+    if "independence" in fm:
+        issues.append("schema_version>=2 的报告不得再声明 independence（已退役字段，只供历史报告只读兼容）。")
+
+    raw, fence_issues = _extract_audit_state(text)
+    issues += fence_issues
+    if raw is None:
+        return issues
+    try:
+        state = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        issues.append(f"audit-state 围栏不是合法 JSON：{exc}（严格解析 fail-closed，不接受修复性解释）。")
+        return issues
+    issues += [f"audit-state {e}" for e in vs.validate(state, schema["properties"]["sidecar_format"])]
+
+    reviewer_mode = fm.get("reviewer_mode")
+    target_sha256 = fm.get("target_sha256")
+    seen_ids: dict[str, int] = {}
+    for item in state.get("issues") or []:
+        issue_id, level, status = item.get("id"), item.get("level"), item.get("status")
+        if issue_id:
+            seen_ids[issue_id] = seen_ids.get(issue_id, 0) + 1
+        if level is not None and level not in LEVEL_ENUM:
+            issues.append(f"[{issue_id}] level={level!r} 不在枚举 {LEVEL_ENUM} 内。")
+        if status is not None and status not in V2_STATUS_ENUM:
+            issues.append(f"[{issue_id}] status={status!r} 不在枚举 {V2_STATUS_ENUM} 内。")
+        if level == "Critical" and status == "closed" and reviewer_mode != "external":
+            issues.append(
+                f"[{issue_id}] status=closed 但 reviewer_mode={reviewer_mode!r}；"
+                "会话内承载不可将 Critical 置为 closed，必须由外置 reviewer 复核。"
+            )
+    for dup_id, count in seen_ids.items():
+        if count > 1:
+            issues.append(f"[{dup_id}] 问题 ID 在 audit-state 内重复出现 {count} 次；事件内 ID 必须唯一。")
+
+    acks: dict[str, dict] = {}
+    for ack in state.get("critical_acks") or []:
+        aid = ack.get("issue_id")
+        if aid in acks:
+            issues.append(f"[{aid}] critical_ack 出现多个，同一问题只能有一个确认。")
+            continue
+        acks[aid] = ack
+    for aid in acks:
+        if aid not in seen_ids:
+            issues.append(f"[{aid}] critical_ack 指向不存在的问题 ID。")
+    for item in state.get("issues") or []:
+        if item.get("status") == "waived_by_user":
+            ack = acks.get(item.get("id"))
+            if not ack:
+                issues.append(f"[{item.get('id')}] status=waived_by_user 但 critical_acks 中无对应确认。")
+            elif ack.get("target_sha256") != target_sha256:
+                issues.append(
+                    f"[{item.get('id')}] critical_ack.target_sha256 与报告 target_sha256 不一致，复核对象已变化。"
+                )
+    return issues
+
+
 def check_report(text: str) -> list[str]:
     """对审计报告全文做门禁核验，返回违规说明列表（空列表即通过）。
 
-    匹配前先做文本规范化（剥 HTML 注释与 Cf 格式字符、NFKC 归一）——隐形
-    载体类变体（注释包裹、零宽字符注入）视觉不变而模式失配，属整类收口；
-    规范化只用于匹配，不回写文件。"""
+    schema_version 3：机器状态走 audit-state 围栏 JSON，严格解析、不做任何
+    散文规范化。v2/legacy：匹配前先做文本规范化（剥 HTML 注释与 Cf 格式
+    字符、NFKC 归一）——隐形载体类变体（注释包裹、零宽字符注入）视觉不变
+    而模式失配，属整类收口；规范化只用于匹配，不回写文件。"""
+    if is_v3(text):
+        return check_report_v3(text)
     canonical = _canonical(text)
     return check_report_v2(canonical) if is_v2(canonical) else check_report_legacy(canonical)
 
@@ -428,14 +519,14 @@ def check_candidate_commit(candidate_text: str, commit_path: Path) -> list[str]:
     这里只做 check_report() 管不到的"文件系统事实校验"——target_path 是否真实存在、
     其内容哈希是否与声明一致。
 
-    **本接口只接受 v2 候选**：legacy（无 schema_version 键）候选只走 independence
+    **本接口只接受 v2/v3 候选**：legacy（无 schema_version 键）候选只走 independence
     的粗粒度检查，没有指纹绑定与完整字段校验，若放行会让"新写入的关闭动作"伪装成
-    旧格式绕过 v2 门禁（R6-C1：一份不含 schema_version、伪造 independence 的候选能
+    旧格式绕过门禁（R6-C1：一份不含 schema_version、伪造 independence 的候选能
     直接通过原子写入）。旧报告仍可通过只读的 check_report()/main() 单路径模式核验，
     只是不能再经这个"拟写入关闭状态"的原子入口。
     """
-    if not is_v2(candidate_text):
-        return ["--candidate/--commit 原子接口只接受 schema_version>=2 的候选；legacy 格式不得用于写入新的关闭/豁免状态。"]
+    if not (is_v2(candidate_text) or is_v3(candidate_text)):
+        return ["--candidate/--commit 原子接口只接受 schema_version 2/3 的候选；legacy 格式不得用于写入新的关闭/豁免状态。"]
     issues = check_report(candidate_text)
     fm = parse_front_matter(candidate_text)
     target_path, target_sha256 = fm.get("target_path"), fm.get("target_sha256")
