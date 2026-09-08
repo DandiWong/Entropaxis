@@ -314,6 +314,45 @@ class CheckAuditGateRound6RegressionTests(unittest.TestCase):
         issues = check_report(text)
         self.assertTrue(any("级别:` 标注出现 0 次" in i for i in issues))
 
+    def test_r8c1_no_heading_at_all_still_detected(self) -> None:
+        """第 8 轮实测抓到：全文没有任何 markdown 标题时，旧的"按标题分段"策略
+        一次候选段都产不出来，字段齐全的 Critical+closed 直接放行。改用空行/---/
+        标题三者之一作边界后，纯文本三行字段本身即构成一个候选段。"""
+        text = ("---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+                "schema_version: 2\nreviewer_mode: session\nfallback_reason: not_configured\n"
+                "reviewer_ref: session\ntarget_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n---\n"
+                "级别: Critical\nID: C-1\n状态: closed\n")
+        issues = check_report(text)
+        self.assertTrue(any("会话内承载不可将 Critical 置为 closed" in i for i in issues))
+
+    def test_r8c2_duplicate_ack_block_for_same_id_blocked(self) -> None:
+        """同一问题 ID 出现两个 critical_ack 确认块，此前用 dict 字面赋值，后一个
+        静默覆盖前一个；改为检测重复块本身即违规，且该 ID 的确认结果标记为不可用。"""
+        text = (
+            "---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+            "schema_version: 2\nreviewer_mode: session\nfallback_reason: not_configured\n"
+            "reviewer_ref: session\ntarget_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n---\n"
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: waived_by_user\n\n"
+            "### critical_ack C-1\n- target_sha256: " + SHA_B + "\n- 确认事件: bad\n- 适用范围: bad\n\n"
+            "### critical_ack C-1\n- target_sha256: " + SHA_A + "\n- 确认事件: good\n- 适用范围: good\n"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("确认块出现 2 次" in i for i in issues))
+
+    def test_r8c2_duplicate_field_within_ack_block_blocked(self) -> None:
+        """单个确认块内 target_sha256 重复两次（一个错误一个正确），此前 re.search()
+        只取第一个匹配，可能采信错误的那个而放行。改为要求每字段恰好一次。"""
+        text = (
+            "---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+            "schema_version: 2\nreviewer_mode: session\nfallback_reason: not_configured\n"
+            "reviewer_ref: session\ntarget_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n---\n"
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: waived_by_user\n\n"
+            "### critical_ack C-1\n- target_sha256: " + SHA_B + "\n- target_sha256: " + SHA_A
+            + "\n- 确认事件: x\n- 适用范围: x\n"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("target_sha256 出现 2 次" in i for i in issues))
+
     def test_r6m1_ack_heading_colon_variant_still_matches(self) -> None:
         """`### critical_ack: C-1`（冒号在前）不应被误判为"未找到确认块"。"""
         text = (

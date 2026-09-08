@@ -41,13 +41,15 @@ _AUDIT_SCHEMA = vs.load_schema("audit_report")
 LEVEL_ENUM = tuple(_AUDIT_SCHEMA["level_enum"])
 V2_STATUS_ENUM = tuple(_AUDIT_SCHEMA["status_enum"])
 
-# 候选问题区块：按 markdown 标题分段（每段从一个标题行起，到下一个标题行/---分隔线/
-# 文末为止），不再以"级别:"这一行本身作锚点——第 7 轮外置复核实测：只要整行删除
-# 或字段名写错（如全角/别字），基于字段值定位锚点的方案必然连"这里本该有一条问题"
-# 都判断不出来，check_report() 直接放行。改为标题分段后，只要段内出现级别/ID/状态
-# 三者之一即视为候选问题块，再要求三者各恰好出现一次——"完全不提及"与"提及但残缺
-# 或重复"都能被同一套校验捕获，不再依赖某个具体字段作为存在性前提。
-SECTION_PATTERN = re.compile(r"(^#{1,6}\s.*?)(?=\n#{1,6}\s|\n---|\Z)", re.DOTALL | re.MULTILINE)
+# 候选问题区块：按"边界行"切分正文，边界行 = 标题行 / --- 分隔线 / 空行（包括只有
+# 空白的行）。第 7 轮把边界从"级别:"本身改成了标题，第 8 轮外置复核又实测抓到：
+# 只要整份报告不含任何标题（或用缩进 ATX/Setext 等本正则不认的标题写法），标题
+# 从未出现过，_iter_candidate_sections() 就一次都不会产出候选段，字段齐全的
+# Critical+closed 直接放行（R8-C1）。空行边界更基础、更难绕过——markdown 里没有
+# 空行分隔的连续文本天然属于同一段落，这是比"标题"更贴近排版事实本身的信号，
+# 不依赖某一种具体的标题语法。用 re.split 切分：分隔符（标题/---/空行）本身不
+# 进入任何分段，段内只要出现级别/ID/状态三者之一即视为候选问题段。
+_SECTION_BOUNDARY = re.compile(r"^(?:#{1,6}\s.*|-{3,}\s*|[ \t]*)$", re.MULTILINE)
 LEVEL_LINE_PATTERN = re.compile(r"^\s*级别\s*[:：]\s*(\S+)\s*$", re.MULTILINE)
 ID_LINE_PATTERN = re.compile(r"^\s*ID\s*[:：]\s*(\S+)\s*$", re.MULTILINE)
 STATUS_LINE_PATTERN = re.compile(r"^\s*状态\s*[:：]\s*(\S+)\s*$", re.MULTILINE)
@@ -108,9 +110,10 @@ def _normalize_level(raw: str) -> str | None:
 
 
 def _iter_candidate_sections(text: str):
-    """按 markdown 标题分段，只产出段内出现过至少一次 级别/ID/状态 标注的候选问题段。
-    纯叙述性标题（不含任何这三种标注）不作为候选，避免把文档其它小节误当问题块。"""
-    for section in SECTION_PATTERN.findall(text):
+    """按空行/标题/---分隔线切分正文，只产出段内出现过至少一次 级别/ID/状态 标注的
+    候选问题段。纯叙述性段落（不含任何这三种标注）不作为候选，避免把文档其它内容
+    误当问题块；不要求标题存在，段落本身的空行边界就足以定位（R8-C1 修复）。"""
+    for section in _SECTION_BOUNDARY.split(text):
         if LEVEL_LINE_PATTERN.search(section) or ID_LINE_PATTERN.search(section) or STATUS_LINE_PATTERN.search(section):
             yield section
 
@@ -132,21 +135,53 @@ def find_closed_critical_blocks(text: str) -> list[str]:
     return blocks
 
 
-def find_ack_blocks(text: str) -> dict[str, dict[str, str]]:
-    """解析正文 critical_ack 确认块，返回 {问题ID: {target_sha256, 确认事件, 适用范围}}。"""
-    acks: dict[str, dict[str, str]] = {}
+_ACK_FIELD_PATTERNS = {
+    "target_sha256": r"target_sha256\s*[:：]\s*([0-9a-f]{64})",
+    "确认事件": r"确认事件\s*[:：]\s*(\S.*)",
+    "适用范围": r"适用范围\s*[:：]\s*(\S.*)",
+}
+
+
+def find_ack_blocks(text: str) -> tuple[dict[str, dict[str, str] | None], list[str]]:
+    """解析正文 critical_ack 确认块。
+
+    返回 (acks, block_issues)：
+      acks：{问题ID: {target_sha256, 确认事件, 适用范围}}，仅当该 ID 恰好有一个
+        结构完整的确认块时才有值；重复确认块或字段重复的 ID 映射为 None，调用方
+        必须把 None 当"未通过校验"处理，不能当"没有确认块"直接放行。
+      block_issues：确认块自身的结构性违规说明（重复块/重复字段）。
+
+    第 8 轮外置复核实测抓到两处（R8-C2）：①同一问题 ID 出现两个 critical_ack 块，
+    旧实现用 dict 字面赋值，后一个静默覆盖前一个；②单个确认块内 target_sha256/
+    确认事件/适用范围各字段用 re.search() 只取第一个匹配，重复字段时后一个（可能
+    冲突的）取值被无声丢弃。两者都是"一份人工风险豁免不该由行序或覆盖顺序决定
+    生效版本"的同一类问题，与 R7-C1 的状态行重复同源，此处一并纳入"恰好一次"。
+    """
+    raw: dict[str, list[str]] = {}
     for issue_id, body in ACK_BLOCK_PATTERN.findall(text):
+        raw.setdefault(issue_id, []).append(body)
+
+    acks: dict[str, dict[str, str] | None] = {}
+    block_issues: list[str] = []
+    for issue_id, bodies in raw.items():
+        if len(bodies) > 1:
+            block_issues.append(f"[{issue_id}] critical_ack 确认块出现 {len(bodies)} 次；同一问题只能有一个确认块。")
+            acks[issue_id] = None
+            continue
+        body = bodies[0]
         fields: dict[str, str] = {}
-        for key, pattern in (
-            ("target_sha256", r"target_sha256\s*[:：]\s*([0-9a-f]{64})"),
-            ("确认事件", r"确认事件\s*[:：]\s*(\S.*)"),
-            ("适用范围", r"适用范围\s*[:：]\s*(\S.*)"),
-        ):
-            m = re.search(pattern, body)
-            if m:
-                fields[key] = m.group(1).strip()
-        acks[issue_id] = fields
-    return acks
+        field_ok = True
+        for key, pattern in _ACK_FIELD_PATTERNS.items():
+            matches = re.findall(pattern, body)
+            if len(matches) != 1:
+                block_issues.append(
+                    f"[{issue_id}] critical_ack.{key} 出现 {len(matches)} 次，须恰好 1 次。"
+                )
+                field_ok = False
+                continue
+            fields[key] = matches[0].strip()
+        acks[issue_id] = fields if field_ok else None
+    return acks, block_issues
 
 
 def check_report_legacy(text: str) -> list[str]:
@@ -184,7 +219,8 @@ def check_report_v2(text: str) -> list[str]:
 
     reviewer_mode = fm.get("reviewer_mode")
     target_sha256 = fm.get("target_sha256")
-    acks = find_ack_blocks(text)
+    acks, ack_block_issues = find_ack_blocks(text)
+    issues += ack_block_issues
     seen_ids: dict[str, int] = {}
 
     for section in _iter_candidate_sections(text):
