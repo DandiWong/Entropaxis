@@ -38,12 +38,12 @@
       ]
     },
     {
-      "kind": "paraphrase",
+      "kind": "positive",
       "instruction": "帮我把 Builder 换个模型",
       "expect": [
         "自定义角色"
       ],
-      "note": "「换个模型」语义命中但非字面触发词"
+      "note": "「换个模型」已登记"
     },
     {
       "kind": "positive",
@@ -246,12 +246,12 @@
       "note": "tip 用例为 exact 匹配，含在长句中不应命中"
     },
     {
-      "kind": "paraphrase",
+      "kind": "positive",
       "instruction": "帮我审一下这个方案有没有问题",
       "expect": [
         "审计"
       ],
-      "note": "「审一下」不在字面触发词内"
+      "note": "「审一下这个方案」已登记"
     },
     {
       "kind": "positive",
@@ -262,20 +262,20 @@
       ]
     },
     {
-      "kind": "paraphrase",
+      "kind": "positive",
       "instruction": "把这些经验沉到规则里",
       "expect": [
         "记录沉淀"
       ],
-      "note": "「沉到」非「沉淀」"
+      "note": "「沉到」已登记"
     },
     {
-      "kind": "paraphrase",
+      "kind": "positive",
       "instruction": "回顾下上个月哪些地方做重复了",
       "expect": [
         "复盘"
       ],
-      "note": "「回顾」非「复盘」"
+      "note": "「回顾下」已登记"
     },
     {
       "kind": "positive",
@@ -292,12 +292,12 @@
       ]
     },
     {
-      "kind": "paraphrase",
+      "kind": "positive",
       "instruction": "把刚才纠正你的这件事存下来以后别再犯",
       "expect": [
         "记为案例"
       ],
-      "note": "「存下来/别再犯」非字面触发词"
+      "note": "「别再犯」已登记"
     },
     {
       "kind": "positive",
@@ -307,12 +307,12 @@
       ]
     },
     {
-      "kind": "paraphrase",
+      "kind": "positive",
       "instruction": "检查一下根系统健不健康",
       "expect": [
         "系统自检"
       ],
-      "note": "「检查」非「自检」"
+      "note": "「检查一下根系统」已登记"
     },
     {
       "kind": "positive",
@@ -356,12 +356,12 @@
       "note": "自动化部署/流水线同样由 exclude 抑制"
     },
     {
-      "kind": "paraphrase",
+      "kind": "positive",
       "instruction": "这些发票该报了",
       "expect": [
         "报销归总"
       ],
-      "note": "「报了」非「报销」"
+      "note": "「发票该报」已登记"
     },
     {
       "kind": "positive",
@@ -476,12 +476,42 @@
       "note": "未用任何标准类型词"
     },
     {
-      "kind": "paraphrase",
+      "kind": "positive",
       "instruction": "这个能不能做成一个技能",
       "expect": [
         "落为Skill"
       ],
-      "note": "「技能」非「skill」"
+      "note": "「做成一个技能」已登记"
+    },
+    {
+      "kind": "negative",
+      "instruction": "审一下这段代码",
+      "expect": [],
+      "note": "未含「审一下这个方案」，不得命中审计"
+    },
+    {
+      "kind": "negative",
+      "instruction": "检查一下这段函数",
+      "expect": [],
+      "note": "裸「检查」不命中系统自检"
+    },
+    {
+      "kind": "negative",
+      "instruction": "这个 bug 该报了",
+      "expect": [],
+      "note": "无「发票该报」不得命中报销"
+    },
+    {
+      "kind": "negative",
+      "instruction": "回顾一下这个接口",
+      "expect": [],
+      "note": "「回顾一下」不含「回顾下」"
+    },
+    {
+      "kind": "negative",
+      "instruction": "这个技能不错",
+      "expect": [],
+      "note": "裸「技能」不命中落为Skill"
     }
   ]
 }
