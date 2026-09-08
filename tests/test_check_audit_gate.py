@@ -705,5 +705,12 @@ class CheckAuditGateV3Tests(unittest.TestCase):
 
 
 
+    def test_v3_leading_invisible_chars_before_delimiter(self) -> None:
+        """第 12 轮第五批：BOM+零宽组合位于开头 --- 之前不得令 FM 整体失配
+        降级 legacy 放行。"""
+        text = "\ufeff\u200b" + self._v3(mode="session")
+        self.assertTrue(any("不可将 Critical 置为 closed" in i for i in check_report(text)))
+
+
 if __name__ == "__main__":
     unittest.main()
