@@ -41,25 +41,24 @@ _AUDIT_SCHEMA = vs.load_schema("audit_report")
 LEVEL_ENUM = tuple(_AUDIT_SCHEMA["level_enum"])
 V2_STATUS_ENUM = tuple(_AUDIT_SCHEMA["status_enum"])
 
-# 单条问题块：从"级别 : X"起，到下一个标题/分隔线/文末为止。冒号前允许空格。
-# **只负责定位块边界，不在这一步校验级别取值**——级别是否合法留给下方枚举校验；
-# 此前正则把"定位"和"校验"合并成同一个捕获组，导致非法/缺失级别的问题块从
-# _iter_issue_blocks() 里彻底消失而不是被判定为违规（R6-C3：`级别: Blocker`
-# 或整行删除都会让该块隐身，不产生任何错误）。
-# group(1)=块全文，group(2)=级别原始文本（可能不合法，交枚举校验判定）。
-ISSUE_BLOCK_PATTERN = re.compile(
-    r"(级别\s*[:：]\s*(\S+).*?)(?=\n#{1,6}\s|\n---|\Z)", re.DOTALL
-)
-# ponytail: 锚点仍是"级别:"这一行本身——若整行被删除（不是留空、不是写错值，而是
-# 整条标注都不存在），本块从锚点扫描的角度就不存在，check_report() 无法区分"这不是
-# 问题块"与"这是被人为抹掉级别的问题块"。改用标题结构重新分段可以堵上这个口子，
-# 但需要能可靠识别"这是问题标题"而不误伤文档里其它 ### 小节，会引入更大的过匹配
-# 面；且这一遗漏在人眼审阅时非常显眼（整条标注消失），不像冒号/大小写变体那样能
-# 以假乱真。层面上仍有 治理指令.md 要求的人工签字兜底，此处不再展开架构重排，
-# 升级路径：若未来出现真实滥用案例，改为按 markdown 标题分段 + 段内字段完整性校验。
-ISSUE_ID_PATTERN = re.compile(r"ID\s*[:：]\s*(\S+)")
-STATUS_VALUE_PATTERN = re.compile(r"状态\s*[:：]\s*(\S+)")
+# 候选问题区块：按 markdown 标题分段（每段从一个标题行起，到下一个标题行/---分隔线/
+# 文末为止），不再以"级别:"这一行本身作锚点——第 7 轮外置复核实测：只要整行删除
+# 或字段名写错（如全角/别字），基于字段值定位锚点的方案必然连"这里本该有一条问题"
+# 都判断不出来，check_report() 直接放行。改为标题分段后，只要段内出现级别/ID/状态
+# 三者之一即视为候选问题块，再要求三者各恰好出现一次——"完全不提及"与"提及但残缺
+# 或重复"都能被同一套校验捕获，不再依赖某个具体字段作为存在性前提。
+SECTION_PATTERN = re.compile(r"(^#{1,6}\s.*?)(?=\n#{1,6}\s|\n---|\Z)", re.DOTALL | re.MULTILINE)
+LEVEL_LINE_PATTERN = re.compile(r"^\s*级别\s*[:：]\s*(\S+)\s*$", re.MULTILINE)
+ID_LINE_PATTERN = re.compile(r"^\s*ID\s*[:：]\s*(\S+)\s*$", re.MULTILINE)
+STATUS_LINE_PATTERN = re.compile(r"^\s*状态\s*[:：]\s*(\S+)\s*$", re.MULTILINE)
 LEGACY_CLOSED_PATTERN = re.compile(r"状态\s*[:：]\s*(已关闭|closed)", re.IGNORECASE)
+# 旧契约专用的宽松块定位（不要求标题锚点）：历史冻结报告格式不一，有的问题条目
+# 并非紧跟 markdown 标题。v2 的严格"恰好一次"架构只用于 v2 校验，不下沉到这里，
+# 避免收紧旧契约读取造成兼容回归（SECTION_PATTERN 曾在此处直接复用，导致无标题
+# 的旧格式测得 find_closed_critical_blocks() 返回空——单测已实测抓到该回归）。
+LEGACY_ISSUE_BLOCK_PATTERN = re.compile(
+    r"(级别\s*[:：]\s*\S+.*?)(?=\n#{1,6}\s|\n---|\Z)", re.DOTALL
+)
 
 # critical_ack 确认块：### critical_ack <问题ID> 后跟 target_sha256/确认事件/适用范围 三行。
 # ID 允许紧跟一个可选冒号（`### critical_ack C-1:` 与 `### critical_ack: C-1` 两种
@@ -108,20 +107,29 @@ def _normalize_level(raw: str) -> str | None:
     return None
 
 
-def _iter_issue_blocks(text: str):
-    """逐条产出问题块 (级别原始文本, 块全文)。级别是否合法不在此处判定——ISSUE_BLOCK_
-    PATTERN 只按"级别: <任意非空串>"定位块边界，非法/不规范的级别值原样传出，由
-    调用方用 _normalize_level() 判定（R6-C3 修复：定位与校验解耦）。"""
-    for m in ISSUE_BLOCK_PATTERN.finditer(text):
-        yield m.group(2), m.group(1)
+def _iter_candidate_sections(text: str):
+    """按 markdown 标题分段，只产出段内出现过至少一次 级别/ID/状态 标注的候选问题段。
+    纯叙述性标题（不含任何这三种标注）不作为候选，避免把文档其它小节误当问题块。"""
+    for section in SECTION_PATTERN.findall(text):
+        if LEVEL_LINE_PATTERN.search(section) or ID_LINE_PATTERN.search(section) or STATUS_LINE_PATTERN.search(section):
+            yield section
 
 
 def find_closed_critical_blocks(text: str) -> list[str]:
-    """返回正文中已标注关闭（旧契约"已关闭"/"closed"）的 Critical 问题块。"""
-    return [
-        b for raw_level, b in _iter_issue_blocks(text)
-        if _normalize_level(raw_level) == "Critical" and LEGACY_CLOSED_PATTERN.search(b)
-    ]
+    """返回正文中已标注关闭（旧契约"已关闭"/"closed"）的 Critical 问题块。
+
+    旧契约兼容路径，故意宽松、不做 v2 的"恰好一次"强校验，也不要求标题锚点
+    （历史冻结报告格式不一）：块以"级别:"本身定位，只要该行规范化为 Critical，
+    且块内任意位置能匹配到已关闭标注，即计入。
+    """
+    blocks = []
+    for m in LEGACY_ISSUE_BLOCK_PATTERN.finditer(text):
+        block = m.group(1)
+        level_match = re.match(r"级别\s*[:：]\s*(\S+)", block)
+        level = _normalize_level(level_match.group(1)) if level_match else None
+        if level == "Critical" and LEGACY_CLOSED_PATTERN.search(block):
+            blocks.append(block)
+    return blocks
 
 
 def find_ack_blocks(text: str) -> dict[str, dict[str, str]]:
@@ -179,29 +187,34 @@ def check_report_v2(text: str) -> list[str]:
     acks = find_ack_blocks(text)
     seen_ids: dict[str, int] = {}
 
-    for raw_level, block in _iter_issue_blocks(text):
-        id_match = ISSUE_ID_PATTERN.search(block)
-        status_match = STATUS_VALUE_PATTERN.search(block)
-        # 3) v2 issue_format 声明 id_field/status_field 为必填；此前缺失时直接跳过
-        #    该块全部校验（第 5 轮实测：缺 ID 或缺状态行的块可静默通过）。
-        if id_match is None:
-            issues.append(f"[{raw_level} 问题块] 缺少可识别的 `ID:` 标注，v2 契约要求每条问题有稳定 ID。")
+    for section in _iter_candidate_sections(text):
+        header = section.splitlines()[0].strip().lstrip("#").strip() or "<无标题>"
+        ids = ID_LINE_PATTERN.findall(section)
+        # 3) ID 必须恰好出现一次；缺失或重复都是违规，不取"第一个匹配"了事——
+        #    取第一个匹配正是 R5/R6 沿用至今却从未验证过的隐患：状态/级别一旦被
+        #    复制成两行，.search() 永远只看得见第一行（第 7 轮实测抓到，R7-C1）。
+        if len(ids) != 1:
+            issues.append(f"[{header}] `ID:` 标注出现 {len(ids)} 次，v2 契约要求恰好 1 次。")
             continue
-        issue_id = id_match.group(1)
+        issue_id = ids[0]
         seen_ids[issue_id] = seen_ids.get(issue_id, 0) + 1
 
-        # 4) 级别枚举强制校验：定位与校验解耦后，非法/缺失级别在此报违规而非静默隐身（R6-C3）。
-        level = _normalize_level(raw_level)
+        # 4) 级别：恰好一次 + 枚举校验（R6-C3 定位与校验解耦 + R7-C1 恰好一次校验）。
+        levels = LEVEL_LINE_PATTERN.findall(section)
+        if len(levels) != 1:
+            issues.append(f"[{issue_id}] `级别:` 标注出现 {len(levels)} 次，v2 契约要求恰好 1 次。")
+            continue
+        level = _normalize_level(levels[0])
         if level is None:
-            issues.append(f"[{issue_id}] 级别={raw_level!r} 不在枚举 {LEVEL_ENUM} 内。")
+            issues.append(f"[{issue_id}] 级别={levels[0]!r} 不在枚举 {LEVEL_ENUM} 内。")
             continue
 
-        if status_match is None:
-            issues.append(f"[{issue_id}] 缺少可识别的 `状态:` 标注。")
+        # 5) 状态：恰好一次 + 枚举校验；v2 只认 open/closed/waived_by_user，其余（含 challenged）一律违规。
+        statuses = STATUS_LINE_PATTERN.findall(section)
+        if len(statuses) != 1:
+            issues.append(f"[{issue_id}] `状态:` 标注出现 {len(statuses)} 次，v2 契约要求恰好 1 次。")
             continue
-        status = status_match.group(1)
-
-        # 5) 状态枚举强制校验：v2 只认 open/closed/waived_by_user，其余（含 challenged）一律违规。
+        status = statuses[0]
         if status not in V2_STATUS_ENUM:
             issues.append(f"[{issue_id}] 状态={status!r} 不在 v2 枚举 {V2_STATUS_ENUM} 内。")
             continue

@@ -240,12 +240,12 @@ class CheckAuditGateV2FailOpenRegressionTests(unittest.TestCase):
     def test_issue_block_missing_id_is_blocked(self) -> None:
         text = V2_EXTERNAL_CLOSED_CRITICAL.format(sha=SHA_A).replace("ID: C-1\n", "")
         issues = check_report(text)
-        self.assertTrue(any("缺少可识别的 `ID:`" in i for i in issues))
+        self.assertTrue(any("`ID:` 标注出现 0 次" in i for i in issues))
 
     def test_issue_block_missing_status_is_blocked(self) -> None:
         text = V2_EXTERNAL_CLOSED_CRITICAL.format(sha=SHA_A).replace("状态: closed\n", "")
         issues = check_report(text)
-        self.assertTrue(any("缺少可识别的 `状态:`" in i for i in issues))
+        self.assertTrue(any("`状态:` 标注出现 0 次" in i for i in issues))
 
 
 class CheckAuditGateRound6RegressionTests(unittest.TestCase):
@@ -288,6 +288,31 @@ class CheckAuditGateRound6RegressionTests(unittest.TestCase):
         )
         issues = check_report(text)
         self.assertTrue(any("重复出现" in i for i in issues))
+
+    def test_r7c1_duplicate_status_line_blocked(self) -> None:
+        """第 7 轮实测抓到：状态行重复两次（open 在前、closed 在后），旧实现
+        .search() 只取第一个匹配（open），永远不会触发"closed 需外置复核"的检查，
+        原子接口会把含 Critical+closed 的候选当作通过。改为要求恰好一次，重复即违规。"""
+        text = V2_SESSION_CLOSED_CRITICAL.format(sha=SHA_A).replace(
+            "状态: closed\n", "状态: open\n状态: closed\n"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("状态:` 标注出现 2 次" in i for i in issues))
+
+    def test_missing_level_line_entirely_blocked(self) -> None:
+        """整行删除"级别:"（不是写错值），改用标题分段后仍能被识别为候选问题块
+        （因为段内还有 ID/状态），并因级别标注缺失被拒绝——不再是"该块彻底不存在"。"""
+        text = V2_EXTERNAL_CLOSED_CRITICAL.format(sha=SHA_A).replace("级别: Critical\n", "")
+        issues = check_report(text)
+        self.assertTrue(any("级别:` 标注出现 0 次" in i for i in issues))
+
+    def test_misspelled_level_label_still_caught_via_id_and_status(self) -> None:
+        """级别标注被写错成无法匹配的形式（如误用不同字符），只要段内 ID/状态仍存在，
+        该段依然被识别为候选问题块并因缺级别被拒绝，不会像纯字段值锚点方案那样
+        整块消失。"""
+        text = V2_EXTERNAL_CLOSED_CRITICAL.format(sha=SHA_A).replace("级别: Critical\n", "階級: Critical\n")
+        issues = check_report(text)
+        self.assertTrue(any("级别:` 标注出现 0 次" in i for i in issues))
 
     def test_r6m1_ack_heading_colon_variant_still_matches(self) -> None:
         """`### critical_ack: C-1`（冒号在前）不应被误判为"未找到确认块"。"""
