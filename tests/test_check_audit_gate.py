@@ -728,5 +728,16 @@ class CheckAuditGateV3Tests(unittest.TestCase):
         self.assertTrue(any("schema_version 不是 3" in i for i in check_report(text)))
 
 
+    def test_v3_fence_label_variant_with_version_attack_blocked(self) -> None:
+        """第 12 轮第八批：版本字段删除/降值与围栏标签变体（零宽字符、大小写、
+        波浪围栏）组合不得绕过守卫。"""
+        zw = "\u200b"
+        t1 = self._v3(mode="session").replace("schema_version: 3\n", "").replace("audit-state", "audit-" + zw + "state")
+        t2 = self._v3(mode="session").replace("schema_version: 3\n", "schema_version: 2\n").replace("audit-state", "AUDIT-STATE")
+        t3 = self._v3(mode="session").replace("schema_version: 3\n", "schema_version: 2\n").replace("```", "~~~")
+        for variant in (t1, t2, t3):
+            self.assertTrue(any("schema_version 不是 3" in i for i in check_report(variant)))
+
+
 if __name__ == "__main__":
     unittest.main()

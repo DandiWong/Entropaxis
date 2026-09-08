@@ -435,6 +435,11 @@ def check_report_v2(text: str) -> list[str]:
 
 _AUDIT_STATE_FENCE = re.compile(r"```[ \t]*audit-state[ \t]*\r?\n(.*?)\r?\n?[ \t]*```", re.DOTALL)
 
+# 守卫专用的"围栏意图"模式：比提取模式宽松（忽略大小写、容忍 ``` 与 ~~~、
+# 标签内连字符/下划线/空格变体），配合规范化文本使用——第 12 轮第八批实测
+# 版本字段删除与标签零宽字符/大小写/波浪围栏组合可绕过原始文本上的精确匹配。
+_FENCE_INTENT = re.compile(r"(?:`{3,}|~{3,})[ \t]*audit[-_ ]?state", re.IGNORECASE)
+
 
 def _extract_audit_state(text: str) -> tuple[str | None, list[str]]:
     fences = _AUDIT_STATE_FENCE.findall(text)
@@ -562,8 +567,8 @@ def check_report(text: str) -> list[str]:
     # 围栏存在性守卫的第二面：FM 可解析但 schema_version 被删除/改名/降值，
     # 同样会把含围栏的报告路由进无视机器状态的旧分支（第 12 轮第七批实测，
     # 只读路径可绕过；原子接口虽拒但官方只读路径必须同样关死）。
-    if not is_v3(text) and _AUDIT_STATE_FENCE.search(text):
-        return dup + ["报告包含 audit-state 围栏但 schema_version 不是 3；不得借版本字段缺失/篡改降级到旧契约无视机器状态。"]
+    if not is_v3(text) and _FENCE_INTENT.search(_canonical(text)):
+        return dup + ["报告包含 audit-state 围栏（或其变体）但 schema_version 不是 3；不得借版本字段缺失/篡改或围栏标签变体降级到旧契约无视机器状态。"]
     if is_v3(text):
         return dup + check_report_v3(text)
     canonical = _canonical(text)
