@@ -33,7 +33,7 @@ try:
 except ImportError:  # 以脚本方式直接运行时 tools/ 自身在 sys.path 上
     import validate_schema as vs
 
-FRONT_MATTER_PATTERN = re.compile(r"^﻿?---\n(.*?)\n---", re.DOTALL)
+FRONT_MATTER_PATTERN = re.compile(r"^[ \t\u00ad\u200b-\u200f\u202a-\u202e\u2060\ufeff]*---\n(.*?)\n---", re.DOTALL)
 
 # 允许取值的唯一机器真源是 schema 顶层 level_enum/status_enum，此处直接读取，不再
 # 在代码里另存一份硬编码——三轮外置复核先后抓到 schema_version 判别、冒号前空格、
