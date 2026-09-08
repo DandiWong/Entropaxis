@@ -121,9 +121,19 @@ def _normalize_level(raw: str) -> str | None:
 def _iter_candidate_sections(text: str):
     """按空行/标题/---分隔线切分正文，只产出段内出现过至少一次 级别/ID/状态 标注的
     候选问题段。纯叙述性段落（不含任何这三种标注）不作为候选，避免把文档其它内容
-    误当问题块；不要求标题存在，段落本身的空行边界就足以定位（R8-C1 修复）。"""
+    误当问题块；不要求标题存在，段落本身的空行边界就足以定位（R8-C1 修复）。
+
+    候选判定必须用"字段行"模式（只认字段名+冒号），不能用取值模式——第 11 轮
+    外置复核实测：三行字段全部写成行内重复（如 `级别: Critical 级别: open`）时，
+    任何一行都不满足取值正则，整段从候选集中消失，后续"恰好一次"校验全部
+    不执行，字段齐全的 Critical+closed 直接放行。取值不合法恰恰更该进校验，
+    而不是绕过它。"""
     for section in _SECTION_BOUNDARY.split(text):
-        if LEVEL_LINE_PATTERN.search(section) or ID_LINE_PATTERN.search(section) or STATUS_LINE_PATTERN.search(section):
+        if (
+            LEVEL_FIELD_PATTERN.search(section)
+            or ID_FIELD_PATTERN.search(section)
+            or STATUS_FIELD_PATTERN.search(section)
+        ):
             yield section
 
 
@@ -146,16 +156,25 @@ def find_closed_critical_blocks(text: str) -> list[str]:
 
 # 字段行计数与取值校验分离（第 10 轮实测：第二个 target_sha256 为大写哈希时，
 # 旧取值正则把它从计数中抹掉，R8-C2 的"恰好一次"形同虚设）。
+# 第 11 轮外置复核又抓到两处形态学缺口，全部收口为"行首锚定 + 列表项前缀 +
+# 完整行取值"：①不锚定行首时，嵌套列表（`- 证据:` 下的缩进子项）与伪字段名
+# 前缀（`not_target_sha256:`、`未确认事件:`）都会作为子串命中真字段名；②
+# `([0-9a-f]{64})` 不锚定行尾时，65+ 位 hex 被贪婪截取为前 64 位并与 FM 指纹
+# 匹配成功。确认块的合法形态只有一种：`- <字段名>: <值>` 独占一行。
 _ACK_FIELD_OCCURRENCE = {
-    "target_sha256": re.compile(r"target_sha256\s*[:：]"),
-    "确认事件": re.compile(r"确认事件\s*[:：]"),
-    "适用范围": re.compile(r"适用范围\s*[:：]"),
+    "target_sha256": re.compile(r"^[ \t]*-[ \t]*target_sha256[ \t]*[:：]", re.MULTILINE),
+    "确认事件": re.compile(r"^[ \t]*-[ \t]*确认事件[ \t]*[:：]", re.MULTILINE),
+    "适用范围": re.compile(r"^[ \t]*-[ \t]*适用范围[ \t]*[:：]", re.MULTILINE),
 }
 _ACK_FIELD_VALUE = {
-    "target_sha256": re.compile(r"target_sha256\s*[:：]\s*([0-9a-f]{64})"),
-    "确认事件": re.compile(r"确认事件\s*[:：]\s*(\S.*)"),
-    "适用范围": re.compile(r"适用范围\s*[:：]\s*(\S.*)"),
+    "target_sha256": re.compile(r"^[ \t]*-[ \t]*target_sha256[ \t]*[:：][ \t]*([0-9a-f]{64})[ \t]*$", re.MULTILINE),
+    "确认事件": re.compile(r"^[ \t]*-[ \t]*确认事件[ \t]*[:：][ \t]*(\S.*)$", re.MULTILINE),
+    "适用范围": re.compile(r"^[ \t]*-[ \t]*适用范围[ \t]*[:：][ \t]*(\S.*)$", re.MULTILINE),
 }
+
+
+_ACK_FOREIGN_FIELD = re.compile(r"^[ \t]*-[ \t]*(?P<key>\S+?)[ \t]*[:：]", re.MULTILINE)
+_ACK_ALLOWED_FIELDS = frozenset({"target_sha256", "确认事件", "适用范围"})
 
 
 def find_ack_blocks(text: str) -> tuple[dict[str, dict[str, str] | None], list[str]]:
@@ -203,6 +222,16 @@ def find_ack_blocks(text: str) -> tuple[dict[str, dict[str, str] | None], list[s
                 field_ok = False
                 continue
             fields[key] = values[0].strip()
+        # 第 11 轮外置复核实测：嵌套列表的缩进子项在行形态上与直接字段无法区分
+        # （`- 证据:` 下的 `  - target_sha256: …` 同样满足行首锚定）。从父键侧识别：
+        # 确认块内只允许三个直接字段，出现任何其他 `键:` 形态的列表项即为嵌套/污染。
+        for m in _ACK_FOREIGN_FIELD.finditer(body):
+            if m.group("key") not in _ACK_ALLOWED_FIELDS:
+                block_issues.append(
+                    f"[{issue_id}] critical_ack 内存在未定义字段 {m.group('key')!r}；"
+                    "确认块只允许 target_sha256/确认事件/适用范围 三个直接字段，嵌套子项整体拒绝。"
+                )
+                field_ok = False
         acks[issue_id] = fields if field_ok else None
     return acks, block_issues
 

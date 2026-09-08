@@ -455,5 +455,65 @@ class CheckAuditGateRound10RegressionTests(unittest.TestCase):
         self.assertTrue(any("不得再声明 independence" in i for i in issues))
 
 
+class CheckAuditGateRound11RegressionTests(unittest.TestCase):
+    """第 11 轮外置复核发现的 4 处绕过，逐条锁定。
+
+    共同根因：计数/取值/候选判定三处正则均未锚定字段行的完整形态——
+    子串命中伪字段名与嵌套子项、贪婪截取 65+ 位 hex、行内重复字段使
+    取值正则全不满足进而整段退出候选集。
+    """
+
+    def test_ack_65_plus_hex_not_truncated_to_64(self) -> None:
+        """65 位 hex 不得被贪婪截取为前 64 位并与 FM 指纹匹配。"""
+        text = (
+            "---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+            "schema_version: 2\nreviewer_mode: session\nfallback_reason: not_configured\n"
+            "reviewer_ref: session\ntarget_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n---\n"
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: waived_by_user\n\n"
+            "### critical_ack C-1\n- target_sha256: " + SHA_A + "a\n- 确认事件: x\n- 适用范围: x\n"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("取值为空或不符合格式" in i for i in issues))
+
+    def test_all_fields_inline_duplicated_still_candidate(self) -> None:
+        """三行字段全部行内重复（取值正则全不满足）时，段仍须进入候选集
+        并因取值格式不符被拒，不得整段从校验中消失。"""
+        text = V2_SESSION_CLOSED_CRITICAL.format(sha=SHA_A).replace(
+            "级别: Critical\nID: C-1\n状态: closed\n",
+            "级别: Critical 级别: open\nID: C-1 ID: C-2\n状态: closed 状态: open\n",
+        )
+        issues = check_report(text)
+        self.assertTrue(issues)
+        self.assertTrue(any("取值为空或格式不符" in i or "标注出现" in i for i in issues))
+
+    def test_ack_nested_subfields_rejected(self) -> None:
+        """嵌套列表子项（`- 证据:` 下的缩进字段）不得被当作直接字段采信。"""
+        text = (
+            "---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+            "schema_version: 2\nreviewer_mode: session\nfallback_reason: not_configured\n"
+            "reviewer_ref: session\ntarget_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n---\n"
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: waived_by_user\n\n"
+            "### critical_ack C-1\n- 证据:\n  - target_sha256: " + SHA_A
+            + "\n  - 确认事件: x\n  - 适用范围: x\n"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("未定义字段" in i for i in issues))
+
+    def test_ack_pseudo_field_prefix_rejected(self) -> None:
+        """`not_target_sha256:`/`未确认事件:` 等伪字段名前缀不得子串命中真字段。"""
+        text = (
+            "---\ntype: Audit\ntopic: t\ndate: 2026-09-08\nauthor: Reviewer\nstatus: active\n"
+            "schema_version: 2\nreviewer_mode: session\nfallback_reason: not_configured\n"
+            "reviewer_ref: session\ntarget_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n---\n"
+            "### 问题 1\n级别: Critical\nID: C-1\n状态: waived_by_user\n\n"
+            "### critical_ack C-1\n- not_target_sha256: " + SHA_A
+            + "\n- 未确认事件: x\n- 不适用范围: x\n"
+        )
+        issues = check_report(text)
+        self.assertTrue(any("未定义字段" in i or "出现 0 次" in i for i in issues))
+
+
+
+
 if __name__ == "__main__":
     unittest.main()
