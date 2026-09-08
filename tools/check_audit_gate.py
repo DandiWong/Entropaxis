@@ -557,9 +557,13 @@ def check_report(text: str) -> list[str]:
     dup = _fm_duplicate_key_issues(text)
     # 含 audit-state 围栏的报告必然是 v3 意图：Front Matter 被破坏（前导
     # 隐形字符、无法解析）时不允许静默落入超宽 legacy 分支无视围栏状态——
-    # 第 12 轮第六批实测的整类降级绕过在此关死。
     if _front_matter_text(text) is None and "audit-state" in text:
-        return ["报告包含 audit-state 围栏但 Front Matter 无法解析；不得借 FM 破坏降级到 legacy 分支无视机器状态。"]
+        return dup + ["报告包含 audit-state 围栏但 Front Matter 无法解析；不得借 FM 破坏降级到 legacy 分支无视机器状态。"]
+    # 围栏存在性守卫的第二面：FM 可解析但 schema_version 被删除/改名/降值，
+    # 同样会把含围栏的报告路由进无视机器状态的旧分支（第 12 轮第七批实测，
+    # 只读路径可绕过；原子接口虽拒但官方只读路径必须同样关死）。
+    if not is_v3(text) and _AUDIT_STATE_FENCE.search(text):
+        return dup + ["报告包含 audit-state 围栏但 schema_version 不是 3；不得借版本字段缺失/篡改降级到旧契约无视机器状态。"]
     if is_v3(text):
         return dup + check_report_v3(text)
     canonical = _canonical(text)

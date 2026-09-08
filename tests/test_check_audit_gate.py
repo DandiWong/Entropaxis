@@ -721,5 +721,12 @@ class CheckAuditGateV3Tests(unittest.TestCase):
         self.assertTrue(any("Front Matter 无法解析" in i for i in check_report(no_fm)))
 
 
+    def test_v3_version_removed_with_fence_blocked(self) -> None:
+        """第 12 轮第七批：删除 schema_version 但保留围栏，只读路径不得
+        降级 legacy 无视机器状态。"""
+        text = self._v3(mode="session").replace("schema_version: 3\n", "")
+        self.assertTrue(any("schema_version 不是 3" in i for i in check_report(text)))
+
+
 if __name__ == "__main__":
     unittest.main()
