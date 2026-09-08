@@ -40,6 +40,14 @@ def load_schema(name: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# `$` 前缀整体豁免曾被用来在数据实例里走私任意字段（第 12 轮外置复核：
+# sidecar 的 "$issues" 携带 closed 状态穿过 additionalProperties:false）。
+# 豁免只保留给标准 JSON-Schema 指令键——它们只应出现在 schema 文档里，
+# 不该是数据实例的通行证。
+_SCHEMA_DIRECTIVE_KEYS = frozenset(
+    {"$schema", "$comment", "$id", "$ref", "$defs", "$anchor", "$dynamicRef"}
+)
+
 def validate(data, schema: dict, path: str = "$") -> list[str]:
     """返回违规说明列表；空列表表示通过。"""
     errs: list[str] = []
@@ -74,7 +82,7 @@ def validate(data, schema: dict, path: str = "$") -> list[str]:
         props = schema.get("properties", {})
         if schema.get("additionalProperties") is False:
             for key in data:
-                if key not in props and not key.startswith("$"):
+                if key not in props and key not in _SCHEMA_DIRECTIVE_KEYS:
                     errs.append(f"{path}: 出现未声明字段 {key!r}（拼写错误或需先在 schema 中登记）")
         for key, sub in props.items():
             if key in data:

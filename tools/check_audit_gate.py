@@ -420,6 +420,19 @@ def _extract_audit_state(text: str) -> tuple[str | None, list[str]]:
     return fences[0], []
 
 
+def _reject_duplicate_keys(pairs):
+    """json.loads object_pairs_hook：JSON 对象出现重复键即抛错。
+
+    第 12 轮外置复核实测：`"status":"closed","status":"open"` 会被 Python
+    静默采信最后一个值，前一个在人读渲染时可能被看到——重复键本身就是
+    歧义载荷，按 fail-closed 拒绝，不做"取末值"的隐式裁决。"""
+    seen = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise ValueError(f"JSON 对象出现重复键 {key!r}")
+        seen.add(key)
+    return dict(pairs)
+
 def check_report_v3(text: str) -> list[str]:
     """schema_version 3：机器状态唯一真源为正文内唯一 ```audit-state``` 围栏 JSON。
 
@@ -436,12 +449,10 @@ def check_report_v3(text: str) -> list[str]:
 
     raw, fence_issues = _extract_audit_state(text)
     issues += fence_issues
-    if raw is None:
-        return issues
     try:
-        state = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        issues.append(f"audit-state 围栏不是合法 JSON：{exc}（严格解析 fail-closed，不接受修复性解释）。")
+        state = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+    except (json.JSONDecodeError, ValueError) as exc:
+        issues.append(f"audit-state 围栏不是合法 JSON（或含重复键）：{exc}（严格解析 fail-closed，不接受修复性解释）。")
         return issues
     issues += [f"audit-state {e}" for e in vs.validate(state, schema["properties"]["sidecar_format"])]
 

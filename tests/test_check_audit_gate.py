@@ -639,5 +639,23 @@ class CheckAuditGateV3Tests(unittest.TestCase):
         self.assertTrue(any("围栏出现 0 次" in i for i in check_report(text)))
 
 
+    def test_v3_duplicate_json_key_fail_closed(self) -> None:
+        """第 12 轮实测：`"status":"closed","status":"open"` 被 Python 静默取
+        末值；重复键即歧义载荷，fail-closed 拒绝。"""
+        text = self._v3(mode="session").replace(
+            "\"status\": \"closed\"", "\"status\": \"closed\", \"status\": \"open\""
+        )
+        self.assertTrue(any("重复键" in i or "不是合法 JSON" in i for i in check_report(text)))
+
+    def test_v3_dollar_prefixed_key_smuggle_blocked(self) -> None:
+        """第 12 轮实测：`$` 前缀豁免被用于走私 "$issues" 穿过
+        additionalProperties:false；豁免只保留给标准 JSON-Schema 指令键。"""
+        text = self._v3(mode="session").replace(
+            "\"critical_acks\": []",
+            "\"critical_acks\": [], \"$issues\": [{\"id\": \"C-9\", \"level\": \"Critical\", \"status\": \"closed\"}]"
+        )
+        self.assertTrue(any("未声明字段" in i for i in check_report(text)))
+
+
 if __name__ == "__main__":
     unittest.main()
