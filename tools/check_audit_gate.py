@@ -33,7 +33,7 @@ try:
 except ImportError:  # 以脚本方式直接运行时 tools/ 自身在 sys.path 上
     import validate_schema as vs
 
-FRONT_MATTER_PATTERN = re.compile(r"^[ \t\u00ad\u200b-\u200f\u202a-\u202e\u2060\ufeff]*---\n(.*?)\n---", re.DOTALL)
+FRONT_MATTER_PATTERN = re.compile(r"^[\s\u00ad\u200b-\u200f\u202a-\u202e\u2060\ufeff]*---\n(.*?)\n---", re.DOTALL)
 
 # 允许取值的唯一机器真源是 schema 顶层 level_enum/status_enum，此处直接读取，不再
 # 在代码里另存一份硬编码——三轮外置复核先后抓到 schema_version 判别、冒号前空格、
@@ -555,6 +555,11 @@ def check_report(text: str) -> list[str]:
     # 报告凭第二行 `reviewer_mode: external` 获得外置特权，或令 v3 围栏被
     # v2 分支整体忽略（第 12 轮终验实测，原子接口可被写入）。
     dup = _fm_duplicate_key_issues(text)
+    # 含 audit-state 围栏的报告必然是 v3 意图：Front Matter 被破坏（前导
+    # 隐形字符、无法解析）时不允许静默落入超宽 legacy 分支无视围栏状态——
+    # 第 12 轮第六批实测的整类降级绕过在此关死。
+    if _front_matter_text(text) is None and "audit-state" in text:
+        return ["报告包含 audit-state 围栏但 Front Matter 无法解析；不得借 FM 破坏降级到 legacy 分支无视机器状态。"]
     if is_v3(text):
         return dup + check_report_v3(text)
     canonical = _canonical(text)

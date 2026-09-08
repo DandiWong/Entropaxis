@@ -712,5 +712,14 @@ class CheckAuditGateV3Tests(unittest.TestCase):
         self.assertTrue(any("不可将 Critical 置为 closed" in i for i in check_report(text)))
 
 
+    def test_v3_leading_newline_class_and_fence_guard(self) -> None:
+        """第 12 轮第六批：前导隐形字符+换行不再降级 legacy；FM 彻底不可解析
+        但围栏存在时直接拒绝。"""
+        text = "\ufeff\u200b\n" + self._v3(mode="session")
+        self.assertTrue(any("不可将 Critical 置为 closed" in i for i in check_report(text)))
+        no_fm = self._v3(mode="session").split("---", 2)[-1]
+        self.assertTrue(any("Front Matter 无法解析" in i for i in check_report(no_fm)))
+
+
 if __name__ == "__main__":
     unittest.main()

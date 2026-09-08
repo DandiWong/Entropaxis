@@ -27,7 +27,7 @@ SYSTEM_ROOT = HERE.parent
 WORKSPACE_ROOT = SYSTEM_ROOT.parent
 SCHEMA_DIR = SYSTEM_ROOT / "schemas"
 
-FRONT_MATTER_RE = re.compile(r"^[ \t\u00ad\u200b-\u200f\u202a-\u202e\u2060\ufeff]*---\n(.*?)\n---", re.DOTALL)
+FRONT_MATTER_RE = re.compile(r"^[\s\u00ad\u200b-\u200f\u202a-\u202e\u2060\ufeff]*---\n(.*?)\n---", re.DOTALL)
 _TYPES = {
     "object": dict, "array": list, "string": str,
     "integer": int, "number": (int, float), "boolean": bool, "null": type(None),
