@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "corpus_id": "semantic-holdout-20260908",
+    "purpose": "独立于回归集的语义留出诊断；本轮不据此调整关键词、抑制词或匹配器。",
+    "provenance": "本轮人工构造的新表达，不是独立用户抽样或盲测；已知历史反例仍属于回归或挑战诊断。",
+    "policy": "冻结本组输入和语义期望，不为提高分数改题。后续若用本组调参，标记为已用于开发，另建留出组且保留旧组身份与结果。",
+    "limitations": "有限构造样本的诊断，不估计总体语义准确率；单列漏检和额外命中，不参与 --strict。"
+  },
+  "cases": [
+    {"kind": "semantic", "category": "paraphrase", "instruction": "请替我核查现有技术方案有哪些漏洞", "expect": ["审计"]},
+    {"kind": "semantic", "category": "paraphrase", "instruction": "给根控制面做一次健康检查", "expect": ["系统自检"]},
+    {"kind": "semantic", "category": "paraphrase", "instruction": "请将刚才的分析保存成一份文档", "expect": ["交付物落盘"]},
+    {"kind": "semantic", "category": "paraphrase", "instruction": "盘点这个季度项目里重复投入的工作", "expect": ["复盘"]},
+    {"kind": "semantic", "category": "negation", "instruction": "暂时别做方案审计，我还在补充输入", "expect": []},
+    {"kind": "semantic", "category": "negation", "instruction": "无需落盘，口头回答就行", "expect": []},
+    {"kind": "semantic", "category": "quotation", "instruction": "解释一下手册里的“配置角色”是什么意思", "expect": []},
+    {"kind": "semantic", "category": "quotation", "instruction": "帮我把“整理发票”翻译为法语", "expect": []},
+    {"kind": "semantic", "category": "multiple_actions", "instruction": "先响应审计报告修改甲方案，再评审方案乙", "expect": ["修正", "审计"]},
+    {"kind": "semantic", "category": "multiple_actions", "instruction": "今天先系统自检，再配置角色", "expect": ["系统自检", "自定义角色"]},
+    {"kind": "semantic", "category": "domain", "instruction": "给渲染器换个模型再比较材质", "expect": []},
+    {"kind": "semantic", "category": "domain", "instruction": "回顾下这部小说的人物关系", "expect": []},
+    {"kind": "semantic", "category": "domain", "instruction": "数据包沉到底层队列后为什么没了", "expect": []},
+    {"kind": "semantic", "category": "explicit", "instruction": "现在请执行系统自检并指出未验证项", "expect": ["系统自检"]},
+    {"kind": "semantic", "category": "explicit", "instruction": "帮我配置角色的承载程序", "expect": ["自定义角色"]},
+    {"kind": "semantic", "category": "explicit", "instruction": "需要把这套流程封装成skill供下次使用", "expect": ["落为Skill"]}
+  ]
+}

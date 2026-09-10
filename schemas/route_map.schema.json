@@ -22,16 +22,23 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["mechanism", "files", "anchor", "keywords"],
+        "required": ["mechanism", "reads", "keywords"],
         "additionalProperties": false,
         "properties": {
           "mechanism": { "type": "string", "minLength": 1 },
-          "files": {
+          "reads": {
             "type": "array",
             "minItems": 1,
-            "items": { "type": "string", "pattern": "^\\.system/rules/.+\\.md$" }
+            "items": {
+              "type": "object",
+              "required": ["file", "anchor"],
+              "additionalProperties": false,
+              "properties": {
+                "file": { "type": "string", "pattern": "^\\.system/rules/[^/\\\\]+\\.md$" },
+                "anchor": { "type": ["string", "null"], "pattern": "^#{1,6} \\S", "minLength": 3 }
+              }
+            }
           },
-          "anchor": { "type": "string", "minLength": 1 },
           "match_type": { "type": "string", "enum": ["substring", "exact"] },
           "keywords": {
             "type": "array",

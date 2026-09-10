@@ -932,9 +932,18 @@ def check_route_map_integrity(root: Path) -> list[str]:
         mechanism = entry.get("mechanism", "<未命名机制>")
         if not entry.get("keywords"):
             issues.append(f"[路由映射缺关键词] 机制「{mechanism}」未声明 keywords。")
-        for f in entry.get("files", []):
-            if not (root / f).exists():
-                issues.append(f"[路由映射断链] 机制「{mechanism}」引用的 {f} 不存在。")
+        if __package__:
+            from .route_context import resolve_route_reads
+        else:
+            from route_context import resolve_route_reads
+        try:
+            resolved = resolve_route_reads(entry, root)
+        except ValueError as error:
+            issues.append(f"[路由读取契约] 机制「{mechanism}」：{error}")
+            continue
+        for item in resolved:
+            if item["fallback"]:
+                issues.append(f"[路由读取异常] 机制「{mechanism}」{item['file']}：{item['fallback']}")
     return issues
 
 

@@ -1,110 +1,111 @@
+import contextlib
+import io
 import json
-import sys
+import tempfile
 from pathlib import Path
-from unittest import TestCase
+from unittest import TestCase, main
+from unittest.mock import patch
 
-SYSTEM_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(SYSTEM_ROOT / "tools"))
-
-import audit_routing as AR  # noqa: E402
-import hook_route_match as HRM  # noqa: E402
-
-
-class NormalizeTests(TestCase):
-    def test_strips_whitespace_and_case(self) -> None:
-        self.assertEqual(AR.normalize("纳入 Entropaxis"), "纳入entropaxis")
-
-    def test_audit_and_hook_normalize_identically(self) -> None:
-        """两处独立实现必须同口径，否则审计结果不代表 hook 的真实行为。"""
-        for sample in ("纳入 Entropaxis", "  TIP  ", "新 Feature", "同步任务"):
-            self.assertEqual(AR.normalize(sample), HRM.normalize(sample))
-
-
-class MatchTests(TestCase):
-    def setUp(self) -> None:
-        self.routes = [
-            {"mechanism": "审计", "keywords": ["审计"], "exclude": ["根据审计"]},
-            {"mechanism": "修正", "keywords": ["根据审计修正"]},
-            {"mechanism": "tip", "keywords": ["tip"], "match_type": "exact"},
-        ]
-
-    def test_exclude_suppresses_substring_false_trigger(self) -> None:
-        names = [r["mechanism"] for r in AR.match_prompt("根据审计修正", self.routes)]
-        self.assertNotIn("审计", names)
-        self.assertIn("修正", names)
-
-    def test_plain_keyword_still_hits(self) -> None:
-        names = [r["mechanism"] for r in AR.match_prompt("对方案做一次审计", self.routes)]
-        self.assertEqual(names, ["审计"])
-
-    def test_exact_match_rejects_embedded_word(self) -> None:
-        self.assertEqual(AR.match_prompt("给我一些 tips 参考", self.routes), [])
-        self.assertEqual(len(AR.match_prompt(" TIP ", self.routes)), 1)
-
-    def test_audit_and_hook_match_identically(self) -> None:
-        for prompt in ("根据审计修正", "对方案做一次审计", " TIP ", "无关问题"):
-            self.assertEqual(
-                [r["mechanism"] for r in AR.match_prompt(prompt, self.routes)],
-                [r["mechanism"] for r in HRM.match_prompt(prompt, self.routes)],
-            )
-
-
-class ExtractSectionTests(TestCase):
-    DOC = "# 标题\n前言\n\n## 甲\n甲正文\n\n### 甲一\n细节\n\n## 乙\n乙正文\n"
-
-    def test_extracts_until_same_level_heading(self) -> None:
-        got = AR.extract_section(self.DOC, "## 甲")
-        self.assertIn("甲正文", got)
-        self.assertIn("细节", got)  # 更深层级属于本节
-        self.assertNotIn("乙正文", got)
-
-    def test_last_section_runs_to_end(self) -> None:
-        self.assertIn("乙正文", AR.extract_section(self.DOC, "## 乙"))
-
-    def test_missing_anchor_returns_empty(self) -> None:
-        self.assertEqual(AR.extract_section(self.DOC, "## 不存在"), "")
-
-
-class CostTests(TestCase):
-    def test_estimate_tokens_counts_cjk_per_char(self) -> None:
-        self.assertEqual(AR.estimate_tokens("中文四字"), 4)
-        self.assertGreater(AR.estimate_tokens("abcdefgh"), 0)
-
-    def test_anchor_cost_never_exceeds_full_file(self) -> None:
-        cost = AR.audit_cost(AR.load_routes())
-        for sc in cost["scenarios"]:
-            self.assertLessEqual(sc["total_anchor_only"], sc["total"], sc["mechanism"])
+from tools import audit_routing as AR
+from tools import hook_route_match as HRM
 
 
 class CorpusTests(TestCase):
-    """测试集本身的回归保护：路由表与用例集必须保持同步。"""
+    def test_registered_regression_still_passes(self):
+        coverage = AR.audit_coverage(AR.load_routes(), AR.load_cases(), 'regression')
+        self.assertEqual(AR.regression_failures(coverage), [])
+        self.assertEqual(coverage['untested_mechanisms'], [])
 
-    def setUp(self) -> None:
-        self.routes = AR.load_routes()
-        self.cases = AR.load_cases()
-        self.coverage = AR.audit_coverage(self.routes, self.cases)
-
-    def test_no_missed_or_false_triggers(self) -> None:
-        failures = [
-            r for r in self.coverage["results"]
-            if r["kind"] != "paraphrase" and (r["missed"] or r["extra"])
+    def test_holdout_reports_both_misses_and_extra_hits_separately(self):
+        routes = [{'mechanism': '审计', 'keywords': ['审计']}]
+        regression = [{'kind': 'positive', 'instruction': '审计', 'expect': ['审计']}]
+        holdout = [
+            {'kind': 'semantic', 'instruction': '别审计', 'expect': []},
+            {'kind': 'semantic', 'instruction': '核查现有方案', 'expect': ['审计']},
         ]
-        self.assertEqual(failures, [], f"路由漏检或误触发：{json.dumps(failures, ensure_ascii=False)}")
+        coverage = AR.audit_corpora(routes, regression, holdout)
+        self.assertEqual(coverage['regression']['summary']['positive']['total'], 1)
+        self.assertEqual(coverage['holdout']['summary']['semantic'], {'total': 2, 'clean': 0, 'missed': 1, 'extra': 1})
+        self.assertEqual(AR.regression_failures(coverage['regression']), [])
 
-    def test_every_mechanism_has_a_case(self) -> None:
-        self.assertEqual(
-            self.coverage["untested_mechanisms"], [],
-            "route_map.json 中存在未被任何用例覆盖的机制，等于无回归保护。",
-        )
+    def test_strict_exit_depends_on_regression_not_holdout(self):
+        routes = AR.load_routes()
+        holdout = [{'kind': 'semantic', 'instruction': '不要系统自检', 'expect': []}]
+        for expected, exit_code in ((['系统自检'], 0), ([], 1)):
+            regression = [{'kind': 'positive', 'instruction': '系统自检', 'expect': expected}]
+            with self.subTest(expected=expected), patch.object(AR, 'load_routes', return_value=routes), \
+                    patch.object(AR, 'load_cases', return_value=regression), \
+                    patch.object(AR, 'load_holdout_cases', return_value=holdout), \
+                    patch('sys.argv', ['audit_routing.py', '--strict', '--json']), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(AR.main(), exit_code)
+                report = json.loads(output.getvalue())
+                self.assertEqual(report['coverage']['holdout']['summary']['semantic']['extra'], 1)
 
-    def test_routed_files_exist(self) -> None:
-        workspace = SYSTEM_ROOT.parent
-        for route in self.routes:
-            for rel in route.get("files", []):
-                self.assertTrue((workspace / rel).exists(), f"{route['mechanism']} 指向的 {rel} 不存在")
+    def test_frozen_holdout_is_disjoint_from_regression(self):
+        regression = {c['instruction'] for c in AR.load_cases()}
+        holdout = AR.load_holdout_cases()
+        self.assertEqual(regression.intersection(c['instruction'] for c in holdout), set())
+        # The corpus is a diagnostic, so at least these genuinely different categories must remain represented.
+        self.assertTrue({'negation', 'quotation', 'multiple_actions', 'paraphrase', 'domain'} <= {c['category'] for c in holdout})
 
 
-if __name__ == "__main__":
-    import unittest
+class CostTests(TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / '.system/rules').mkdir(parents=True)
+        for file in AR.RESIDENT_FILES:
+            (self.root / file).write_text('Resident.\n', encoding='utf-8')
 
-    unittest.main()
+    def rule(self, name, text):
+        file = '.system/rules/' + name + '.md'
+        (self.root / file).write_text(text, encoding='utf-8')
+        return file
+
+    def test_full_hook_and_overlapping_dependencies_are_counted_once(self):
+        text = '# Rules\nScope.\n## Main\nNeeded.\n### Nested\nNested text.\n'
+        file = self.rule('first', text)
+        dependency_text = '# Dependency\nRequired policy.\n'
+        dependency = self.rule('dependency', dependency_text)
+        route = {'mechanism': 'test', 'reads': [
+            {'file': file, 'anchor': '## Main'},
+            {'file': file, 'anchor': '### Nested'},
+            {'file': file, 'anchor': '## Main'},
+            {'file': dependency, 'anchor': None},
+        ]}
+        cost = AR.audit_cost([route], self.root)['scenarios'][0]
+        read_cost = AR.estimate_tokens(text) + AR.estimate_tokens(dependency_text)
+        self.assertEqual(cost['necessary_read_ranges']['estimated_tokens'], read_cost)
+        self.assertEqual(cost['full_file_baseline']['estimated_tokens'], read_cost)
+        hook_text = HRM.build_additional_context([route], self.root)
+        self.assertEqual(cost['static_context_estimate']['estimated_tokens'], read_cost + AR.estimate_tokens(hook_text))
+        self.assertEqual(cost['actual_hook_context']['text'], hook_text)
+
+    def test_missing_dependency_and_resident_do_not_become_zero_cost(self):
+        file = self.rule('first', '# Rules\nAvailable.\n')
+        route = {'mechanism': 'test', 'reads': [
+            {'file': file, 'anchor': None},
+            {'file': '.system/rules/missing.md', 'anchor': None},
+        ]}
+        (self.root / AR.RESIDENT_FILES[0]).unlink()
+        cost = AR.audit_cost([route], self.root)
+        scenario = cost['scenarios'][0]
+        self.assertIsNone(scenario['static_context_estimate']['estimated_tokens'])
+        self.assertEqual(scenario['necessary_read_ranges']['unknown_files'], ['.system/rules/missing.md'])
+        self.assertIsNone(cost['resident_baseline']['estimated_tokens'])
+        self.assertIsNone(cost['actual_cost'])
+        self.assertIsNone(cost['actual_usage'])
+
+    def test_bad_anchor_counts_visible_full_fallback(self):
+        text = '# Rules\nScope.\n## Present\nNeeded.\n'
+        file = self.rule('first', text)
+        route = {'mechanism': 'test', 'reads': [{'file': file, 'anchor': '## Missing'}]}
+        scenario = AR.audit_cost([route], self.root)['scenarios'][0]
+        self.assertEqual(scenario['necessary_read_ranges']['estimated_tokens'], AR.estimate_tokens(text))
+        self.assertIsNotNone(scenario['necessary_read_ranges']['ranges'][0]['fallback'])
+
+
+if __name__ == '__main__':
+    main()

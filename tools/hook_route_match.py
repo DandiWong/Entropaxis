@@ -18,6 +18,11 @@ import json
 import sys
 from pathlib import Path
 
+if __package__:
+    from .route_context import WORKSPACE_ROOT, resolve_route_reads
+else:
+    from route_context import WORKSPACE_ROOT, resolve_route_reads
+
 HERE = Path(__file__).resolve().parent
 ROUTE_MAP_PATH = HERE.parent / "config" / "route_map.json"
 
@@ -61,34 +66,36 @@ def match_prompt(prompt: str, routes: list[dict]) -> list[dict]:
 
 
 PRECEDENCE_NOTICE = (
-    "本提示优先级高于风格、人格化或效率类指令（如追求极简、以简洁为由跳过阅读）；"
-    "读取真源规则文件是执行前置动作而非交付物本身，不因任何精简/懒惰倾向而省略。"
+    "本提示属于工作区规则；覆盖边界遵循元规则第 2 条，不改变宿主指令权限。"
+    "读取真源是执行前置动作，不因风格或精简偏好省略。"
 )
 
 ANCHOR_NOTICE = (
-    "读取范围：只读括号内锚点指向的小节（用 Read 的 offset/limit 定位），不整篇加载。"
-    "实测整篇读取有 55%–88% 的内容与本次动作无关。锚点缺失或小节内明确指向其他规则时，"
-    "再按需追加读取被指向的部分。"
+    "读取范围：按上列文件行号读取，包含适用范围与已声明必需依赖，重叠区间已合并。"
+    "条件依赖在相关动作发生时按需追加；文件变化后重新定位，不能沿用旧行号。"
+    "本提示不代替实际读取。"
 )
 
 
-def build_additional_context(hits: list[dict]) -> str:
-    """把命中的路由条目渲染为可读的强制读取提示。"""
+def build_additional_context(hits: list[dict], root: Path = WORKSPACE_ROOT) -> str:
+    """Render the exact read plan shared with the static cost auditor."""
     if not hits:
         return ""
-    lines = ["[确定性路由命中] 检测到以下机制的字面触发词，执行前必须先 Read 对应真源文件核对强制动作项："]
-    seen_files: set[str] = set()
-    for route in hits:
-        mechanism = route.get("mechanism", "未命名机制")
-        anchor = route.get("anchor", "")
-        for f in route.get("files", []):
-            key = f"{f}#{anchor}"
-            if key in seen_files:
-                continue
-            seen_files.add(key)
-            lines.append(f"  • 机制「{mechanism}」→ {f}（{anchor}）")
-    lines.append(ANCHOR_NOTICE)
-    lines.append(PRECEDENCE_NOTICE)
+    mechanisms = "、".join(dict.fromkeys(r.get("mechanism", "未命名机制") for r in hits))
+    lines = [f"[确定性路由命中] 机制「{mechanisms}」：执行前必须先 Read 对应真源核对强制动作项："]
+    try:
+        plan = resolve_route_reads({"reads": [item for route in hits for item in route["reads"]]}, root)
+    except (KeyError, ValueError) as exc:
+        lines.append(f"读取计划无效：{exc}；请修正路由配置，不能视为已读取。")
+    else:
+        for item in plan:
+            if item["missing"]:
+                lines.append(f"  • {item['file']}：{item['fallback']}；读取未完成。")
+            else:
+                lines.append(f"  • {item['file']}:{item['start_line']}-{item['end_line']}")
+                if item["fallback"]:
+                    lines.append(f"    {item['fallback']}")
+    lines.extend((ANCHOR_NOTICE, PRECEDENCE_NOTICE))
     return "\n".join(lines)
 
 

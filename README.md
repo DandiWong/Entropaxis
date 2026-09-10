@@ -108,13 +108,15 @@
 
 - **根入口配置同步/自愈**：`python3 .system/tools/bootstrap.py`
 - **角色模态与外部 Agent 交互配置**：`python3 .system/tools/setup_agents.py`（支持 `--scan` 探测 CLI、`--verify` 校验角色、`--apply-preset` 应用预设）
-- **指令路由与上下文成本审计**：`python3 .system/tools/audit_routing.py`（核验指令覆盖率与 Token 成本）
+- **指令路由与静态上下文审计**：`python3 .system/tools/audit_routing.py --strict`（回归集门禁与冻结留出诊断分列；`--json` 输出完整 Hook、去重后的必需读取区间、未知项。静态估算不代表模型 usage 或费用）
 - **工作区规则与健康度体检**：`python3 .system/tools/lint_workspace.py`
 - **分发就绪核验（收件方视角）**：`python3 .system/tools/check_distribution.py`
 - **方案审计门禁校验**：`python3 .system/tools/check_audit_gate.py <审计报告路径>`
 - **按配置打开文件**：`python3 .system/tools/open_file.py <path> [<path> ...]`
 - **通用项目脚手架初始化**：`python3 .system/tools/init_project.py <项目名>`
 - **软件应用脚手架初始化**：`python3 .system/tools/init_app.py <app-name> --target-dir <项目路径>/02_开发`
+- **路由读取契约**：`config/route_map.json` 使用 `reads: [{file, anchor}]`，`anchor: null` 表示全文；每个必需依赖显式列出，条件依赖按动作追加。Hook 和审计共用 `tools/route_context.py`，保留适用范围、合并重叠区间；锚点异常回退会留痕并由体检检出。
+- **语料维护**：`tests/fixtures/instruction_cases.json` 是已登记回归集；`instruction_holdout.json` 是冻结的构造样本诊断，不据它调词或刷分。用留出集参与调参后必须保留其身份并另设新组，不能继续宣称未见数据。
 - **核心开发与治理规则**：
   - [`.system/rules/00_元规则.md`](rules/00_元规则.md)
   - [`.system/rules/01_根系统治理.md`](rules/01_根系统治理.md)

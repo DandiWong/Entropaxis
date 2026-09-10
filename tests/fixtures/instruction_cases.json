@@ -1,12 +1,12 @@
 {
   "_meta": {
-    "purpose": "指令路由测试集。供 tools/audit_routing.py 核验 route_map.json 的字面触发覆盖率，并计量各场景的上下文加载成本。",
+    "purpose": "已登记路由回归集；通过率只说明这些固定表达命中符合预期，不代表自然语言理解的整体覆盖率。",
     "kinds": {
       "positive": "该指令应当命中 expect 所列机制；未命中即路由漏检。",
-      "negative": "该指令不应命中任何机制；命中即误触发，会让无关规则白白占用上下文。",
-      "paraphrase": "语义上应当命中但字面触发词覆盖不到的表述。route_map 只做字面兜底，此类天然不命中，命中率不计入失败——本组存在的意义是量化盲区规模，供决策是否补词。"
+      "negative": "不应额外命中 expect 之外的机制；expect 可列出仍应触发的其他机制。",
+      "paraphrase": "既有转述诊断；记录字面匹配与语义期望的差距，不参与 --strict。"
     },
-    "maintenance": "route_map.json 新增机制或触发词时，同步在此补 positive 用例；复盘发现的漏检/误触发实例补为 paraphrase/negative 用例。"
+    "maintenance": "回归用例可随已授权的路由修改维护。独立留出集见 instruction_holdout.json，不用于补词或调整期望刷分；两组指标不合并。"
   },
   "cases": [
     {
@@ -409,14 +409,16 @@
       "kind": "positive",
       "instruction": "这次的双周报整理一下",
       "expect": [
-        "交付物落盘"
+        "交付物落盘",
+        "方案生命周期调度"
       ]
     },
     {
       "kind": "positive",
       "instruction": "写周报",
       "expect": [
-        "交付物落盘"
+        "交付物落盘",
+        "方案生命周期调度"
       ]
     },
     {
@@ -487,31 +489,31 @@
       "kind": "negative",
       "instruction": "审一下这段代码",
       "expect": [],
-      "note": "未含「审一下这个方案」，不得命中审计"
+      "note": "代码检查不属于对既有方案的治理审计"
     },
     {
       "kind": "negative",
       "instruction": "检查一下这段函数",
       "expect": [],
-      "note": "裸「检查」不命中系统自检"
+      "note": "函数检查不是控制面健康检查"
     },
     {
       "kind": "negative",
       "instruction": "这个 bug 该报了",
       "expect": [],
-      "note": "无「发票该报」不得命中报销"
+      "note": "缺陷上报不是发票报销"
     },
     {
       "kind": "negative",
       "instruction": "回顾一下这个接口",
       "expect": [],
-      "note": "「回顾一下」不含「回顾下」"
+      "note": "接口讨论不是指定项目和时间范围的复盘"
     },
     {
       "kind": "negative",
       "instruction": "这个技能不错",
       "expect": [],
-      "note": "裸「技能」不命中落为Skill"
+      "note": "评价既有技能不要求创建技能"
     }
   ]
 }
