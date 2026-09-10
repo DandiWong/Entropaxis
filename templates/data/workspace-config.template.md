@@ -30,10 +30,10 @@
 
 | 角色模态 | 职责定位 | 承载 CLI | 启动命令 |
 |---|---|---|---|
-| Reviewer | 审计/红队/架构合规 | subagent | 内置 Subagent 机制 (auto) |
-| Researcher | 深度调研/文献综述 | subagent | 内置 Subagent 机制 (auto) |
-| Builder | 核心编码/重构实施 | subagent | 内置 Subagent 机制 (auto) |
-| Designer | 架构设计/方案规划 | subagent | 内置 Subagent 机制 (auto) |
-| Maintainer | 守门验收/证据核验 | subagent | 内置 Subagent 机制 (auto) |
+| Reviewer | 方案审计/对抗评审/架构合规 | subagent | 内置 Subagent 机制 (auto) |
+| Researcher | 调研（可联网）/文献综述 | subagent | 内置 Subagent 机制 (auto) |
+| Builder | 方案实施/核心编码/重构 | subagent | 内置 Subagent 机制 (auto) |
+| Designer | 方案设计/原型 demo | subagent | 内置 Subagent 机制 (auto) |
+| Maintainer | 汇报落盘/守门验收/证据核验 | subagent | 内置 Subagent 机制 (auto) |
 
 > 首次初始化后默认全部使用内置 Subagent。可通过 `python3 .system/tools/setup_agents.py` 交互式检测宿主机已安装的外部 Agent CLI 并自动配置。

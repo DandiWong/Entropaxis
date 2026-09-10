@@ -42,11 +42,11 @@ DEFAULT_CONFIG_PATH = ROOT / ".data" / "templates" / "workspace-config.md"
 
 # 5 大标准认知模态及其职责定义
 STANDARD_ROLES: dict[str, str] = {
-    "Reviewer": "审计/红队/架构合规",
-    "Researcher": "深度调研/文献综述",
-    "Builder": "核心编码/重构实施",
-    "Designer": "架构设计/方案规划",
-    "Maintainer": "守门验收/证据核验",
+    "Reviewer": "方案审计/对抗评审/架构合规",
+    "Researcher": "调研（可联网）/文献综述",
+    "Builder": "方案实施/核心编码/重构",
+    "Designer": "方案设计/原型 demo",
+    "Maintainer": "汇报落盘/守门验收/证据核验",
 }
 
 
