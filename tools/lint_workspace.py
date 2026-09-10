@@ -888,6 +888,36 @@ def check_routing_integrity(root: Path) -> list[str]:
                     if not proj_dir.is_dir():
                         issues.append(f"[注册表断链] .data/templates/registry.md 注册的项目目录 {d} 物理不存在。")
 
+    # 2b. 反向校验：工作区根级目录须能在注册表主目录或排除规则中找到归属，
+    # 否则新目录会游离于白名单之外而不被察觉（正向校验只查"注册的目录是否存在"，不查"存在的目录是否注册"）。
+    if registry.exists():
+        registry_text = registry.read_text(encoding="utf-8")
+        table_part, _, exclude_part = registry_text.partition("## 排除规则")
+        known_tops: set[str] = set()
+        for line in table_part.splitlines():
+            line = line.strip()
+            if not line.startswith("|") or line.startswith("| 项目 ID") or line.startswith("|---"):
+                continue
+            cols = [c.strip() for c in line.split("|")[1:-1]]
+            if len(cols) >= 3:
+                for d in re.findall(r"`([^`]+)`", cols[2]):
+                    d = d.strip()
+                    if d and "+" not in d:
+                        known_tops.add(d.rstrip("/").split("/")[0])
+        for token in re.findall(r"`([^`]+)`", exclude_part):
+            token = token.strip().lstrip("*/").rstrip("/")
+            if token:
+                known_tops.add(token.split("/")[0])
+        for child in sorted(root.iterdir()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            if child.name in known_tops:
+                continue
+            issues.append(
+                f"[根目录未注册] {child.name}/ 既不在 .data/templates/registry.md 的项目映射表，也不在其排除规则中，"
+                "需人工登记项目归属或补充排除规则（不得由 Agent 自行判断归属）。"
+            )
+
     # 3. 检查主题胶囊目录命名与结构（YYYYMMDD_主题）
     capsule_pattern = re.compile(r"^\d{8}_.+$")
     for d in root.glob("**/20[2-3][0-9][0-1][0-9][0-3][0-9]_*"):
