@@ -136,7 +136,61 @@ class OpenFileTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["used_fallback"])
         self.assertIn("配置不存在", result["reason"])
+    def test_reloads_open_office_document_via_closer_hook(self):
+        excel = self.root / "report.xlsx"
+        excel.write_bytes(b"dummy")
+        self._write_config({
+            "excel": {
+                "extensions": [".xlsx"],
+                "selected_app": "WPS Office",
+                "command": 'open -a "wpsoffice"',
+            }
+        })
+        runner = RecordingRunner([0])
+        closer_calls = []
+        def fake_closer(argv, **kwargs):
+            closer_calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout="true", stderr="")
 
+        result = open_paths(
+            [str(excel)],
+            config_path=self.config,
+            platform="darwin",
+            runner=runner,
+            closer=fake_closer,
+        )[0]
 
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["reloaded"])
+        self.assertEqual(len(closer_calls), 1)
+        self.assertEqual(closer_calls[0][0], "osascript")
+
+    def test_non_office_files_skip_closer_hook(self):
+        markdown = self.root / "readme.md"
+        markdown.write_text("# Readme\n", encoding="utf-8")
+        self._write_config({
+            "markdown": {
+                "extensions": [".md"],
+                "selected_app": "Orca",
+                "command": "orca file open",
+            }
+        })
+        runner = RecordingRunner([0])
+        closer_calls = []
+        def fake_closer(argv, **kwargs):
+            closer_calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout="true", stderr="")
+
+        result = open_paths(
+            [str(markdown)],
+            config_path=self.config,
+            platform="darwin",
+            runner=runner,
+            closer=fake_closer,
+        )[0]
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["reloaded"])
+        self.assertEqual(len(closer_calls), 0)
 if __name__ == "__main__":
     unittest.main()
