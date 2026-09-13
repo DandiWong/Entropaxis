@@ -1,0 +1,76 @@
+name: build-windows-installer
+
+# exe 只能在 Windows 上冻结，维护者的 macOS 本机做不到——这条流水线就是那台 Windows 机器。
+# 载荷一律经 build_windows_installer.py --payload-only 走 `git archive` 跟踪集导出，
+# 不直接打包工作目录：私有 Skill 靠自带 .gitignore 排除出版本库但物理仍在，打目录会外泄。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/**"
+      - "rules/**"
+      - "entrypoints/**"
+      - "templates/**"
+      - "schemas/**"
+      - "config/**"
+      - "skills/**"
+      - ".github/workflows/build-windows-installer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 单元测试门禁
+        run: python -m unittest discover -s tests -t .
+
+      - name: 导出控制面载荷（版本库跟踪集）
+        run: python tools/build_windows_installer.py --payload-only --out dist/entropaxis-payload.zip
+
+      - name: 冻结为单文件 exe
+        # 构建名保持纯 ASCII：PyInstaller 生成 spec 与中间文件时对非 ASCII 名称并不稳，
+        # 面向用户的中文文件名在下一步重命名给出。
+        run: |
+          pip install pyinstaller==6.11.1
+          pyinstaller --onefile --clean --noconfirm `
+            --name EntropaxisSetup `
+            --add-data "dist/entropaxis-payload.zip;." `
+            --distpath dist --workpath build --specpath build `
+            tools/install_windows.py
+
+      - name: 产物自检（实装一次并核对结果）
+        shell: pwsh
+        run: |
+          $exe = "dist/EntropaxisSetup.exe"
+          if (-not (Test-Path $exe)) { throw "exe 未生成" }
+          # --target 跳过图形选择框，在 CI 内实跑一次安装与初始化
+          & $exe --target "$env:RUNNER_TEMP\smoke" --json
+          if ($LASTEXITCODE -ne 0) { throw "安装自检失败，退出码 $LASTEXITCODE" }
+          foreach ($f in @(".system\tools\bootstrap.py", "AGENTS.md", "CLAUDE.md")) {
+            if (-not (Test-Path "$env:RUNNER_TEMP\smoke\$f")) { throw "安装结果缺少 $f" }
+          }
+          # 幂等重入：同一目录再装一次即升级路径，不得因已存在而失败
+          & $exe --target "$env:RUNNER_TEMP\smoke" --json
+          if ($LASTEXITCODE -ne 0) { throw "升级路径自检失败，退出码 $LASTEXITCODE" }
+          Write-Host "✅ 安装与升级自检通过"
+
+      - name: 重命名为面向用户的中文文件名
+        shell: pwsh
+        run: Rename-Item dist/EntropaxisSetup.exe "Entropaxis安装程序.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: entropaxis-windows-installer
+          path: dist/Entropaxis安装程序.exe
+          if-no-files-found: error
+          retention-days: 90

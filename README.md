@@ -55,15 +55,17 @@
 
 ### Windows 安装
 
-#### 推荐：双击安装包
+#### 推荐：双击 exe 安装包
 
-向维护者要一份 **`Entropaxis安装程序.bat`**（单文件，约 500 KB），双击即可：弹框选安装目录 → 展开控制面 → 自动初始化。无需 GitHub 账号、无需 git、无需联网。
+向维护者要一份 **`Entropaxis安装程序.exe`**，双击即可：弹框选安装目录 → 展开控制面 → 自动初始化。控制面整份打在 exe 里，**安装全程不联网、不拉远端、不需要 GitHub 账号，也不需要先装 Python**。
 
-唯一前置是 Python 3。没装会直接提示你去 <https://www.python.org/downloads/> 安装（记得勾选 **Add python.exe to PATH**），装完重新双击一次。
+装完日常使用仍需本机装有 Python 3（工作区的工具都是 `.py`）：到 <https://www.python.org/downloads/> 安装，记得勾选 **Add python.exe to PATH**。
 
 装到已有工作区上即为升级：只覆盖 `.system/`，不动 `.data/`（你的实例数据与凭据），也不删你自己放进 `.system/skills/` 的私有能力。
 
-> 维护者侧生成命令：`python3 .system/tools/build_windows_installer.py`，默认输出到工作区根目录。载荷取自 `git archive` 跟踪集，因此天然不含私有 Skill。
+> **维护者侧**：exe 由 GitHub Actions 的 `build-windows-installer` 工作流在 `windows-latest` 上构建（`main` 分支相关路径变更时自动触发，也可手动 `workflow_dispatch`），产物取 Actions 页面的 `entropaxis-windows-installer` 制品。
+> 本机临时要一份时用 `python3 .system/tools/build_windows_installer.py` 生成等效的 `.bat` 自解压包（无需 Windows 机器，默认输出到工作区根目录）。
+> 两种形态的载荷都强制取自 `git archive` 跟踪集，因此天然不含私有 Skill。
 
 #### 备选：手动下载代码包
 
@@ -116,7 +118,7 @@
 - **指令路由与静态上下文审计**：`python3 .system/tools/audit_routing.py --strict`（`--json` 输出完整 Hook、去重后的必需读取区间、未知项。静态估算不代表模型 usage 或费用）
 - **工作区规则与健康度体检**：`python3 .system/tools/lint_workspace.py`（阻断项与建议项以工具输出为准；治理卫生类为建议项，全新工作区未初始化状态不红屏）
 - **分发就绪核验（收件方视角）**：`python3 .system/tools/check_distribution.py`
-- **构建 Windows 自解压安装包**：`python3 .system/tools/build_windows_installer.py`（`--out` 指定产物路径、`--ref` 指定打包提交；载荷强制取自 `git archive` 跟踪集，收件方侧由 `install_windows.py` 承接选目录与初始化）
+- **构建 Windows 安装包**：exe 走 `.github/workflows/build-windows-installer.yml`（PyInstaller 冻结 `tools/install_windows.py`，载荷随包）；本机等效的 `.bat` 自解压包用 `python3 .system/tools/build_windows_installer.py`（`--out` 产物路径、`--ref` 打包提交、`--payload-only` 仅导出载荷供流水线随包）。两种形态载荷均强制取自 `git archive` 跟踪集，收件方侧同由 `install_windows.py` 承接选目录、落盘与初始化
 - **方案审计门禁校验**：`python3 .system/tools/check_audit_gate.py <审计报告路径>`
 - **按配置打开文件**：`python3 .system/tools/open_file.py <path> [<path> ...]`
 - **通用项目脚手架初始化**：`python3 .system/tools/init_project.py <项目名>`

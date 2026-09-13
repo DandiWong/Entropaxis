@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Windows 安装程序本体：选目录 → 展开控制面 → 跑初始化。
 
-由 `build_windows_installer.py` 生成的自解压 `.bat` 载体调用：载体把自身尾部的 Base64
-载荷解出一份到临时目录，再执行本文件；本文件负责与人交互（图形化选安装目录）、把控制面
-落到用户选定的目录，并接着跑 `bootstrap.py` 完成初始化。
+两种载体共用本文件，区别只在载荷从哪来：
+  * **`.exe`**（GitHub Actions 用 PyInstaller 冻结）：载荷作为随包数据躺在 `sys._MEIPASS`；
+  * **`.bat`**（`build_windows_installer.py` 本地构建）：载荷是自身尾部的 Base64，经
+    `--carrier` 传入路径。
 
-两条安全边界（均为信任边界，不做简化）：
+两种形态都自带完整控制面，安装全程不联网、不拉远端。
+
+三条安全边界（均为信任边界，不做简化）：
   1. **只写 `.system/`**：`.data/` 是用户实例数据与凭据所在，安装与升级全程不触碰；
   2. **载荷成员路径校验**：载荷虽由本仓库 `git archive` 产出，但经过传输与落盘后即为
-     外部输入，解压前逐条排除绝对路径与 `..`（Zip Slip）。
+     外部输入，解压前逐条排除绝对路径与 `..`（Zip Slip）；
+  3. **不拿 `sys.executable` 跑 bootstrap**：冻结后它指向安装程序自己，子进程会变成
+     递归重启安装程序。初始化一律用 `runpy` 在本进程内执行，两种形态同一条路径。
 
 遵循 ApX 工具契约：纯标准库、行动导向错误、结构化输出、临时目录原子组装后再落盘。
 """
@@ -20,8 +25,8 @@ import base64
 import binascii
 import io
 import json
+import runpy
 import shutil
-import subprocess
 import sys
 import tempfile
 import zipfile
@@ -31,10 +36,11 @@ from pathlib import Path
 # 因此取值一律用 rsplit 取最后一段，避免切到那处诱饵。
 PAYLOAD_MARKER = b"#ENTROPAXIS_PAYLOAD#"
 
+# 冻结成 exe 时随包数据的文件名，构建侧与安装侧共用本常量。
+PAYLOAD_NAME = "entropaxis-payload.zip"
+
 # 载荷完整性判据：缺其一即说明拿到的不是一份完整控制面，宁可阻断也不落一半。
 REQUIRED_MEMBERS = ("tools/bootstrap.py", "entrypoints/AGENTS.md", "entrypoints/CLAUDE.md")
-
-BOOTSTRAP_TIMEOUT = 300
 
 
 class ToolError(Exception):
@@ -64,6 +70,33 @@ def read_payload(carrier: Path) -> bytes:
             f"❌ 安装包载荷解码失败: {exc}\n"
             f"👉 修复建议: 文件在传输中损坏（常见于聊天软件压缩），请重新获取原始安装包。"
         ) from exc
+
+
+def bundled_payload() -> bytes | None:
+    """冻结成 exe 时，从随包数据里取控制面 ZIP；非冻结形态返回 None。"""
+    base = getattr(sys, "_MEIPASS", None)
+    if not base:
+        return None
+    path = Path(base) / PAYLOAD_NAME
+    if not path.is_file():
+        raise ToolError(
+            f"❌ 安装程序内未随包控制面载荷（缺 {PAYLOAD_NAME}）。\n"
+            f"👉 修复建议: 该 exe 构建有误，请用 build-windows-installer 工作流重新构建。"
+        )
+    return path.read_bytes()
+
+
+def resolve_payload(carrier: str | None) -> bytes:
+    """按载体形态取出控制面 ZIP：显式 carrier 优先，其次 exe 随包数据。"""
+    if carrier:
+        return read_payload(Path(carrier).expanduser().resolve())
+    payload = bundled_payload()
+    if payload is None:
+        raise ToolError(
+            "❌ 未指定载荷来源：既不是冻结的 exe，也没有传 --carrier。\n"
+            "👉 修复建议: 双击 exe 安装包运行，或以 --carrier <安装包.bat> 指定自解压载体。"
+        )
+    return payload
 
 
 def _safe_members(archive: zipfile.ZipFile) -> list[str]:
@@ -152,19 +185,20 @@ def install(payload: bytes, target_root: Path) -> dict:
 
 
 def run_bootstrap(workspace: Path) -> dict:
-    """在安装目录实跑初始化链路，返回退出码与输出尾部。"""
+    """在本进程内跑安装目录里的 `bootstrap.py`，返回退出码与失败原因。
+
+    刻意不起子进程：冻结成 exe 后 `sys.executable` 是安装程序自己，子进程会递归重启安装
+    流程；而收件方此刻很可能还没装系统 Python，也没有第二个解释器可用。`bootstrap.py` 是
+    纯标准库、从 `__file__` 派生工作区根，`runpy` 执行它即可拿到正确的安装目录。
+    """
     script = workspace / ".system" / "tools" / "bootstrap.py"
-    proc = subprocess.run(
-        [sys.executable, str(script)],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-        timeout=BOOTSTRAP_TIMEOUT,
-    )
-    return {
-        "returncode": proc.returncode,
-        "output": (proc.stdout + proc.stderr).strip(),
-    }
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    except SystemExit as exc:
+        return {"returncode": int(exc.code or 0), "error": ""}
+    except Exception as exc:  # noqa: BLE001 - 初始化失败不应吞掉已完成的安装
+        return {"returncode": 1, "error": f"{type(exc).__name__}: {exc}"}
+    return {"returncode": 0, "error": ""}
 
 
 def choose_directory(default: Path) -> Path | None:
@@ -195,14 +229,14 @@ def main() -> int:
         description="Entropaxis Windows 安装程序：选目录、展开控制面并初始化",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--carrier", required=True, help="自解压载体 .bat 的路径（载荷来源）")
+    parser.add_argument("--carrier", help="自解压载体 .bat 的路径；冻结成 exe 时无需指定")
     parser.add_argument("--target", help="安装目录；省略时弹出图形化目录选择框")
     parser.add_argument("--json", action="store_true", help="以结构化 JSON 格式输出结果")
 
     args = parser.parse_args()
 
     try:
-        payload = read_payload(Path(args.carrier).expanduser().resolve())
+        payload = resolve_payload(args.carrier)
 
         if args.target:
             target = Path(args.target)
@@ -213,6 +247,10 @@ def main() -> int:
                 return 0
 
         res = install(payload, target)
+        verb = "升级" if res["mode"] == "upgrade" else "安装"
+        if not args.json:
+            print(f"✅ 控制面{verb}完成：{res['system_dir']}（{res['written_files']} 个文件）")
+
         boot = run_bootstrap(Path(res["workspace"]))
         res["bootstrap"] = boot
 
@@ -220,19 +258,17 @@ def main() -> int:
             print(json.dumps(res, ensure_ascii=False, indent=2))
             return 0 if boot["returncode"] == 0 else 1
 
-        verb = "升级" if res["mode"] == "upgrade" else "安装"
-        print(f"✅ 控制面{verb}完成：{res['system_dir']}（{res['written_files']} 个文件）")
-        print(boot["output"])
         if boot["returncode"] != 0:
             print(
-                f"\n❌ 初始化未通过（退出码 {boot['returncode']}）。\n"
-                f"👉 修复建议: 把上方报错整段复制给 AI 助手处理，"
-                f"或在安装目录双击 .system\\tools\\一键配置工作区.bat 重试。",
+                f"\n❌ 控制面已就位，但初始化未通过：{boot['error'] or '退出码 ' + str(boot['returncode'])}\n"
+                f"👉 修复建议: 装好 Python 3 后，在安装目录双击 "
+                f".system\\tools\\一键配置工作区.bat 重跑初始化；或把上方报错整段复制给 AI 助手处理。",
                 file=sys.stderr,
             )
             return 1
         print(f"\n🎉 工作区就绪：{res['workspace']}")
         print("   用 Claude Code / OMP / Cursor 打开这个目录，直接说话即可开始。")
+        print("   日常使用仍需本机装有 Python 3（工作区的工具都是 .py）。")
         return 0
     except ToolError as err:
         print(str(err), file=sys.stderr)
@@ -246,4 +282,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    # 冻结成 exe 时双击运行，控制台窗口会随进程退出一并消失——成功提示和报错都来不及看。
+    if getattr(sys, "frozen", False):
+        input("\n按回车键退出...")
+    sys.exit(code)

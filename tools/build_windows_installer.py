@@ -25,7 +25,14 @@ HERE = Path(__file__).resolve().parent
 SYSTEM_DIR = HERE.parent
 WORKSPACE = SYSTEM_DIR.parent
 
-PAYLOAD_MARKER = "#ENTROPAXIS_PAYLOAD#"
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+import install_windows  # noqa: E402 - 需先把同级 tools/ 挂上 sys.path
+
+# 载荷标记与随包文件名都由安装侧定义，构建侧引用而非另写一份——两处各写一份的那天，
+# 构建出的安装包就会在收件方机器上找不到自己的载荷。
+PAYLOAD_MARKER = install_windows.PAYLOAD_MARKER.decode("ascii")
+PAYLOAD_NAME = install_windows.PAYLOAD_NAME
 DEFAULT_OUTPUT_NAME = "Entropaxis安装程序.bat"
 GIT_TIMEOUT = 120
 B64_LINE_WIDTH = 76
@@ -158,12 +165,6 @@ def build_installer(
         staged = Path(tmpdir) / target.name
         staged.write_bytes(carrier)
         # 回读自检：用安装侧的解析逻辑验一遍，杜绝"构建成功但装不上"
-        sys.path.insert(0, str(HERE))
-        try:
-            import install_windows
-        finally:
-            if str(HERE) in sys.path:
-                sys.path.remove(str(HERE))
         extracted = install_windows.read_payload(staged)
         if extracted != payload:
             raise ToolError(
@@ -190,9 +191,26 @@ def main() -> int:
     )
     parser.add_argument("--out", help=f"产物路径，默认 <工作区根>/{DEFAULT_OUTPUT_NAME}")
     parser.add_argument("--ref", default="HEAD", help="打包的提交或分支，默认 HEAD")
+    parser.add_argument(
+        "--payload-only",
+        action="store_true",
+        help="只导出控制面载荷 ZIP（供 exe 构建流水线随包），不生成 .bat 载体",
+    )
     parser.add_argument("--json", action="store_true", help="以结构化 JSON 格式输出结果")
 
     args = parser.parse_args()
+
+    if args.payload_only:
+        try:
+            payload = tracked_payload(SYSTEM_DIR, args.ref)
+        except ToolError as err:
+            print(str(err), file=sys.stderr)
+            return 1
+        out = Path(args.out).expanduser().resolve() if args.out else WORKSPACE / PAYLOAD_NAME
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(payload)
+        print(f"载荷: {out}（{len(payload) / 1024:.1f} KB，ref={args.ref}）")
+        return 0
 
     try:
         res = build_installer(out_path=args.out, ref=args.ref)

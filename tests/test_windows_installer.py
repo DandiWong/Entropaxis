@@ -117,6 +117,70 @@ class InstallTests(unittest.TestCase):
             self.assertFalse((Path(tmp) / "逃逸.md").exists())
 
 
+class PayloadResolutionTests(unittest.TestCase):
+    """exe 从随包数据取载荷，.bat 从 --carrier 取；两条都不成立时必须明确阻断。"""
+
+    def tearDown(self) -> None:
+        if hasattr(sys, "_MEIPASS"):
+            del sys._MEIPASS
+
+    def test_frozen_bundle_is_used_when_no_carrier(self) -> None:
+        payload = _fake_payload()
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / installer.PAYLOAD_NAME).write_bytes(payload)
+            sys._MEIPASS = tmp
+            self.assertEqual(installer.resolve_payload(None), payload)
+
+    def test_frozen_without_bundled_payload_is_actionable_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sys._MEIPASS = tmp
+            with self.assertRaises(installer.ToolError) as ctx:
+                installer.resolve_payload(None)
+            self.assertIn(installer.PAYLOAD_NAME, str(ctx.exception))
+
+    def test_neither_frozen_nor_carrier_is_blocked(self) -> None:
+        with self.assertRaises(installer.ToolError) as ctx:
+            installer.resolve_payload(None)
+        self.assertIn("--carrier", str(ctx.exception))
+
+
+class BootstrapExecutionTests(unittest.TestCase):
+    def test_bootstrap_runs_in_process_not_via_sys_executable(self) -> None:
+        """冻结后 sys.executable 是安装程序自己，起子进程等于递归重启安装流程。
+
+        这里用一个会把 sys.executable 写进产物的假 bootstrap 反证：只要真在本进程内执行，
+        它拿到的解释器就是当前 Python，且能正确从 __file__ 派生出安装目录。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / ".system" / "tools" / "bootstrap.py"
+            script.parent.mkdir(parents=True)
+            script.write_text(
+                "from pathlib import Path\n"
+                "if __name__ == '__main__':\n"
+                "    ws = Path(__file__).resolve().parent.parent.parent\n"
+                "    (ws / 'AGENTS.md').write_text('已初始化', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+
+            res = installer.run_bootstrap(root)
+
+            self.assertEqual(res["returncode"], 0)
+            self.assertEqual((root / "AGENTS.md").read_text(encoding="utf-8"), "已初始化")
+
+    def test_bootstrap_failure_is_reported_not_swallowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / ".system" / "tools" / "bootstrap.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("raise RuntimeError('模板缺失')\n", encoding="utf-8")
+
+            res = installer.run_bootstrap(root)
+
+            self.assertEqual(res["returncode"], 1)
+            self.assertIn("模板缺失", res["error"])
+
+
 class BuildTests(unittest.TestCase):
     def test_build_from_repo_produces_installable_carrier(self) -> None:
         """端到端：真实 git archive 载荷经安装侧解析后仍是完整控制面。"""
@@ -135,6 +199,11 @@ class BuildTests(unittest.TestCase):
                 self.assertIn(member, names)
             self.assertIn("tools/install_windows.py", names)
             self.assertEqual(res["payload_bytes"], len(payload))
+
+    def test_payload_name_is_shared_not_duplicated(self) -> None:
+        """构建侧与安装侧各写一份文件名的那天，exe 就会找不到自己的载荷。"""
+        self.assertIs(builder.PAYLOAD_NAME, installer.PAYLOAD_NAME)
+        self.assertEqual(builder.PAYLOAD_MARKER.encode("ascii"), installer.PAYLOAD_MARKER)
 
     def test_build_rejects_unknown_ref(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
