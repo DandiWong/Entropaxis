@@ -35,7 +35,7 @@ jobs:
         run: python -m unittest discover -s tests -t .
 
       - name: 导出控制面载荷（版本库跟踪集）
-        run: python tools/build_windows_installer.py --payload-only --out dist/entropaxis-payload.zip
+        run: python tools/build_windows_installer.py --out dist/entropaxis-payload.zip
 
       - name: 冻结为单文件 exe
         # 构建名保持纯 ASCII：PyInstaller 生成 spec 与中间文件时对非 ASCII 名称并不稳，

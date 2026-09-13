@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """Windows 安装程序本体：选目录 → 展开控制面 → 跑初始化。
 
-两种载体共用本文件，区别只在载荷从哪来：
-  * **`.exe`**（GitHub Actions 用 PyInstaller 冻结）：载荷作为随包数据躺在 `sys._MEIPASS`；
-  * **`.bat`**（`build_windows_installer.py` 本地构建）：载荷是自身尾部的 Base64，经
-    `--carrier` 传入路径。
+由 GitHub Actions 用 PyInstaller 冻结为单文件 exe；控制面 ZIP 作为随包数据躺在
+`sys._MEIPASS`，安装全程不联网、不拉远端。
 
-两种形态都自带完整控制面，安装全程不联网、不拉远端。
-
-三条安全边界（均为信任边界，不做简化）：
+两条安全边界（均为信任边界，不做简化）：
   1. **只写 `.system/`**：`.data/` 是用户实例数据与凭据所在，安装与升级全程不触碰；
-  2. **载荷成员路径校验**：载荷虽由本仓库 `git archive` 产出，但经过传输与落盘后即为
+  2. **载荷成员路径校验**：载荷虽由本仓库 `git archive` 产出，但经过随包封装后即为
      外部输入，解压前逐条排除绝对路径与 `..`（Zip Slip）；
-  3. **不拿 `sys.executable` 跑 bootstrap**：冻结后它指向安装程序自己，子进程会变成
-     递归重启安装程序。初始化一律用 `runpy` 在本进程内执行，两种形态同一条路径。
+
+初始化不拿 `sys.executable` 起子进程跑 `bootstrap.py`：冻结后 `sys.executable` 指向安装
+程序自己，子进程会变成递归重启安装程序；收件方此刻也未必已装系统 Python。改用 `runpy`
+在本进程内执行。
 
 遵循 ApX 工具契约：纯标准库、行动导向错误、结构化输出、临时目录原子组装后再落盘。
 """
@@ -21,8 +19,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import binascii
 import io
 import json
 import runpy
@@ -32,11 +28,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-# 载体 `.bat` 尾部的载荷分隔标记。载体正文里还有一处同名字面量（自解压那行 `-c` 代码），
-# 因此取值一律用 rsplit 取最后一段，避免切到那处诱饵。
-PAYLOAD_MARKER = b"#ENTROPAXIS_PAYLOAD#"
-
-# 冻结成 exe 时随包数据的文件名，构建侧与安装侧共用本常量。
+# 随包数据的文件名，构建侧（build_windows_installer.py）与安装侧共用本常量。
 PAYLOAD_NAME = "entropaxis-payload.zip"
 
 # 载荷完整性判据：缺其一即说明拿到的不是一份完整控制面，宁可阻断也不落一半。
@@ -47,36 +39,15 @@ class ToolError(Exception):
     """工具可恢复业务异常，包含行动导向修复指引。"""
 
 
-def read_payload(carrier: Path) -> bytes:
-    """从自解压载体尾部取出控制面 ZIP 字节。"""
-    try:
-        raw = carrier.read_bytes()
-    except OSError as exc:
-        raise ToolError(
-            f"❌ 无法读取安装包: {carrier}（{exc}）\n"
-            f"👉 修复建议: 确认安装包未被杀毒软件隔离，或重新获取一份后再双击。"
-        ) from exc
-
-    if PAYLOAD_MARKER not in raw:
-        raise ToolError(
-            f"❌ 安装包内未找到载荷标记: {carrier}\n"
-            f"👉 修复建议: 该文件可能不是 Entropaxis 安装包，或在传输中被截断，请重新获取。"
-        )
-
-    try:
-        return base64.b64decode(raw.rsplit(PAYLOAD_MARKER, 1)[1])
-    except (binascii.Error, ValueError) as exc:
-        raise ToolError(
-            f"❌ 安装包载荷解码失败: {exc}\n"
-            f"👉 修复建议: 文件在传输中损坏（常见于聊天软件压缩），请重新获取原始安装包。"
-        ) from exc
-
-
-def bundled_payload() -> bytes | None:
-    """冻结成 exe 时，从随包数据里取控制面 ZIP；非冻结形态返回 None。"""
+def resolve_payload() -> bytes:
+    """从冻结 exe 的随包数据里取出控制面 ZIP 字节；非冻结形态直接阻断。"""
     base = getattr(sys, "_MEIPASS", None)
     if not base:
-        return None
+        raise ToolError(
+            "❌ 未检测到随包控制面载荷：本程序需以 GitHub Actions 构建的 exe 形态运行。\n"
+            "👉 修复建议: 从 Releases 或 Actions 制品获取「Entropaxis安装程序.exe」并直接双击，"
+            "勿直接运行本源码文件。"
+        )
     path = Path(base) / PAYLOAD_NAME
     if not path.is_file():
         raise ToolError(
@@ -84,19 +55,6 @@ def bundled_payload() -> bytes | None:
             f"👉 修复建议: 该 exe 构建有误，请用 build-windows-installer 工作流重新构建。"
         )
     return path.read_bytes()
-
-
-def resolve_payload(carrier: str | None) -> bytes:
-    """按载体形态取出控制面 ZIP：显式 carrier 优先，其次 exe 随包数据。"""
-    if carrier:
-        return read_payload(Path(carrier).expanduser().resolve())
-    payload = bundled_payload()
-    if payload is None:
-        raise ToolError(
-            "❌ 未指定载荷来源：既不是冻结的 exe，也没有传 --carrier。\n"
-            "👉 修复建议: 双击 exe 安装包运行，或以 --carrier <安装包.bat> 指定自解压载体。"
-        )
-    return payload
 
 
 def _safe_members(archive: zipfile.ZipFile) -> list[str]:
@@ -229,14 +187,13 @@ def main() -> int:
         description="Entropaxis Windows 安装程序：选目录、展开控制面并初始化",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--carrier", help="自解压载体 .bat 的路径；冻结成 exe 时无需指定")
     parser.add_argument("--target", help="安装目录；省略时弹出图形化目录选择框")
     parser.add_argument("--json", action="store_true", help="以结构化 JSON 格式输出结果")
 
     args = parser.parse_args()
 
     try:
-        payload = resolve_payload(args.carrier)
+        payload = resolve_payload()
 
         if args.target:
             target = Path(args.target)
