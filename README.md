@@ -51,21 +51,28 @@
 
 > 📌 **数据隔离说明**：工作区实例数据（业务项目注册表、内部战略、凭据）独立存放于 `.data/`（与 `.system/` 同级），严禁提交至公共系统仓库。
 
-> ⚠️ **分发信道（唯一合法路径）**：把本系统交付给他人时，只允许 `git clone`、`git archive` 或 GitHub 版本库 ZIP 下载。**严禁直接拷贝、压缩 `.system/` 目录或经网盘同步**——私有 Skill 靠自带 `.gitignore` 排除出版本库，它们在文件系统上依然物理存在，拷目录会连同内部端点与业务口径一并带走。
+> ⚠️ **分发信道（唯一合法路径）**：把本系统交付给他人时，只允许 `git clone`、`git archive`、GitHub 版本库 ZIP 下载，或 `build_windows_installer.py` 产出的 Windows 安装包（其载荷即 `git archive` 跟踪集）。**严禁直接拷贝、压缩 `.system/` 目录或经网盘同步**——私有 Skill 靠自带 `.gitignore` 排除出版本库，它们在文件系统上依然物理存在，拷目录会连同内部端点与业务口径一并带走。
 
-### Windows 安装常见问题
+### Windows 安装
 
-#### 下载代码包
+#### 推荐：双击安装包
 
-这是一个私有仓库，只有受邀成员才能访问。如果 AI 助手提示"下载失败"或"无法访问"，**不用理会报错信息**，按以下步骤手动下载即可：
+向维护者要一份 **`Entropaxis安装程序.bat`**（单文件，约 500 KB），双击即可：弹框选安装目录 → 展开控制面 → 自动初始化。无需 GitHub 账号、无需 git、无需联网。
+
+唯一前置是 Python 3。没装会直接提示你去 <https://www.python.org/downloads/> 安装（记得勾选 **Add python.exe to PATH**），装完重新双击一次。
+
+装到已有工作区上即为升级：只覆盖 `.system/`，不动 `.data/`（你的实例数据与凭据），也不删你自己放进 `.system/skills/` 的私有能力。
+
+> 维护者侧生成命令：`python3 .system/tools/build_windows_installer.py`，默认输出到工作区根目录。载荷取自 `git archive` 跟踪集，因此天然不含私有 Skill。
+
+#### 备选：手动下载代码包
+
+拿不到安装包时走版本库。这是一个私有仓库，只有受邀成员才能访问；如果 AI 助手提示"下载失败"或"无法访问"，**不用理会报错信息**，按以下步骤手动下载即可：
 
 1. 用浏览器打开 `https://github.com/DandiWong/Entropaxis`（确保已登录 GitHub）
 2. 点击绿色的 **Code** 按钮 → **Download ZIP**
 3. 把下载好的 ZIP 交给 AI 助手，让它帮你解压到工作区
-
-#### 一键初始化
-
-解压到位后，进入 `.system\tools\`，双击 **`一键配置工作区.bat`**（不是 `.command`，那个是 Mac 用的）。脚本会自动找 `py -3` / `python3` / `python`；提示没装 Python 时按提示装完再双击一次即可。
+4. 解压到位后进入 `.system\tools\`，双击 **`一键配置工作区.bat`**（不是 `.command`，那个是 Mac 用的）
 
 #### 让 AI 助手帮你操作网页
 
@@ -109,6 +116,7 @@
 - **指令路由与静态上下文审计**：`python3 .system/tools/audit_routing.py --strict`（`--json` 输出完整 Hook、去重后的必需读取区间、未知项。静态估算不代表模型 usage 或费用）
 - **工作区规则与健康度体检**：`python3 .system/tools/lint_workspace.py`（阻断项与建议项以工具输出为准；治理卫生类为建议项，全新工作区未初始化状态不红屏）
 - **分发就绪核验（收件方视角）**：`python3 .system/tools/check_distribution.py`
+- **构建 Windows 自解压安装包**：`python3 .system/tools/build_windows_installer.py`（`--out` 指定产物路径、`--ref` 指定打包提交；载荷强制取自 `git archive` 跟踪集，收件方侧由 `install_windows.py` 承接选目录与初始化）
 - **方案审计门禁校验**：`python3 .system/tools/check_audit_gate.py <审计报告路径>`
 - **按配置打开文件**：`python3 .system/tools/open_file.py <path> [<path> ...]`
 - **通用项目脚手架初始化**：`python3 .system/tools/init_project.py <项目名>`
