@@ -57,7 +57,7 @@
 
 #### 推荐：双击 exe 安装包
 
-向维护者要一份 **`Entropaxis安装程序.exe`**，双击即可：弹框选安装目录 → 展开控制面 → 自动初始化。控制面整份打在 exe 里，**安装全程不联网、不拉远端、不需要 GitHub 账号，也不需要先装 Python**。
+从仓库 Releases 侧边栏（或向维护者要）拿一份 **`EntropaxisSetup.exe`**，双击即可：弹框选安装目录 → 展开控制面 → 自动初始化。控制面整份打在 exe 里，**安装全程不联网、不拉远端、不需要 GitHub 账号，也不需要先装 Python**。
 
 装完日常使用仍需本机装有 Python 3（工作区的工具都是 `.py`）：到 <https://www.python.org/downloads/> 安装，记得勾选 **Add python.exe to PATH**。
 

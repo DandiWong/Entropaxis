@@ -77,14 +77,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "升级路径自检失败，退出码 $LASTEXITCODE" }
           Write-Host "✅ 安装与升级自检通过"
 
-      - name: 重命名为面向用户的中文文件名
-        shell: pwsh
-        run: Rename-Item dist/EntropaxisSetup.exe "Entropaxis安装程序.exe"
-
       - uses: actions/upload-artifact@v4
         with:
           name: entropaxis-windows-installer
-          path: .system/dist/Entropaxis安装程序.exe
+          path: .system/dist/EntropaxisSetup.exe
           if-no-files-found: error
           retention-days: 90
 
@@ -92,13 +88,17 @@ jobs:
         # Actions artifact 只出现在 Actions 标签页且会过期；侧边栏 Releases 栏要靠 Release
         # 资产。用仓库自带的 gh CLI 直接发布，不为此引入第三方 Action。
         # 只在真正的 main 构建上发布：手动 dispatch 到别的分支自检时不该顶掉线上"最新"。
+        #
+        # 资产文件名全程保持纯 ASCII：GitHub 的 Release 资产上传会静默剥掉文件名里的非 ASCII
+        # 字符（实测 "Entropaxis安装程序.exe" 上传后变成 "Entropaxis.exe"），中文名只留在
+        # Release 标题与说明文字里——那两处走的是 JSON 正文，不受这条限制。
         if: github.ref == 'refs/heads/main'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --yes --cleanup-tag -R $env:GITHUB_REPOSITORY 2>&1 | Out-Null
-          gh release create latest "dist/Entropaxis安装程序.exe" `
+          gh release create latest "dist/EntropaxisSetup.exe" `
             -R $env:GITHUB_REPOSITORY `
             --title "Entropaxis Windows 安装程序（最新）" `
             --notes "自动构建，随 main 分支控制面内容滚动更新；载荷取自本次构建时的版本库跟踪集。构建：${{ github.sha }}" `
