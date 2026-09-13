@@ -9,6 +9,7 @@ import sys
 import json
 import shutil
 from pathlib import Path
+
 def render_instance_configs(
     verbose: bool = True,
     *,
@@ -82,12 +83,14 @@ def render_instance_configs(
             rendered_content = rendered_content.replace("{{ORG_FORBIDDEN_ABBR}}", f"{ws_name}-abbr（待填：禁用缩写）")
             rendered_content = rendered_content.replace("{{ORG_REVIEWER_CLI}}", "omp（待填：reviewer CLI）")
             rendered_content = rendered_content.replace("{{ORG_REVIEWER_CMD}}", "omp --model <待填>（待填：启动命令）")
-            rendered_content = rendered_content.replace("{{ORG_SHARED_DIR_1}}", "01公司资料（待填：共享资料目录1）")
-            rendered_content = rendered_content.replace("{{ORG_SHARED_PURPOSE_1}}", "待填：用途")
-            rendered_content = rendered_content.replace("{{ORG_SHARED_DIR_2}}", "02部门资料（待填：共享资料目录2）")
-            rendered_content = rendered_content.replace("{{ORG_SHARED_PURPOSE_2}}", "待填：用途")
-            rendered_content = rendered_content.replace("{{ORG_SHARED_DIR_3}}", "03个人资料（待填：共享资料目录3）")
-            rendered_content = rendered_content.replace("{{ORG_SHARED_PURPOSE_3}}", "待填：用途")
+            # 共享资料层默认为空：跨项目共享目录是少数工作区才有的形态，各使用者的目录
+            # 各不相同。既不写死任何具体目录名（那是把某个工作区的形态分发给所有收件方），
+            # 也不拿探测结果去问"是不是共享目录"（多数人答案都是否，等于凭空造一轮确认）。
+            for idx in (1, 2, 3):
+                rendered_content = rendered_content.replace(
+                    f"{{{{ORG_SHARED_DIR_{idx}}}}}", f"（待填：共享资料目录{idx}，默认无）"
+                )
+                rendered_content = rendered_content.replace(f"{{{{ORG_SHARED_PURPOSE_{idx}}}}}", "待填：用途")
             # 原子写入
             with tempfile.NamedTemporaryFile(
                 mode="w", encoding="utf-8", delete=False, dir=str(data_dir / "templates"), prefix=f".{target_name}.tmp."

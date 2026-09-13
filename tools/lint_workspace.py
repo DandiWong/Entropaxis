@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -33,7 +32,7 @@ RULE_MAX_LINES = 120
 RULE_DUP_WINDOW = 25
 RULE_DUP_MAX_REPORTS = 8
 
-EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "repo/dify", "graphify-out")
+EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "graphify-out")
 
 # 零系统绑定/零真实实体禁词按实例声明外置于 .data/rules/零系统绑定词表.md：
 # 词表写死在这里，等于让"防止硬编码组织名"的检查本身成为控制面里唯一硬编码组织名的
@@ -85,8 +84,7 @@ def check_resident_budget(root: Path) -> list[str]:
 
     # 检查各第一方项目 AGENTS.md
     for p in root.glob("**/AGENTS.md"):
-        p_str = str(p)
-        if any(ex in p_str for ex in EXCLUDE_PATTERNS) or p == root_agents:
+        if p == root_agents or not _is_first_party(p, root):
             continue
         try:
             lines = p.read_text(encoding="utf-8").splitlines()
@@ -108,7 +106,7 @@ def check_current_state_bloat(root: Path) -> list[str]:
     issues = []
     for pattern in ("**/DECISIONS.md", "**/_契约/当前状态.md"):
         for cs in root.glob(pattern):
-            if "Archive" in str(cs) or ".system" in str(cs):
+            if not _is_first_party(cs, root):
                 continue
             try:
                 lines = cs.read_text(encoding="utf-8").splitlines()
@@ -376,6 +374,16 @@ def _is_nested_git_repo_path(path: Path, root: Path) -> bool:
         current = current.parent
 
 
+def _is_first_party(path: Path, root: Path) -> bool:
+    """path 是否属于本工作区第一方内容（体检只对第一方内容求值）。
+
+    排除两类：命名约定上的非项目目录（EXCLUDE_PATTERNS），以及自带 `.git` 的上游/
+    第三方嵌套仓库——后者有自己的内容契约，《01_根系统治理》归属表已声明「第三方或
+    上游包约束归其自带的 AGENTS.md」，不得按本工作区规范去改写。
+    """
+    return not any(ex in str(path) for ex in EXCLUDE_PATTERNS) and not _is_nested_git_repo_path(path, root)
+
+
 def check_claude_md_thin_shell(root: Path) -> list[str]:
     """所有 CLAUDE.md 必须是纯薄壳：一行标题 + 唯一一行 @AGENTS.md，无其他 import 或正文。
     例外：若 CLAUDE.md 是指向同目录 AGENTS.md 的符号链接（open-slide 等框架约定），视为等价薄壳；
@@ -383,7 +391,7 @@ def check_claude_md_thin_shell(root: Path) -> list[str]:
     issues = []
     for cm in root.glob("**/CLAUDE.md"):
         cm_str = str(cm)
-        if any(ex in cm_str for ex in ("Archive", "repoes", "node_modules", "repo/dify")):
+        if any(ex in cm_str for ex in ("Archive", "repoes", "node_modules")):
             continue
         if _is_nested_git_repo_path(cm, root):
             continue
@@ -412,7 +420,7 @@ def fix_claude_md_thin_shell(root: Path) -> list[str]:
     fixed = []
     for cm in root.glob("**/CLAUDE.md"):
         cm_str = str(cm)
-        if any(ex in cm_str for ex in ("Archive", "repoes", "node_modules", "repo/dify")):
+        if any(ex in cm_str for ex in ("Archive", "repoes", "node_modules")):
             continue
         if _is_nested_git_repo_path(cm, root):
             continue
@@ -535,41 +543,6 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
     return issues
 
 
-def check_skill_symlink_health(root: Path) -> list[str]:
-    """校验 Agent 安装目录中与工作区同名 Skill 软链的有效性。"""
-    issues = []
-    true_source = root / ".system" / "skills"
-    if not true_source.is_dir():
-        return issues
-    local_skills = {d.name for d in true_source.iterdir() if d.is_dir()}
-    install_dirs = [
-        Path.home() / ".claude" / "skills",
-        Path.home() / ".pi" / "agent" / "skills",
-    ]
-    for install_dir in install_dirs:
-        if not install_dir.exists():
-            continue
-        for entry in install_dir.iterdir():
-            if entry.name not in local_skills:
-                continue
-            expected = (true_source / entry.name).resolve()
-            if entry.is_symlink():
-                target = entry.resolve()
-                if not target.exists():
-                    issues.append(
-                        f"[断链] {entry} → {target} 目标不存在。"
-                    )
-                elif target != expected:
-                    issues.append(
-                        f"[软链漂移] {entry} → {target}（工作区存在真源，应指向 {expected}）。"
-                    )
-            else:
-                issues.append(
-                    f"[非软链] {entry} 是实体目录/文件，工作区存在真源，建议改为指向 .system/skills/ 的软链。"
-                )
-    return issues
-
-
 CREDENTIAL_VALUE_MARKERS = (
     "--token", "--password", "--secret", "--api-key", "--apikey", "--access-token",
     "-t ", "token=", "apikey=", "api_key=", "secret=", "password=", "bearer ",
@@ -636,54 +609,6 @@ def check_board_config_no_credentials(root: Path) -> list[str]:
     return issues
 
 
-def check_registry_exists(root: Path) -> list[str]:
-    """检查 .data/templates/registry.md 是否存在（lint 白名单完备性依赖它）。"""
-    registry = root / ".data" / "templates" / "registry.md"
-    if not registry.exists():
-        return [
-            "[注册表缺失] .data/templates/registry.md 不存在，无法校验项目白名单；请先执行 init-project 或手动创建。"
-        ]
-    return []
-
-
-def check_dashboard_task_hygiene(root: Path) -> list[str]:
-    """检查 Dashboard 数据库任务健康度（是否存在微观代码级任务或历史堆积）。"""
-    issues = []
-    db_path = root / "dashboard" / "dashboard.db"
-    if not db_path.exists():
-        return issues
-
-    try:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-
-        # 1. 检查活跃任务总数
-        total_active = cur.execute(
-            "SELECT count(*) as cnt FROM tasks WHERE stage IN ('plan', 'active', 'review')"
-        ).fetchone()["cnt"]
-        if total_active > 100:
-            issues.append(
-                f"[看板负载过高] 当前进行中/计划中任务共 {total_active} 条，建议评估是否有微观研发任务混入，保持高层看板纯净。"
-            )
-
-        # 2. 检查是否有超长未归档的已完成任务
-        stale_done = cur.execute(
-            "SELECT count(*) as cnt FROM tasks WHERE stage='done' AND completed_at < date('now', '-30 day')"
-        ).fetchone()["cnt"]
-        if stale_done > 20:
-            issues.append(
-                f"[归档沉降待处理] 存在 {stale_done} 条完成超过 30 天的已完结任务，确认是否需要清理或归档。"
-            )
-        conn.close()
-    except Exception as e:
-        issues.append(f"[数据库连接异常] 无法读取 dashboard.db: {e}")
-
-    return issues
-
-
-
-
 def check_system_layout(root: Path) -> list[str]:
     """检查 .system 控制面所需目录和入口文件。"""
     system = root / ".system"
@@ -717,13 +642,30 @@ def _iter_local_links(root: Path):
     """遍历 .system 内 Markdown 的显式本地链接，产出 (文档, 原始 target, 解析后路径)。"""
     system = root / ".system"
     link_pattern = re.compile(r"\[[^\]]*]\(([^)\s]+)(?:\s+[^)]*)?\)")
+    tracked = _tracked_files(system)
     for document in system.rglob("*.md"):
         # Skill 包内随附的冻结参考文档（skills/<name>/references/**）不参与路由断链检查：
         # 其内部链接属于第三方/上游文档结构，不构成工作区路由契约。
         parts = document.relative_to(system).parts
         if len(parts) >= 3 and parts[0] == "skills" and parts[2] == "references":
             continue
-        for target in link_pattern.findall(document.read_text(encoding="utf-8")):
+        # 私有 Skill 依 .gitignore 整体排除出版本库（《技能设计》6.2），其内部引用不构成
+        # 分发契约；只核验跟踪集，与第 13 项零系统绑定检查的作用域保持一致。
+        if tracked is not None and document not in tracked:
+            continue
+        text = document.read_text(encoding="utf-8")
+        # 同一文档内同一目标只报一次：`[`.data/x.md`](../../.data/x.md)` 这种"链接文字
+        # 本身就是行内代码路径"的写法在规则正文里很常见，不去重会把一处引用报成两条。
+        seen: set[str] = set()
+
+        def _emit(target: str, resolved: Path):
+            key = os.path.normpath(str(resolved))
+            if key in seen:
+                return None
+            seen.add(key)
+            return document, target, resolved
+
+        for target in link_pattern.findall(text):
             target = target.strip("<>")
             if not target or target.startswith(("#", "/", "~", "http:", "https:", "mailto:")):
                 continue
@@ -731,7 +673,32 @@ def _iter_local_links(root: Path):
             if not path:
                 continue
             base = root if document.parent == system / "entrypoints" else document.parent
-            yield document, target, (base / path)
+            item = _emit(target, base / path)
+            if item:
+                yield item
+        for target in _inline_code_paths(text):
+            item = _emit(target, root / target)
+            if item:
+                yield item
+
+
+# 反引号内联的工作区绝对路径（`.system/...`、`.data/...`）。规则正文引用工具与实例声明
+# 时大量使用这种形态（如 `python3 .system/tools/init_capsule.py`），而它不是 Markdown
+# 链接——只扫 `](...)` 会让这类引用成为门禁盲区，悬空到分发后才被收件方发现。
+# 扩展名尾部加 (?![\w*.]) 排除被截断的通配模板（`X.template.*`）。
+_INLINE_PATH_PATTERN = re.compile(
+    r"(?<![\w/.-])((?:\.system|\.data)/[^\s`,，。、；：!?()（）\[\]\"'|]*\.[A-Za-z0-9]{1,8}(?![\w*.]))"
+)
+
+
+def _inline_code_paths(text: str):
+    """产出 Markdown 行内代码中出现的、以 `.system/` 或 `.data/` 开头的工作区相对路径。"""
+    for code in re.findall(r"`([^`\n]*?)`", text):
+        for target in _INLINE_PATH_PATTERN.findall(code):
+            # 含占位符的示例路径（`.system/tools/<name>.py`）不是真实引用，跳过。
+            if any(ch in target for ch in "<>{}*"):
+                continue
+            yield target
 
 
 def _points_into_data(path: Path, root: Path) -> bool:
@@ -841,6 +808,49 @@ def check_system_skills(root: Path) -> list[str]:
     return issues
 
 
+# Skill 正文里对根系统的硬依赖形态：`.system/tools/x.py` 是跨 Skill 的控制面工具，
+# 独立安装的机器上必然不存在，写成无条件前置即跑不起来。
+# 只匹配 tools/：`.system/skills/<自身名>/…` 属自身路径写法，Skill 常以它作为
+# "工作区内安装位置"的示例与全局安装形式并列，纳入会产生大量误报。
+_SYSTEM_DEP_PATTERN = re.compile(r"\.system/tools/[\w\-/]+\.py")
+_OPTIONAL_MARKERS = ("存在时", "不存在", "若工作区提供", "工作区提供", "仅在", "独立安装")
+
+
+def check_skill_system_independence(root: Path) -> list[str]:
+    """可分发 Skill 不得把 `.system/` 写成运行前置（《技能设计》6.2 独立运行铁律）。
+
+    Skill 要能脱离本工作区独立安装运行，`.system/tools/x.py` 那条路径在收件方
+    只装了一个 Skill 的机器上根本不存在。控制面 Skill（frontmatter 声明
+    `scope: control-plane`）以 `.system/` 为作业对象，按定义豁免。
+    """
+    skills = root / ".system" / "skills"
+    if not skills.is_dir():
+        return []
+    issues = []
+    # 不按版本库跟踪集过滤：私有 Skill 同样要独立分发（6.3 分发包）与独立运行，
+    # 「不随 git 走」不等于「不用能独立跑」。
+    for skill_file in sorted(skills.glob("*/SKILL.md")):
+        text = skill_file.read_text(encoding="utf-8")
+        front = text.split("\n---", 2)[0] if text.startswith("---") else ""
+        if "scope: control-plane" in front:
+            continue
+        lines = text.splitlines()
+        for index, line in enumerate(lines):
+            if not _SYSTEM_DEP_PATTERN.search(line):
+                continue
+            # 紧邻上一行的注释是标注可选性的惯用位置，一并纳入判定
+            context = line + (lines[index - 1] if index else "")
+            if any(marker in context for marker in _OPTIONAL_MARKERS):
+                continue
+            issues.append(
+                f"[Skill 根系统硬依赖] {skill_file.relative_to(root)} 行内 "
+                f"`{line.strip()[:60]}` 把 .system/ 路径写成运行前置；"
+                "独立安装时该路径不存在。改为相对自身目录定位，或标注为「存在时才调用」的可选增强；"
+                "确属控制面 Skill 则在 frontmatter 声明 metadata.scope: control-plane。"
+            )
+    return issues
+
+
 def check_system_tools_compile(root: Path) -> list[str]:
     """编译 .system/tools 下脚本，阻止控制面工具语法损坏。"""
     tools = root / ".system" / "tools"
@@ -855,8 +865,124 @@ def check_system_tools_compile(root: Path) -> list[str]:
                 f"[工具语法错误] {tool.relative_to(root)}:{error.lineno}: {error.msg}"
             )
     return issues
+def _registered_top_dirs(registry: Path) -> tuple[set[str], set[str]]:
+    """解析注册表，返回 (项目映射表登记的顶层目录, 排除规则声明的顶层目录)。
+
+    两者分开返回而非合并：**映射表是否为空**是"这个工作区有没有开始登记项目"的判定信号，
+    合并进排除规则后就分不出来了——而排除规则在模板里天然非空（`repo/`、`Archive/` 等）。
+    """
+    table_tops: set[str] = set()
+    exclude_tops: set[str] = set()
+    if not registry.exists():
+        return table_tops, exclude_tops
+    table_part, _, exclude_part = registry.read_text(encoding="utf-8").partition("## 排除规则")
+    for line in table_part.splitlines():
+        line = line.strip()
+        if not line.startswith("|") or line.startswith("| 项目 ID") or line.startswith("|---"):
+            continue
+        cols = [c.strip() for c in line.split("|")[1:-1]]
+        if len(cols) >= 3:
+            for d in re.findall(r"`([^`]+)`", cols[2]):
+                d = d.strip()
+                if d and "+" not in d:
+                    table_tops.add(d.rstrip("/").split("/")[0])
+    for token in re.findall(r"`([^`]+)`", exclude_part):
+        token = token.strip().lstrip("*/").rstrip("/")
+        if token:
+            exclude_tops.add(token.split("/")[0])
+    return table_tops, exclude_tops
+
+
+def check_registry_population(root: Path) -> list[str]:
+    """注册表还没登记任何项目时，把待登记的根目录报成建议项。
+
+    收件方的工作区在接入本系统之前就已经有自己的目录结构（而且和任何既有工作区都不一样）。
+    第 7 项的反向校验在那一刻必然全量命中——首次体检直接红屏，这不是缺陷而是初始态。
+    此处以建议项把同一事实说清楚，登记任一项目后第 7 项自动接管为阻断校验。
+    """
+    registry = root / ".data" / "templates" / "registry.md"
+    if not registry.exists():
+        return []
+    table_tops, exclude_tops = _registered_top_dirs(registry)
+    if table_tops:
+        return []
+    pending = [
+        c.name for c in sorted(root.iterdir())
+        if c.is_dir() and not c.name.startswith(".") and c.name not in exclude_tops
+    ]
+    if not pending:
+        return []
+    return [
+        f"[注册表待登记] 项目映射表尚无任何项目，{len(pending)} 个根目录待归属："
+        f"{'、'.join(pending)}。用 `python3 .system/tools/init_project.py <项目名>` 立项，"
+        "或把非项目目录写进注册表「排除规则」；登记任一项目后第 7 项转为阻断校验。"
+    ]
+
+
+def check_declared_writers(root: Path) -> list[str]:
+    """核验实例文件声明的「写入者」真实存在且真的写它（《01_根系统治理》SOP 第 2 步）。
+
+    声明了写入者却无人落笔，该真源在新环境永远是空壳，依赖它的下游全部静默失效——
+    读者还会以为它已经被管起来了。本项把声明与实现的偏移机械检出，三种形态：
+      `<tool>.py <symbol>`  → 工具存在且含该符号（符号通常是负责写入的函数名）
+      `<tool>.py`（无符号）  → 工具存在且正文提到目标文件名
+      `<name> Skill`        → Skill 目录存在且其 SKILL.md 提到目标文件名
+    只声明人工/Agent 维护的不做机械核验——人是否落笔无法静态判定。
+    """
+    system = root / ".system"
+    provenance = system / "tools" / "stamp_data_provenance.py"
+    if not provenance.is_file():
+        return []
+    # 按显式文件路径加载，不走 sys.path：否则 sys.modules 里已有的同名模块会把
+    # 被检工作区的声明表顶掉（体检可对任意 root 求值，不只是本仓库）。
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("_lint_provenance", provenance)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        known = dict(module.KNOWN)
+    except Exception:  # noqa: BLE001 - 声明表读不到时降级跳过，不阻断体检
+        return []
+
+    issues = []
+    for target, meta in sorted(known.items()):
+        # 1. source 指向控制面内的模板时，该模板必须真实存在（模板搬家后声明最易失修）
+        for path_token in re.findall(r"\.system/[\w./-]+", meta.get("source", "")):
+            if not (root / path_token).exists():
+                issues.append(
+                    f"[来源声明失效] 实例文件 {target} 声明来源 {path_token}，该路径不存在；"
+                    "模板搬家或改名后必须同步 stamp_data_provenance.KNOWN。"
+                )
+
+        managed = meta.get("managed_by", "")
+        # 2. 声明为工具写入：工具须存在，且含声明的符号（无符号则须提到目标文件名）
+        for tool, symbol in re.findall(r"([\w_]+\.py)(?:\s+([A-Za-z_]\w+))?", managed):
+            tool_path = system / "tools" / tool
+            if not tool_path.is_file():
+                issues.append(f"[写入者不存在] 实例文件 {target} 声明由 {tool} 维护，但 .system/tools/{tool} 不存在。")
+                continue
+            needle, kind = (symbol, "符号") if symbol else (target, "目标文件名")
+            if needle not in tool_path.read_text(encoding="utf-8"):
+                issues.append(
+                    f"[写入者名不副实] 实例文件 {target} 声明由 {tool} 维护，"
+                    f"但该工具正文不含{kind}「{needle}」——声明的写入者并不写它。"
+                )
+        # 3. 声明为 Skill 写入：Skill 须存在，且其 SKILL.md 提到目标文件名
+        for skill in re.findall(r"([\w-]+)\s+Skill", managed):
+            skill_md = system / "skills" / skill / "SKILL.md"
+            if not skill_md.is_file():
+                issues.append(f"[写入者不存在] 实例文件 {target} 声明由 {skill} Skill 维护，但该 Skill 不存在。")
+            elif target not in skill_md.read_text(encoding="utf-8"):
+                issues.append(
+                    f"[写入者名不副实] 实例文件 {target} 声明由 {skill} Skill 维护，"
+                    f"但其 SKILL.md 未提及 {target}——声明的写入者并不写它。"
+                )
+    return issues
+
+
 def check_routing_integrity(root: Path) -> list[str]:
-    """检查根入口动作矩阵、项目注册表及主题胶囊容器链条的完整性与连通性。"""
+    """检查根入口动作矩阵、项目注册表及事务胶囊容器链条的完整性与连通性。"""
     issues = []
 
     # 1. 检查根 AGENTS.md 动作路由表中的每个规则目标文件真实存在
@@ -890,24 +1016,11 @@ def check_routing_integrity(root: Path) -> list[str]:
 
     # 2b. 反向校验：工作区根级目录须能在注册表主目录或排除规则中找到归属，
     # 否则新目录会游离于白名单之外而不被察觉（正向校验只查"注册的目录是否存在"，不查"存在的目录是否注册"）。
-    if registry.exists():
-        registry_text = registry.read_text(encoding="utf-8")
-        table_part, _, exclude_part = registry_text.partition("## 排除规则")
-        known_tops: set[str] = set()
-        for line in table_part.splitlines():
-            line = line.strip()
-            if not line.startswith("|") or line.startswith("| 项目 ID") or line.startswith("|---"):
-                continue
-            cols = [c.strip() for c in line.split("|")[1:-1]]
-            if len(cols) >= 3:
-                for d in re.findall(r"`([^`]+)`", cols[2]):
-                    d = d.strip()
-                    if d and "+" not in d:
-                        known_tops.add(d.rstrip("/").split("/")[0])
-        for token in re.findall(r"`([^`]+)`", exclude_part):
-            token = token.strip().lstrip("*/").rstrip("/")
-            if token:
-                known_tops.add(token.split("/")[0])
+    # 注册表尚未登记任何项目时本项不阻断：收件方的工作区在初始化前就已经有自己的目录，
+    # 拿注册表空表去判他"目录未注册"等于开箱即红。该初始态由第 15c 项以建议项报出。
+    table_tops, exclude_tops = _registered_top_dirs(registry)
+    if table_tops:
+        known_tops = table_tops | exclude_tops
         for child in sorted(root.iterdir()):
             if not child.is_dir() or child.name.startswith("."):
                 continue
@@ -918,18 +1031,15 @@ def check_routing_integrity(root: Path) -> list[str]:
                 "需人工登记项目归属或补充排除规则（不得由 Agent 自行判断归属）。"
             )
 
-    # 3. 检查主题胶囊目录命名与结构（YYYYMMDD_主题）
+    # 3. 检查事务胶囊目录命名结构（YYYYMMDD_主题）
     capsule_pattern = re.compile(r"^\d{8}_.+$")
     for d in root.glob("**/20[2-3][0-9][0-1][0-9][0-3][0-9]_*"):
-        if any(ex in str(d) for ex in EXCLUDE_PATTERNS) or not d.is_dir():
+        if not d.is_dir() or not _is_first_party(d, root):
             continue
         if not capsule_pattern.match(d.name):
-            issues.append(f"[胶囊命名异常] 主题胶囊目录 {d.relative_to(root)} 不符合 YYYYMMDD_主题 规范。")
-
-
-    # 4. 检查全工作区所有子项目 AGENTS.md 的工作区根回链连通性与零废弃规则
+            issues.append(f"[胶囊命名异常] 事务胶囊目录 {d.relative_to(root)} 不符合 YYYYMMDD_主题 规范。")
     for agents_doc in root.rglob("AGENTS.md"):
-        if agents_doc == root / "AGENTS.md" or any(ex in str(agents_doc) for ex in EXCLUDE_PATTERNS):
+        if agents_doc == root / "AGENTS.md" or not _is_first_party(agents_doc, root):
             continue
         text = agents_doc.read_text(encoding="utf-8")
         refs = re.findall(r"`([^`]+AGENTS\.md)`", text) + re.findall(r"\[[^\]]*\]\(([^)\s]+AGENTS\.md)\)", text)
@@ -977,6 +1087,19 @@ def check_route_map_integrity(root: Path) -> list[str]:
     return issues
 
 
+def check_deliverable_naming(root: Path) -> list[str]:
+    issues = []
+    has_chinese_pattern = re.compile(r"[\u4e00-\u9fa5]")
+    for d in root.glob("**/20[2-3][0-9][0-1][0-9][0-3][0-9]_*"):
+        if not d.is_dir() or not _is_first_party(d, root):
+            continue
+        if not has_chinese_pattern.search(d.name):
+            issues.append(
+                f"[胶囊非中文命名] 交付物容器目录 {d.relative_to(root)} 缺少中文主题，违反《文件交付》第 2.1 节中文主命名铁律。"
+            )
+    return issues
+
+
 def main() -> int:
     if "--fix-claude-md" in sys.argv:
         fixed = fix_claude_md_thin_shell(ROOT)
@@ -1001,19 +1124,20 @@ def main() -> int:
         ("8. 常驻层 Token 预算检查", check_resident_budget, False),
         ("9. 契约状态文件历史堆积检查", check_current_state_bloat, False),
         ("10. 规则单一真源去重检查", check_rule_deduplication, False),
-        ("11. Dashboard 看板任务健康度检查", check_dashboard_task_hygiene, False),
         ("12. CLAUDE.md 薄壳纯净度检查", check_claude_md_thin_shell, False),
         ("13. rules/ 零系统绑定检查", check_rules_zero_system_binding, False),
-        ("14. Skill 软链健康度检查", check_skill_symlink_health, False),
-        ("15. 项目注册表存在性检查", check_registry_exists, False),
         ("15b. 看板 Provider 凭证泄漏检查", check_board_config_no_credentials, True),
+        ("15c. 项目注册表登记进度检查", check_registry_population, False),
+        ("15d. Skill 根系统独立性检查", check_skill_system_independence, True),
         ("16. 确定性路由映射表完整性检查", check_route_map_integrity, True),
         ("17. 规则文件行数预算检查", check_rule_budget, False),
         ("18. 跨规则文件连续文本重复检查", check_rule_text_repetition, False),
         ("19. .data/ 实例文件来源标记检查", check_data_provenance, False),
+        ("19b. 声明写入者存在性检查", check_declared_writers, True),
         ("20. .data/ 路径与来源映射检查", check_data_source_mapping, False),
         ("21. 结构化契约 schema 校验", check_schema_conformance, True),
         ("22. .data/ 实例声明落地检查", check_data_declaration_links, False),
+        ("23. 交付物中文主命名检查", check_deliverable_naming, False),
     ]
 
     all_issues = []

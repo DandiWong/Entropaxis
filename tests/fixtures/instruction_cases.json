@@ -68,13 +68,6 @@
     },
     {
       "kind": "positive",
-      "instruction": "帮我整理今天的会议纪要",
-      "expect": [
-        "会议纪要"
-      ]
-    },
-    {
-      "kind": "positive",
       "instruction": "对当前方案做一次审计",
       "expect": [
         "审计"
@@ -514,6 +507,37 @@
       "instruction": "这个技能不错",
       "expect": [],
       "note": "评价既有技能不要求创建技能"
+    },
+    {
+      "kind": "positive",
+      "instruction": "新事务：和某医院谈联合调研",
+      "expect": [
+        "事务胶囊"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "起个事务，智能质检方案",
+      "expect": [
+        "事务胶囊"
+      ]
+    },
+    {
+      "kind": "positive",
+      "instruction": "建个事务跟进这次评审",
+      "expect": [
+        "事务胶囊"
+      ]
+    },
+    {
+      "kind": "negative",
+      "instruction": "这个接口的数据库事务隔离级别设成什么",
+      "expect": []
+    },
+    {
+      "kind": "negative",
+      "instruction": "排查一下分布式事务回滚失败的原因",
+      "expect": []
     }
   ]
 }

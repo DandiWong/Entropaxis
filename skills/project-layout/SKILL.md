@@ -1,8 +1,9 @@
 ---
 name: project-layout
-description: "v1.0.0. 项目目录分层结构规范与 RawInput 收件箱整理执行套件。当用户要求「整理」「整理 RawInput」「归档收件箱」，或需要查阅项目 4 域分层结构、代码工程 docs/ 事件容器布局、主题工作胶囊目录树、README 总纲内容规范时使用。判据与归属原则见规则真源《项目组织》，本 Skill 只承载结构清单与归位操作。"
+description: "v1.1.0. 项目目录分层结构规范与 RawInput 收件箱整理执行套件。当用户要求「整理」「整理 RawInput」「归档收件箱」，或需要查阅项目 4 域分层结构、代码工程 docs/ 事件容器布局、事务胶囊目录树、README 总纲内容规范时使用。判据与归属原则见规则真源《项目组织》，本 Skill 只承载结构清单与归位操作。"
 metadata:
-  version: "1.0.0"
+  scope: control-plane
+  version: "1.1.0"
 ---
 
 # 项目结构与整理执行套件 (Project Layout)
@@ -11,7 +12,7 @@ metadata:
 
 ---
 
-## 1. 主题工作胶囊目录树
+## 1. 事务胶囊目录树
 
 ```text
 YYYYMMDD_主题/
@@ -26,6 +27,8 @@ YYYYMMDD_主题/
 细粒度变更记录（改了什么）链接库根 `Changelog.md` 真源，不在胶囊内另写 `06_Changelog.md` 副本。
 
 按需创建，不为凑齐结构建空文件（纯业务调研仅出 `01`、`02`；非代码工程不设 `04_Spec`）。
+
+**上图是阶段文件的完整形态参照，不是初始化清单。** 子目录（`00_原始素材/`、`assets/`、`prototypes/` 等）一律按《项目组织》懒创建铁律，**只在确有材料落盘那一刻创建**，不随容器预建；脚手架 `python3 .system/tools/init_capsule.py` 同样只生成阶段文件与 `capsule.yaml`，不预建任何空目录。
 
 ## 2. 通用项目分层结构（4 域 + 2 底册 + RawInput + Archive）
 

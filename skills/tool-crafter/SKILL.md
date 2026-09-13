@@ -2,6 +2,7 @@
 name: tool-crafter
 description: "v1.0.0. 机制工具化与高级 Agent 工具研发套件（基于 ApX 最佳实践与 Entropaxis 工具治理体系）。当用户需要将工作区高频机制、复合命令、脚手架或数据校验逻辑转化为标准化 Python 工具，或要求“机制转工具”、“制作工具”、“创建工具”、“tool-crafter”、“toolify”、“机制工具化”时触发。全自动执行五维准入判定、ApX 接口契约设计（语义化参数、行动导向报错、纯标准库、原子写入）、自动化 TDD 单测生成与双重体检闭环。"
 metadata:
+  scope: control-plane
   version: "1.0.0"
 ---
 

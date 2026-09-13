@@ -30,34 +30,29 @@ VALID_POLICIES = ("merge-only", "append-only", "regenerate-safe")
 # 默认最保守：不确定来源时一律当人工真源保护，宁可少改不可误删。
 KNOWN: dict[str, dict[str, str]] = {
     "file-opener.json": {
-        "source": ".system/templates/file-opener.template.json",
+        "source": ".system/templates/data/file-opener.template.json",
         "managed_by": "bootstrap.py init_file_opener",
         "policy": "merge-only",
         "note": "标 arbitrated 的条目为人工仲裁，任何写入方不得覆盖；全量重扫须显式 --force-rescan-opener",
     },
     "board_config.json": {
-        "source": ".system/templates/board_config.template.json",
-        "managed_by": "bootstrap.py render_data_templates（仅缺失时渲染）",
+        "source": ".system/templates/data/board_config.template.json",
+        "managed_by": "bootstrap.py render_instance_configs（仅缺失时渲染）",
         "policy": "merge-only",
     },
     "workspace-config.md": {
-        "source": ".system/templates/workspace-config.template.md",
-        "managed_by": "bootstrap.py render_data_templates（仅缺失时渲染）+ 人工填写",
+        "source": ".system/templates/data/workspace-config.template.md",
+        "managed_by": "bootstrap.py render_instance_configs（仅缺失时渲染）+ 人工填写",
         "policy": "merge-only",
     },
     "registry.md": {
-        "source": "人工创建",
-        "managed_by": "人工 + Agent 按《项目组织》工作区项目索引维护",
+        "source": ".system/templates/data/registry.template.md",
+        "managed_by": "init_project.py 立项时追加映射行 + 人工维护排除规则与备注",
         "policy": "merge-only",
     },
     "reimbursement-config.md": {
         "source": "人工创建",
         "managed_by": "人工 + Agent 按《财务报销》配置前置门禁补填",
-        "policy": "merge-only",
-    },
-    "config.json": {
-        "source": ".system/skills/patent-combo/",
-        "managed_by": "patent-combo Skill",
         "policy": "merge-only",
     },
     "tips.md": {

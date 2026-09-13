@@ -1,6 +1,8 @@
 ---
 name: artifact-audit
 description: "对可迭代工件执行可追溯审计，并在连续复审中维护同一份审计报告，逐轮核验旧问题、发现新问题，直到终审通过后冻结。用户要求审计、评审、复审、重新检查某份方案/文档/代码工件，提到既有审计报告，或要求记录问题闭环时应使用；一次性口头点评也先用本 Skill 判断是否需要落盘。"
+metadata:
+  scope: control-plane
 ---
 
 # Artifact Audit

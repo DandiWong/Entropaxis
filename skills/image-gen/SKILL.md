@@ -1,9 +1,9 @@
 ---
 name: image-gen
-description: "v1.0.0. 通过本地 Codex CLI（复用 ChatGPT Plus/Pro 订阅额度）原生调用 imagegen / gpt-image-2 生成与编辑高质量栅格图片（PPT整页图示、架构图、产品图、UI Mockup、插画、图标等），无需外部 API Key 或额外计费。当用户需要生图、画图、生成图片、PPT配图、绘制架构图、修改图片、或者要求使用 Codex CLI / imagegen / gpt-image-2 生图时使用，即使未指明 skill 名称也应触发。包含自动图片探测提取与 PPTX 整页无缝贴合工具。"
+description: "v1.1.0. 通过本地 Codex CLI（复用 ChatGPT Plus/Pro 订阅额度）原生调用 imagegen / gpt-image-2 生成与编辑高质量栅格图片（PPT整页图示、架构图、产品图、UI Mockup、插画、图标等），无需外部 API Key 或额外计费。当用户需要生图、画图、生成图片、PPT配图、绘制架构图、修改图片、或者要求使用 Codex CLI / imagegen / gpt-image-2 生图时使用，即使未指明 skill 名称也应触发。包含自动图片探测提取与 PPTX 整页无缝贴合工具。"
 compatibility: "macOS / Linux, Python 3.10+, Codex CLI (logged in)"
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # 🎨 Image Gen — 基于 Codex CLI 订阅额度原生生图
@@ -26,7 +26,7 @@ metadata:
 ### 1. 基础文生图 (Text-to-Image)
 
 ```bash
-python3 .system/skills/image-gen/scripts/gen.py \
+python3 <skill-dir>/scripts/gen.py \
   --prompt "A clean modern medical AI architecture diagram on solid light grey #F2F2F2 background, 3-tier horizontal cards" \
   --out "output/architecture_slide.png" \
   --size "16:9"
@@ -35,7 +35,7 @@ python3 .system/skills/image-gen/scripts/gen.py \
 ### 2. 带有参考图的图生图 (Image-to-Image / Style Transfer)
 
 ```bash
-python3 .system/skills/image-gen/scripts/gen.py \
+python3 <skill-dir>/scripts/gen.py \
   --prompt "Keep the 3-tier structure unchanged, update the bottom-right card border with bright yellow #F5DF4A accent" \
   --ref "output/architecture_slide.png" \
   --out "output/architecture_slide_v2.png"
@@ -44,7 +44,7 @@ python3 .system/skills/image-gen/scripts/gen.py \
 ### 3. 将图片整页拼装至 PPTX (Full-page Slide)
 
 ```bash
-python3 .system/skills/image-gen/scripts/embed_pptx.py \
+python3 <skill-dir>/scripts/embed_pptx.py \
   --image "output/architecture_slide.png" \
   --pptx "output/presentation.pptx"
 ```

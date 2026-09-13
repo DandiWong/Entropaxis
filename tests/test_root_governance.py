@@ -15,6 +15,29 @@ class RootGovernanceRuleTests(TestCase):
         self.assertIn("必须在同一处规则正文中显式给出兜底降级方案", content)
         self.assertIn("悬空的 `.data/` 实例声明引用", content)
 
+    def test_free_distribution_clauses_are_present(self) -> None:
+        """自由分发与零依赖四条判据的真源锁定。
+
+        四条各自对应本轮实测踩到的一类缺陷：执行体留在控制面 → 收件方拿到死指令；
+        Skill 反向依赖控制面 → 独立安装即失效；系统替用户猜默认值 → 把某个工作区的
+        长相分发给所有人；拿空态当契约破损 → 开箱即红。
+        """
+        content = (SYSTEM_ROOT / "rules" / "01_根系统治理.md").read_text(encoding="utf-8")
+
+        self.assertIn("能力三分与执行体归属", content)
+        self.assertIn("执行体不随分发的机制", content)
+
+        self.assertIn("依赖单向", content)
+        self.assertIn("不得把控制面设为运行前置", content)
+
+        self.assertIn("默认值不得由系统猜定", content)
+        self.assertIn("探测出的是候选，不是事实", content)
+
+        self.assertIn("空态即初始态（防开箱即红）", content)
+        self.assertIn("门禁自身四律", content)
+
+        self.assertIn("写入者必须真实存在（防空壳真源）", content)
+
     def test_robustness_review_covers_dangling_fallback(self) -> None:
         """悬空兜底必须计入健壮性审阅提示。
 

@@ -34,7 +34,7 @@
 | 根系统治理与元规则 | `.system/rules/01_根系统治理.md`；布局与写入语义见 `.system/rules/控制面布局.md` |
 | 角色职责、跨角色交接与协作验收 | `.system/rules/角色协作.md` |
 | 工作区自然语言指令与任务解析 | `.system/rules/指令解析.md` |
-| 日常业务动作指令（同步/任务/沉淀/记为案例/复盘/定位/初始化/自定义角色）| `.system/rules/工作流指令.md` |
+| 日常业务动作指令（事务/同步/任务/沉淀/复盘/初始化/报销）| `.system/rules/工作流指令.md` |
 | 系统治理动作指令（审计/修正/自检/新迭代/工具化/Skill）| `.system/rules/治理指令.md` |
 | 表达文风与可视化 | `.system/rules/表达文风.md` |
 | 对外发布与审批 | `.system/rules/对外发布.md` |
@@ -43,7 +43,6 @@
 | Skill 设计、渐进披露与元数据 | `.system/rules/技能设计.md` |
 | 分发 / 打包 Skill | `.system/rules/技能设计.md`（分发包契约）与 `.system/rules/文件交付.md`（打开 ZIP 所在目录） |
 | Spec、任务状态、任务看板与待办管理 | `.system/rules/看板联动.md`（按需调用看板 Skill 或本地适配器） |
-| 会议纪要生成 | `.system/rules/工作流指令.md`（按需调用会议纪要 Skill） |
 | 报销 / 整理发票 | `.system/rules/工作流指令.md` 与 `.system/rules/财务报销.md` |
 | 项目注册表（工作区项目索引） | `.data/templates/registry.md` |
 

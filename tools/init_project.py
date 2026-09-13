@@ -151,7 +151,45 @@ def init_project(
             path.write_text(content, encoding="utf-8")
         staging.replace(target)
 
+    register_project(workspace, name, dashboard_project_id)
     return target
+
+
+def register_project(workspace: Path, name: str, dashboard_project_id: str = "未关联") -> bool:
+    """把新项目追加进 `.data/templates/registry.md` 映射表，返回是否发生写入。
+
+    注册表正文声明本工具所属 Skill 是它的唯一写入者，但此前无人真的写——注册表因此在
+    新工作区里永远是空表，而它是《项目组织》的项目归属唯一映射基准，也是体检第 7 项
+    反向校验的依据。缺这一步，新机器上装好系统后项目索引永远建不起来。
+
+    写入遵守 `.data/` 写入规约：只追加一行，已登记同名项目即跳过，不重写既有内容；
+    注册表缺失（尚未 bootstrap）时静默跳过，不阻断立项本身。
+    """
+    registry = workspace / ".data" / "templates" / "registry.md"
+    if not registry.is_file():
+        return False
+    try:
+        text = registry.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if f"`{name}/`" in text:
+        return False
+
+    board = dashboard_project_id.strip() or "未关联"
+    mapping = "未关联" if board == "未关联" else f"main={board}"
+    row = f"| {name} | {name} | `{name}/` | {mapping} | |\n"
+    # 锚到「项目 ID」表头下方的分隔行：文件里可能不止一张表，按表头定位而非取首个分隔行。
+    # 占位行（（待填写））留在原处，新项目追加在它前面——不动人工内容，也不依赖占位行是否还在。
+    lines = text.splitlines(keepends=True)
+    header = next((i for i, ln in enumerate(lines) if ln.lstrip().startswith("| 项目 ID")), None)
+    if header is None or header + 1 >= len(lines) or not lines[header + 1].lstrip().startswith("|-"):
+        return False
+    lines.insert(header + 2, row)
+    try:
+        registry.write_text("".join(lines), encoding="utf-8")
+    except OSError:
+        return False
+    return True
 
 
 def _parser() -> argparse.ArgumentParser:

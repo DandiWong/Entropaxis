@@ -9,7 +9,8 @@ from tools.check_distribution import (
     distribution_files,
     pending_files,
     scan_leaks,
-    undistributed_skills,
+    FOREIGN_DIR_PROBE,
+    dangling_skill_routes,
 )
 
 _TERMS = ["acmecorp", "acmeboard"]
@@ -90,6 +91,10 @@ class DistributionSetTests(unittest.TestCase):
             build_recipient_tree(system, files, dest)
             self.assertFalse((dest / ".system" / "skills" / "private-skill").exists())
             self.assertEqual(scan_leaks(dest / ".system", _TERMS), [])
+            # 收件方工作区非空：只放 .system/ 空壳树求值不到"既有目录未注册"这类缺陷
+            self.assertTrue((dest / FOREIGN_DIR_PROBE).is_dir())
+            # 探针只播在工作区根，不得混进 .system/（否则会被当成分发内容扫描）
+            self.assertFalse((dest / ".system" / FOREIGN_DIR_PROBE).exists())
 
     def test_untracked_file_reported_as_pending(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -100,14 +105,31 @@ class DistributionSetTests(unittest.TestCase):
             (system / "forgotten.md").write_text("y", encoding="utf-8")
             self.assertEqual(pending_files(system), ["forgotten.md"])
 
-    def test_undistributed_skill_is_listed(self) -> None:
+    def test_private_skill_referenced_by_shipped_rule_is_flagged(self) -> None:
+        """版本库里留下指向私有 Skill 的指令 = 收件方拿到一条没有执行体的路由。"""
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             system = _mk_repo(root)
             for name in ("shipped", "local-only"):
                 (system / "skills" / name).mkdir()
-            files = ["skills/shipped/SKILL.md"]
-            self.assertEqual(undistributed_skills(system, files), ["local-only"])
+            tree = root / "tree" / ".system"
+            (tree / "rules").mkdir(parents=True)
+            (tree / "rules" / "r.md").write_text("调用 local-only Skill 执行。", encoding="utf-8")
+            issues = dangling_skill_routes(system, tree, ["skills/shipped/SKILL.md"])
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn("local-only", issues[0])
+
+    def test_cleanly_encapsulated_private_skill_is_silent(self) -> None:
+        """私有 Skill 不随分发本身是设计，无人引用时不报——避免把它变成噪声与私有能力清单。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            system = _mk_repo(root)
+            for name in ("shipped", "local-only"):
+                (system / "skills" / name).mkdir()
+            tree = root / "tree" / ".system"
+            (tree / "rules").mkdir(parents=True)
+            (tree / "rules" / "r.md").write_text("通用规则正文，不引用任何私有能力。", encoding="utf-8")
+            self.assertEqual(dangling_skill_routes(system, tree, ["skills/shipped/SKILL.md"]), [])
 
     def test_non_git_directory_raises_actionable_error(self) -> None:
         with tempfile.TemporaryDirectory() as td:

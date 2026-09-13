@@ -1,6 +1,6 @@
 # 工作区项目注册表
 
-> 唯一写入者：`init-project` Skill（`.system/skills/init-project`）  
+> 映射表写入者：`init_project.py` 立项时自动追加一行（append-only，已登记同名项目即跳过）；其余内容与「排除规则」由人工维护  
 > 读取方：`lint_workspace.py`（白名单校验）、外部看板联动工具（项目字典）
 
 ## 项目映射表

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0
+
+- 对根系统零依赖（《技能设计》6.2 独立运行铁律）：打开闭环改为「工作区提供 `.system/tools/open_file.py` 则调用，否则回报绝对路径」，不再硬依赖 `.system/`；自身脚本路径改为相对 `<skill-dir>` 定位，脱离工作区独立安装亦可运行。
+
 本文件记录 `invoice-collector` Skill 的所有显著变更，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ## [1.1.0] - 2026-09-08

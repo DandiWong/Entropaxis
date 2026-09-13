@@ -32,6 +32,10 @@ WORKSPACE = SYSTEM_DIR.parent
 
 SUBPROCESS_TIMEOUT = 300
 
+# 收件方工作区探针目录名：刻意取一个不会与任何真实工作区、也不会与注册表排除规则
+# （repo/、Archive/、node_modules/ …）撞名的名字，用来求值"工作区非空"这个状态。
+FOREIGN_DIR_PROBE = "收件方既有目录探针"
+
 # 凭据特征串：只匹配"敏感名 = 长字面量"的赋值形态。
 # 裸词 token/secret 在解析器代码里是普通变量名（如 `token = payload[0]`），
 # 宽匹配会产生大量噪声，把真信号淹掉。
@@ -112,6 +116,10 @@ def build_recipient_tree(system: Path, files: list[str], dest: Path) -> int:
             "❌ 版本库跟踪集为空，无法构建收件方视图。\n"
             "👉 修复建议: 确认当前分支已提交内容，或检查是否误在空仓库上执行。"
         )
+    # 播一个与任何既有工作区都不同名的业务目录：收件方的工作区在接入本系统之前就已经
+    # 有自己的目录结构。只放 .system/ 的空壳树跑不出"拿空注册表去判用户既有目录未注册"
+    # 这类缺陷——首检红屏只在工作区非空时才成立。
+    (dest / FOREIGN_DIR_PROBE).mkdir(parents=True, exist_ok=True)
     return copied
 
 
@@ -211,11 +219,37 @@ def run_init_chain(workspace: Path) -> tuple[list[str], list[str]]:
     return blocking, advisory
 
 
-def undistributed_skills(system: Path, files: list[str]) -> list[str]:
-    """本机存在但不随分发的 Skill——收件方会拿到指向空能力的路由。"""
-    local = {p.name for p in (system / "skills").iterdir() if p.is_dir()} if (system / "skills").is_dir() else set()
+def dangling_skill_routes(system: Path, tree: Path, files: list[str]) -> list[str]:
+    """在收件方树上找出「引用了一个不随分发的 Skill」的文件。
+
+    私有 Skill 不随分发本身是设计（《技能设计》6.2 自封装排除），只报它不构成缺陷；
+    真正的缺陷是**版本库里留下了指向它的指令或规则**——收件方会读到一条无执行体的路由。
+    因此只对"被跟踪文件实际引用"的私有 Skill 告警，干净自封装的一律不列
+    （逐次列出私有能力清单本身也是一张"哪些能力是私有的"名单）。
+    """
+    if not (system / "skills").is_dir():
+        return []
+    local = {p.name for p in (system / "skills").iterdir() if p.is_dir()}
     shipped = {rel.split("/")[1] for rel in files if rel.startswith("skills/") and "/" in rel[7:]}
-    return sorted(local - shipped)
+    private = local - shipped
+    if not private:
+        return []
+
+    issues = []
+    for path in sorted(tree.rglob("*")):
+        if not path.is_file() or path.suffix.lower() in BINARY_SUFFIXES:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for name in sorted(private):
+            if name in text:
+                issues.append(
+                    f"[私有能力路由悬空] {path.relative_to(tree)} 引用了不随分发的 Skill「{name}」；"
+                    "收件方会读到一条没有执行体的路由——把该指令与其规则一并内化进该 Skill。"
+                )
+    return issues
 
 
 def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False) -> dict:
@@ -241,6 +275,7 @@ def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False) 
     try:
         copied = build_recipient_tree(system, files, recipient)
         blocking += scan_leaks(recipient / ".system", terms)
+        advisory += dangling_skill_routes(system, recipient / ".system", files)
         chain_blocking, chain_advisory = run_init_chain(recipient)
         blocking += chain_blocking
         advisory += chain_advisory
@@ -250,8 +285,6 @@ def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False) 
 
     for rel in pending_files(system):
         advisory.append(f"[未入库] {rel} 未纳入版本库，收件方不会拿到；确认是否遗漏 git add。")
-    for name in undistributed_skills(system, files):
-        advisory.append(f"[能力不随分发] Skill「{name}」不在版本库中，收件方侧相关路由将悬空。")
 
     return {
         "status": "fail" if blocking else "pass",

@@ -1,9 +1,9 @@
 ---
 name: ppt-design
-description: "v1.0.0. 极简高管汇报级 PPT 设计规范与原生生成工具包。当用户提到“整理为 PPT”、“制作 PPT”、“生成汇报 PPT”、“生成 PPT”、“做个 PPT”、“做 PPT”、“PPT 汇报”、“优化 PPT”、“汇报 PPT”等任何 PPT 制作、整理或重构需求时，必须默认使用本 Skill。专注于去边框、去装饰线、纯粹基于字阶（字号/字重/颜色对比）、呼吸留白与精准栅格对齐的现代极简排版风格。内置标准 16:9 页面配方（3-KPI 现状页、3-Pillar 定位页、6-Stage 箭头流转流水线页、4-Value 价值与决策页）与开箱即用的 python-pptx 原生生成器。"
+description: "v1.1.0. 极简高管汇报级 PPT 设计规范与原生生成工具包。当用户提到“整理为 PPT”、“制作 PPT”、“生成汇报 PPT”、“生成 PPT”、“做个 PPT”、“做 PPT”、“PPT 汇报”、“优化 PPT”、“汇报 PPT”等任何 PPT 制作、整理或重构需求时，必须默认使用本 Skill。专注于去边框、去装饰线、纯粹基于字阶（字号/字重/颜色对比）、呼吸留白与精准栅格对齐的现代极简排版风格。内置标准 16:9 页面配方（3-KPI 现状页、3-Pillar 定位页、6-Stage 箭头流转流水线页、4-Value 价值与决策页）与开箱即用的 python-pptx 原生生成器。"
 compatibility: "Python 3.10+, python-pptx"
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # PPT 极简高管设计规范与生成套件 (ppt-design)
@@ -129,17 +129,22 @@ metadata:
 使用示例：
 
 ```bash
-python3 .system/skills/ppt-design/templates/generate_deck.py --output "output/my_presentation.pptx"
+python3 <skill-dir>/templates/generate_deck.py --output "output/my_presentation.pptx"
 ```
 
 ---
 
 ## 7. 交付收尾刚性门禁 (Mandatory Delivery Gate)
 
-遵循 [`.system/rules/文件交付.md`](../../rules/文件交付.md)：生成 `.pptx` 文件及相关配图后，在任务结束交付前执行：
+生成 `.pptx` 文件及相关配图后，在任务结束交付前必须完成打开闭环。
+
+工作区提供了打开器就调用它，并核对每个文件的打开结果（本工作区内的判据出处见 [`文件交付.md`](../../rules/文件交付.md)）：
 
 ```bash
+# 仅在 .system/tools/open_file.py 存在时执行
 python3 .system/tools/open_file.py "<pptx_path>" "<image_path>"
 ```
 
-必须核对每个文件的打开结果；不得直接调用平台默认打开命令绕过人工仲裁配置。
+打开器不存在（本 Skill 独立安装运行）时，回报各产物的**绝对路径**由用户自行打开，同样算交付完成。
+
+**两条铁律**：不得自建第二份打开实现；不得直接调用平台默认打开命令绕过已配置的人工仲裁。
