@@ -50,11 +50,14 @@ jobs:
       - name: 冻结为单文件 exe
         # 构建名保持纯 ASCII：PyInstaller 生成 spec 与中间文件时对非 ASCII 名称并不稳，
         # 面向用户的中文文件名在下一步重命名给出。
+        # --add-data 必须给绝对路径：--specpath 把 spec 写到 build/ 后，PyInstaller 会把
+        # --add-data 里的相对路径当成"相对 spec 所在目录"解析，而不是相对当前工作目录。
         run: |
           pip install pyinstaller==6.11.1
+          $payload = (Resolve-Path "dist/entropaxis-payload.zip").Path
           pyinstaller --onefile --clean --noconfirm `
             --name EntropaxisSetup `
-            --add-data "dist/entropaxis-payload.zip;." `
+            --add-data "${payload};." `
             --distpath dist --workpath build --specpath build `
             tools/install_windows.py
 
