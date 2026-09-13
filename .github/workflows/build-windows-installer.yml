@@ -1,8 +1,13 @@
 name: build-windows-installer
 
 # exe 只能在 Windows 上冻结，维护者的 macOS 本机做不到——这条流水线就是那台 Windows 机器。
-# 载荷一律经 build_windows_installer.py --payload-only 走 `git archive` 跟踪集导出，
-# 不直接打包工作目录：私有 Skill 靠自带 .gitignore 排除出版本库但物理仍在，打目录会外泄。
+# 载荷一律经 build_windows_installer.py 走 `git archive` 跟踪集导出，不直接打包工作目录：
+# 私有 Skill 靠自带 .gitignore 排除出版本库但物理仍在，打目录会外泄。
+#
+# 检出到 .system/ 子目录而非仓库根：本仓库的路径推导（WORKSPACE_ROOT = SYSTEM_ROOT.parent，
+# 见 tools/validate_schema.py、tools/lint_workspace.py 等）统一假设「自己是被安装进某个
+# 工作区的 .system/ 目录」——这也是维护者本机与 check_distribution.py 收件方视角重建的真实
+# 布局。摊平检出会让这类工具在 CI 里找不到 WORKSPACE_ROOT，制造与本次安装包无关的假失败。
 
 on:
   push:
@@ -24,8 +29,13 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: .system
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: .system
 
       - uses: actions/setup-python@v5
         with:
@@ -71,6 +81,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: entropaxis-windows-installer
-          path: dist/Entropaxis安装程序.exe
+          path: .system/dist/Entropaxis安装程序.exe
           if-no-files-found: error
           retention-days: 90

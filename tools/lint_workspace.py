@@ -439,7 +439,9 @@ def fix_claude_md_thin_shell(root: Path) -> list[str]:
                 else f"# {cm.parent.name} · Claude Code 入口"
             )
             cm.write_text(f"{title}\n@AGENTS.md\n", encoding="utf-8")
-            fixed.append(str(cm.relative_to(root)))
+            # 全仓统一用 posix 分隔符：relative_to 在 Windows 上默认给反斜杠，
+            # 与规则文本、测试断言和其余体检输出的路径写法不一致。
+            fixed.append(cm.relative_to(root).as_posix())
         except Exception:
             pass
     return fixed
