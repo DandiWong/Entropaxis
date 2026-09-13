@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -87,3 +87,19 @@ jobs:
           path: .system/dist/Entropaxis安装程序.exe
           if-no-files-found: error
           retention-days: 90
+
+      - name: 发布/更新 GitHub Release（latest 滚动标签）
+        # Actions artifact 只出现在 Actions 标签页且会过期；侧边栏 Releases 栏要靠 Release
+        # 资产。用仓库自带的 gh CLI 直接发布，不为此引入第三方 Action。
+        # 只在真正的 main 构建上发布：手动 dispatch 到别的分支自检时不该顶掉线上"最新"。
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag -R $env:GITHUB_REPOSITORY 2>&1 | Out-Null
+          gh release create latest "dist/Entropaxis安装程序.exe" `
+            -R $env:GITHUB_REPOSITORY `
+            --title "Entropaxis Windows 安装程序（最新）" `
+            --notes "自动构建，随 main 分支控制面内容滚动更新；载荷取自本次构建时的版本库跟踪集。构建：${{ github.sha }}" `
+            --latest

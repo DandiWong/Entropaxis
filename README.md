@@ -63,7 +63,8 @@
 
 装到已有工作区上即为升级：只覆盖 `.system/`，不动 `.data/`（你的实例数据与凭据），也不删你自己放进 `.system/skills/` 的私有能力。
 
-> **维护者侧**：exe 由 GitHub Actions 的 `build-windows-installer` 工作流在 `windows-latest` 上构建（`main` 分支相关路径变更时自动触发，也可手动 `workflow_dispatch`），产物取 Actions 页面的 `entropaxis-windows-installer` 制品。载荷强制取自 `git archive` 跟踪集，因此天然不含私有 Skill。
+> **维护者侧**：exe 由 GitHub Actions 的 `build-windows-installer` 工作流在 `windows-latest` 上构建（`main` 分支相关路径变更时自动触发，也可手动 `workflow_dispatch`），载荷强制取自 `git archive` 跟踪集，因此天然不含私有 Skill。
+> 每次成功构建都会滚动更新 Releases 侧边栏的 `latest` 发布（侧边栏点开即最新版，不需要手动打 tag）；Actions 页面的 `entropaxis-windows-installer` 制品仅作 90 天内的构建过程留痕。
 
 #### 备选：手动下载代码包
 
