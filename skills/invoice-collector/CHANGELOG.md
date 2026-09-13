@@ -6,6 +6,11 @@
 
 本文件记录 `invoice-collector` Skill 的所有显著变更，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-09-13
+
+### Added
+- 排重终态契约：两级排重命中的重复票据保留原文件名移入当日 `重复跳过/` 目录，不再遗落 `<ReimbursementRoot>` 根目录反复触发排重；台账预警面板单列 `⚠️ [重复跳过]` 注明命中比对键与既有文件位置；文件不删除，处置由用户仲裁。判据同步补入规则真源《财务报销》红线 5。
+
 ## [1.1.0] - 2026-09-08
 
 ### Changed

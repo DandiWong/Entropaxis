@@ -17,7 +17,7 @@ from pathlib import Path
 
 # 胶囊内新命名：04_Spec_<ID>.md 或 04_Spec_<ID>_中文主题.md，取第三段（下划线分隔）为 ID。
 CAPSULE_SPEC_RE = re.compile(r"^04_Spec_(.+)$")
-CAPSULE_DIR_RE = re.compile(r"^\d{8}_.+$")  # 主题工作胶囊容器目录：YYYYMMDD_主题
+CAPSULE_DIR_RE = re.compile(r"^\d{8}_.+$")  # 事务胶囊容器目录：YYYYMMDD_主题
 # 独立 Spec 新命名：<ID>_中文主题.md（ID 前缀体系见 文件交付.md §2.3）。
 INDEPENDENT_SPEC_ID_RE = re.compile(r"^(Tech|Task|B|R|SC|M|Bug)-(\d+)_")
 

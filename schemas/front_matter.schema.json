@@ -1,7 +1,7 @@
 {
   "$comment": "交付物 Front Matter 字段契约。真源定义见 rules/文件交付.md §2.2；此前 type/status 的取值范围只写在散文里，无任何校验。消费方：tools/backfill_frontmatter.py、tools/validate_schema.py。",
   "title": "front_matter",
-  "target": "主题工作胶囊内各阶段 Markdown 文档顶部的 YAML Front Matter",
+  "target": "事务胶囊内各阶段 Markdown 文档顶部的 YAML Front Matter",
   "type": "object",
   "required": ["type", "topic", "date", "author", "status"],
   "additionalProperties": false,
