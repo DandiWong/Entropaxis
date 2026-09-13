@@ -109,6 +109,7 @@ def export_payload(system: Path = SYSTEM_DIR, out_path: Path | None = None, *, r
 
 
 def main() -> int:
+    install_windows._ensure_utf8_console()
     parser = argparse.ArgumentParser(
         description="导出 Windows exe 安装包的随包载荷（版本库跟踪集 ZIP）",
         formatter_class=argparse.RawDescriptionHelpFormatter,

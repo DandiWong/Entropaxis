@@ -28,6 +28,21 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+
+def _ensure_utf8_console() -> None:
+    """中文 Windows 的默认控制台代码页是 cp936/cp1252，不是 UTF-8。
+
+    本程序的提示与报错全是中文，双击运行时若不重配编码，`print()` 遇到中文字符会直接
+    抛 UnicodeEncodeError 崩掉——用户看到的不是安装失败的原因，而是安装程序自己先炸了。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
 # 随包数据的文件名，构建侧（build_windows_installer.py）与安装侧共用本常量。
 PAYLOAD_NAME = "entropaxis-payload.zip"
 
@@ -183,6 +198,7 @@ def choose_directory(default: Path) -> Path | None:
 
 
 def main() -> int:
+    _ensure_utf8_console()
     parser = argparse.ArgumentParser(
         description="Entropaxis Windows 安装程序：选目录、展开控制面并初始化",
         formatter_class=argparse.RawDescriptionHelpFormatter,
