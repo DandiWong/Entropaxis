@@ -257,6 +257,11 @@ def main() -> int:
 if __name__ == "__main__":
     code = main()
     # 冻结成 exe 时双击运行，控制台窗口会随进程退出一并消失——成功提示和报错都来不及看。
-    if getattr(sys, "frozen", False):
-        input("\n按回车键退出...")
+    # 但非交互调用（CI 自检、--json 被另一进程捕获输出）没有可读的 stdin，input() 会遇 EOF
+    # 崩出未捕获异常，把已经算好的退出码打翻——这不是使用者的错，不该让程序在这里再炸一次。
+    if getattr(sys, "frozen", False) and sys.stdin is not None and sys.stdin.isatty():
+        try:
+            input("\n按回车键退出...")
+        except (EOFError, OSError):
+            pass
     sys.exit(code)
