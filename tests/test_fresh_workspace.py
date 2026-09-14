@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools import paths
 from tools.bootstrap import render_instance_configs
 from tools.init_project import register_project
 from tools.lint_workspace import (
@@ -37,7 +38,7 @@ _REGISTRY = """# 工作区项目注册表
 def _mk_workspace(root: Path, *dirs: str) -> Path:
     for d in dirs:
         (root / d).mkdir(parents=True, exist_ok=True)
-    registry = root / ".data" / "templates" / "registry.md"
+    registry = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.md"
     registry.parent.mkdir(parents=True, exist_ok=True)
     registry.write_text(_REGISTRY, encoding="utf-8")
     return registry
@@ -73,7 +74,7 @@ class FreshWorkspaceTests(unittest.TestCase):
             self.assertEqual(check_registry_population(root), [])
 
     def test_register_project_is_append_only_and_idempotent(self) -> None:
-        """`.data/` 写入规约：只追加，不重写；重复立项不产生第二行。"""
+        """`data/` 写入规约：只追加，不重写；重复立项不产生第二行。"""
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             registry = _mk_workspace(root, "proj-a")
@@ -97,7 +98,7 @@ class FreshWorkspaceTests(unittest.TestCase):
             root = Path(td)
             for d in ("Clients", "Research"):
                 (root / d).mkdir()
-            templates = root / ".system" / "templates" / "data"
+            templates = root / paths.SYSTEM_DIRNAME / "templates" / "instance"
             templates.mkdir(parents=True)
             (templates / "workspace-config.template.md").write_text(
                 "| `{{ORG_SHARED_DIR_1}}` | {{ORG_SHARED_PURPOSE_1}} |\n"
@@ -107,11 +108,11 @@ class FreshWorkspaceTests(unittest.TestCase):
             )
             render_instance_configs(
                 verbose=False,
-                templates_dir=root / ".system" / "templates",
-                data_dir=root / ".data",
+                templates_dir=root / paths.SYSTEM_DIRNAME / "templates",
+                data_dir=root / paths.SYSTEM_DIRNAME / "data",
                 ws_name="anybox",
             )
-            out = (root / ".data" / "templates" / "workspace-config.md").read_text(encoding="utf-8")
+            out = (root / paths.SYSTEM_DIRNAME / "data" / "templates" / "workspace-config.md").read_text(encoding="utf-8")
             self.assertNotIn("Clients", out)
             self.assertNotIn("Research", out)
             self.assertNotIn("待确认", out)

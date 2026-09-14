@@ -141,8 +141,8 @@ python3 <skill-dir>/templates/generate_deck.py --output "output/my_presentation.
 工作区提供了打开器就调用它，并核对每个文件的打开结果（本工作区内的判据出处见 [`文件交付.md`](../../rules/文件交付.md)）：
 
 ```bash
-# 仅在 .system/tools/open_file.py 存在时执行
-python3 .system/tools/open_file.py "<pptx_path>" "<image_path>"
+# 仅在 .entropaxis/tools/open_file.py 存在时执行
+python3 .entropaxis/tools/open_file.py "<pptx_path>" "<image_path>"
 ```
 
 打开器不存在（本 Skill 独立安装运行）时，回报各产物的**绝对路径**由用户自行打开，同样算交付完成。

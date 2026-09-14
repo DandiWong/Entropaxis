@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools import paths
 from tools.lint_workspace import check_routing_integrity
 
 _REGISTRY = """\
@@ -23,8 +24,8 @@ _REGISTRY = """\
 
 def _mk_root(td: str) -> Path:
     root = Path(td)
-    (root / ".data" / "templates").mkdir(parents=True, exist_ok=True)
-    (root / ".data" / "templates" / "registry.md").write_text(_REGISTRY, encoding="utf-8")
+    (root / paths.SYSTEM_DIRNAME / "data" / "templates").mkdir(parents=True, exist_ok=True)
+    (root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.md").write_text(_REGISTRY, encoding="utf-8")
     return root
 
 

@@ -127,7 +127,7 @@
       "schema_version": 2,
       "reviewer_mode": "external",
       "reviewer_ref": "some-reviewer-cli --model some-model",
-      "target_path": ".data/docs/20260905_某方案/02_方案.md",
+      "target_path": ".entropaxis/data/docs/20260905_某方案/02_方案.md",
       "target_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
     },
     "issue_format": {

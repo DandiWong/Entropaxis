@@ -16,7 +16,7 @@ class RenderInstanceConfigsTests(TestCase):
     """测试 render_instance_configs 的三件核心契约：
     1. 目标文件已存在则跳过（幂等保护）
     2. 目标文件缺失时首次渲染，占位符替换为工作区目录名兜底
-    3. 白名单过滤：仅渲染 board_config + workspace-config 两个 .data/ 实例模板，
+    3. 白名单过滤：仅渲染 board_config + workspace-config 两个 data/ 实例模板，
        不污染项目级脚手架模板（README/AGENTS 等）
     """
 
@@ -24,13 +24,13 @@ class RenderInstanceConfigsTests(TestCase):
         self.tmpdir = Path(_tempfile.mkdtemp(prefix="render-test-"))
         self.templates_dir = self.tmpdir / "templates"
         self.data_dir = self.tmpdir / ".data"
-        (self.templates_dir / "data").mkdir(parents=True, exist_ok=True)
+        (self.templates_dir / "instance").mkdir(parents=True, exist_ok=True)
         (self.templates_dir / "project").mkdir(parents=True, exist_ok=True)
 
         # 复制真实模板（避免在测试里硬编码两份）
-        real_templates = SYSTEM_ROOT / "templates" / "data"
+        real_templates = SYSTEM_ROOT / "templates" / "instance"
         for name in ("board_config.template.json", "workspace-config.template.md"):
-            shutil.copy2(real_templates / name, self.templates_dir / "data" / name)
+            shutil.copy2(real_templates / name, self.templates_dir / "instance" / name)
 
         # 项目脚手架放 project/，确保不被实例渲染流程碰到（目录即白名单，无需硬编码名单）
         (self.templates_dir / "project" / "AGENTS.template.md").write_text(
@@ -68,7 +68,7 @@ class RenderInstanceConfigsTests(TestCase):
         agents = self.data_dir / "templates" / "AGENTS.md"
         self.assertFalse(
             agents.exists(),
-            "AGENTS.template.md is not in whitelist, must not be rendered to .data/",
+            "AGENTS.template.md is not in whitelist, must not be rendered to data/",
         )
 
     def test_existing_target_is_not_overwritten(self) -> None:
@@ -116,5 +116,5 @@ class RenderInstanceConfigsTests(TestCase):
             verbose=False,
         )
         self.assertTrue(ok)
-        # .data/ 可能被 mkdir 但不应有产物
+        # data/ 可能被 mkdir 但不应有产物
         self.assertFalse(list((self.data_dir / "templates").glob("*")))

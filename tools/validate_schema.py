@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""按 .system/schemas/ 声明校验结构化契约 (Schema Validator).
+"""按 .entropaxis/schemas/ 声明校验结构化契约 (Schema Validator).
 
 只支持 JSON Schema 的一个子集：type / required / properties / items / enum /
 pattern / minLength / minItems / minimum / additionalProperties / conditional_required。
@@ -8,9 +8,9 @@ pattern / minLength / minItems / minimum / additionalProperties / conditional_re
 schema 用 .json 而非 .yaml：Python 标准库没有 YAML 解析器，用 YAML 就得引入 pyyaml。
 
 执行方式:
-  python3 .system/tools/validate_schema.py                 # 校验全部已接线的目标
-  python3 .system/tools/validate_schema.py --list          # 列出可用 schema
-  python3 .system/tools/validate_schema.py <file.md>       # 校验单个 Markdown 的 Front Matter
+  python3 .entropaxis/tools/validate_schema.py                 # 校验全部已接线的目标
+  python3 .entropaxis/tools/validate_schema.py --list          # 列出可用 schema
+  python3 .entropaxis/tools/validate_schema.py <file.md>       # 校验单个 Markdown 的 Front Matter
 """
 
 from __future__ import annotations
@@ -22,9 +22,14 @@ import sys
 import unicodedata
 from pathlib import Path
 
+try:
+    from . import paths
+except ImportError:
+    import paths
+
 HERE = Path(__file__).resolve().parent
-SYSTEM_ROOT = HERE.parent
-WORKSPACE_ROOT = SYSTEM_ROOT.parent
+SYSTEM_ROOT = paths.SYSTEM_DIR
+WORKSPACE_ROOT = paths.WORKSPACE_ROOT
 SCHEMA_DIR = SYSTEM_ROOT / "schemas"
 
 FRONT_MATTER_RE = re.compile(r"^[\s\u00ad\u200b-\u200f\u202a-\u202e\u2060\ufeff]*---\n(.*?)\n---", re.DOTALL)
@@ -137,7 +142,7 @@ def parse_front_matter(text: str) -> dict | None:
 
 
 def check_route_map(target: Path | None = None) -> list[str]:
-    target = target or WORKSPACE_ROOT / ".system" / "config" / "route_map.json"
+    target = target or SYSTEM_ROOT / "config" / "route_map.json"
     if not target.is_file():
         return [f"route_map.json 不存在: {target}"]
     try:
@@ -169,7 +174,7 @@ def check_markdown(path: Path) -> list[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="按 .system/schemas/ 校验结构化契约")
+    parser = argparse.ArgumentParser(description="按 .entropaxis/schemas/ 校验结构化契约")
     parser.add_argument("files", nargs="*", help="待校验的 Markdown 文件（省略则校验已接线目标）")
     parser.add_argument("--list", action="store_true", help="列出可用 schema")
     args = parser.parse_args()
@@ -195,7 +200,7 @@ def main() -> int:
     if errs:
         for e in errs:
             print(f"❌ {e}", file=sys.stderr)
-        print(f"\n👉 共 {len(errs)} 处违反 schema；按 .system/schemas/ 中的字段声明修正。", file=sys.stderr)
+        print(f"\n👉 共 {len(errs)} 处违反 schema；按 .entropaxis/schemas/ 中的字段声明修正。", file=sys.stderr)
         return 1
     print("✅ 全部目标符合 schema 声明。")
     return 0

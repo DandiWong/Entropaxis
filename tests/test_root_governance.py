@@ -13,7 +13,7 @@ class RootGovernanceRuleTests(TestCase):
 
         self.assertIn("声明外置悬空核验（防隐式假设铁律）", content)
         self.assertIn("必须在同一处规则正文中显式给出兜底降级方案", content)
-        self.assertIn("悬空的 `.data/` 实例声明引用", content)
+        self.assertIn("悬空的 `.entropaxis/data/` 实例声明引用", content)
 
     def test_free_distribution_clauses_are_present(self) -> None:
         """自由分发与零依赖四条判据的真源锁定。
@@ -48,7 +48,7 @@ class RootGovernanceRuleTests(TestCase):
         self.assertTrue(rule_path.exists(), "软件工程.md must exist")
         content = rule_path.read_text(encoding="utf-8")
 
-        self.assertIn("含新增 `.data/` 声明外置字段的悬空兜底覆盖", content)
+        self.assertIn("含新增 `.entropaxis/data/` 声明外置字段的悬空兜底覆盖", content)
         self.assertFalse((SYSTEM_ROOT / "rules" / "五维评估.md").exists(), "五维评估.md 应已退役")
 
 

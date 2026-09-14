@@ -55,12 +55,12 @@ class CostTests(TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        (self.root / '.system/rules').mkdir(parents=True)
+        (self.root / '.entropaxis/rules').mkdir(parents=True)
         for file in AR.RESIDENT_FILES:
             (self.root / file).write_text('Resident.\n', encoding='utf-8')
 
     def rule(self, name, text):
-        file = '.system/rules/' + name + '.md'
+        file = '.entropaxis/rules/' + name + '.md'
         (self.root / file).write_text(text, encoding='utf-8')
         return file
 
@@ -87,13 +87,13 @@ class CostTests(TestCase):
         file = self.rule('first', '# Rules\nAvailable.\n')
         route = {'mechanism': 'test', 'reads': [
             {'file': file, 'anchor': None},
-            {'file': '.system/rules/missing.md', 'anchor': None},
+            {'file': '.entropaxis/rules/missing.md', 'anchor': None},
         ]}
         (self.root / AR.RESIDENT_FILES[0]).unlink()
         cost = AR.audit_cost([route], self.root)
         scenario = cost['scenarios'][0]
         self.assertIsNone(scenario['static_context_estimate']['estimated_tokens'])
-        self.assertEqual(scenario['necessary_read_ranges']['unknown_files'], ['.system/rules/missing.md'])
+        self.assertEqual(scenario['necessary_read_ranges']['unknown_files'], ['.entropaxis/rules/missing.md'])
         self.assertIsNone(cost['resident_baseline']['estimated_tokens'])
         self.assertIsNone(cost['actual_cost'])
         self.assertIsNone(cost['actual_usage'])

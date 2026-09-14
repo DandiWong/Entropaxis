@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """分发就绪核验：以**收件方视角**重建版本库内容并实跑初始化链路。
 
-存在理由：其余门禁（unittest / lint_workspace）全部在"开发者本机、已初始化、`.data/`
+存在理由：其余门禁（unittest / lint_workspace）全部在"开发者本机、已初始化、`data/`
 齐备、私有 Skill 在场"这一个环境状态上求值，而分发是另一个状态。同一份代码在两个状态
 下会给出两个不同的真相——本工具补上第二个求值点。
 
@@ -26,9 +26,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+try:
+    from . import paths
+except ImportError:
+    import paths
+
 HERE = Path(__file__).resolve().parent
-SYSTEM_DIR = HERE.parent
-WORKSPACE = SYSTEM_DIR.parent
+SYSTEM_DIR = paths.SYSTEM_DIR
+WORKSPACE = paths.WORKSPACE_ROOT
 
 SUBPROCESS_TIMEOUT = 300
 
@@ -101,7 +106,7 @@ def pending_files(system: Path) -> list[str]:
 
 def build_recipient_tree(system: Path, files: list[str], dest: Path) -> int:
     """把跟踪集复制成一棵独立的收件方工作区（保留可执行位）。"""
-    system_dest = dest / ".system"
+    system_dest = dest / paths.SYSTEM_DIRNAME
     copied = 0
     for rel in files:
         src = system / rel
@@ -117,7 +122,7 @@ def build_recipient_tree(system: Path, files: list[str], dest: Path) -> int:
             "👉 修复建议: 确认当前分支已提交内容，或检查是否误在空仓库上执行。"
         )
     # 播一个与任何既有工作区都不同名的业务目录：收件方的工作区在接入本系统之前就已经
-    # 有自己的目录结构。只放 .system/ 的空壳树跑不出"拿空注册表去判用户既有目录未注册"
+    # 有自己的目录结构。只放 .entropaxis/ 的空壳树跑不出"拿空注册表去判用户既有目录未注册"
     # 这类缺陷——首检红屏只在工作区非空时才成立。
     (dest / FOREIGN_DIR_PROBE).mkdir(parents=True, exist_ok=True)
     return copied
@@ -162,7 +167,7 @@ def scan_leaks(tree: Path, terms: list[str]) -> list[str]:
                 )
         if CREDENTIAL_PATTERN.search(text) or PRIVATE_KEY_PATTERN.search(text):
             issues.append(
-                f"[疑似凭据] {rel} 命中凭据特征串；凭据一律外置于 .data/credentials/，不得入库。"
+                f"[疑似凭据] {rel} 命中凭据特征串；凭据一律外置于 .entropaxis/data/credentials/，不得入库。"
             )
         if HOME_PATH_PATTERN.search(text):
             issues.append(
@@ -181,7 +186,7 @@ def run_init_chain(workspace: Path) -> tuple[list[str], list[str]]:
     """在收件方树上实跑 bootstrap → lint → 单测，返回 (阻断项, 建议项)。"""
     blocking, advisory = [], []
 
-    boot = _run([sys.executable, ".system/tools/bootstrap.py"], workspace)
+    boot = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/bootstrap.py"], workspace)
     output = boot.stdout + boot.stderr
     if boot.returncode != 0:
         blocking.append(f"[初始化失败] bootstrap.py 退出码 {boot.returncode}；输出尾部：{output.strip()[-300:]}")
@@ -193,11 +198,11 @@ def run_init_chain(workspace: Path) -> tuple[list[str], list[str]]:
                 "新工作区首次初始化不应出现失败或自相矛盾的提示。"
             )
     # 幂等重入：连跑两次不得出现新的失败标记
-    again = _run([sys.executable, ".system/tools/bootstrap.py"], workspace)
+    again = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/bootstrap.py"], workspace)
     if again.returncode != 0:
         blocking.append(f"[初始化不幂等] 第二次运行 bootstrap.py 退出码 {again.returncode}。")
 
-    lint = _run([sys.executable, ".system/tools/lint_workspace.py"], workspace)
+    lint = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/lint_workspace.py"], workspace)
     if lint.returncode != 0:
         failed = [ln.strip() for ln in lint.stdout.splitlines() if ln.strip().startswith("•")]
         blocking.append(
@@ -209,7 +214,7 @@ def run_init_chain(workspace: Path) -> tuple[list[str], list[str]]:
         advisory.append(f"[新环境体检建议] 收件方首检有 {advisory_count} 类建议项（不阻断）。")
 
     tests = _run(
-        [sys.executable, "-m", "unittest", "discover", "-s", ".system/tests", "-t", ".system"],
+        [sys.executable, "-m", "unittest", "discover", "-s", f"{paths.SYSTEM_DIRNAME}/tests", "-t", paths.SYSTEM_DIRNAME],
         workspace,
     )
     if tests.returncode != 0:
@@ -254,11 +259,11 @@ def dangling_skill_routes(system: Path, tree: Path, files: list[str]) -> list[st
 
 def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False) -> dict:
     """核验分发就绪度，返回结构化结果字典。"""
-    system = workspace / ".system"
+    system = workspace / paths.SYSTEM_DIRNAME
     if not system.is_dir():
         raise ToolError(
             f"❌ 未找到控制面目录: {system}\n"
-            f"👉 修复建议: 请在包含 .system/ 的工作区根目录下运行本工具。"
+            f"👉 修复建议: 请在包含 {paths.SYSTEM_DIRNAME}/ 的工作区根目录下运行本工具。"
         )
 
     files = distribution_files(system)
@@ -266,7 +271,7 @@ def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False) 
     blocking, advisory = [], []
     if not terms:
         advisory.append(
-            "[实体词表未声明] 未读到 .data/rules/零系统绑定词表.md，实体名扫描已降级停用；"
+            "[实体词表未声明] 未读到 .entropaxis/data/rules/零系统绑定词表.md，实体名扫描已降级停用；"
             "凭据与绝对路径扫描不受影响。"
         )
 
@@ -274,8 +279,8 @@ def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False) 
     recipient = Path(tmpdir)
     try:
         copied = build_recipient_tree(system, files, recipient)
-        blocking += scan_leaks(recipient / ".system", terms)
-        advisory += dangling_skill_routes(system, recipient / ".system", files)
+        blocking += scan_leaks(recipient / paths.SYSTEM_DIRNAME, terms)
+        advisory += dangling_skill_routes(system, recipient / paths.SYSTEM_DIRNAME, files)
         chain_blocking, chain_advisory = run_init_chain(recipient)
         blocking += chain_blocking
         advisory += chain_advisory

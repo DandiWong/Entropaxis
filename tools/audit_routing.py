@@ -22,9 +22,14 @@ else:
     from hook_route_match import build_additional_context, match_prompt
     from route_context import resolve_route_reads
 
+if __package__:
+    from . import paths
+else:
+    import paths
+
 HERE = Path(__file__).resolve().parent
-SYSTEM_ROOT = HERE.parent
-WORKSPACE_ROOT = SYSTEM_ROOT.parent
+SYSTEM_ROOT = paths.SYSTEM_DIR
+WORKSPACE_ROOT = paths.WORKSPACE_ROOT
 ROUTE_MAP_PATH = SYSTEM_ROOT / "config" / "route_map.json"
 CASES_PATH = SYSTEM_ROOT / "tests" / "fixtures" / "instruction_cases.json"
 HOLDOUT_PATH = SYSTEM_ROOT / "tests" / "fixtures" / "instruction_holdout.json"
@@ -34,7 +39,7 @@ RESIDENT_FILES = ("AGENTS.md", "CLAUDE.md")
 COST_SCOPE_EXCLUSIONS = {
     "provider_prompt": "未计入宿主、Provider 与其他 Skill 注入的上下文",
     "dynamic_reads": "未观测模型实际读取、后续条件依赖和工具返回的格式开销",
-    "instance_reads": "未计入规则引用的 .data 实例、项目材料及 Skill 正文；读取清单只覆盖声明的规则段",
+    "instance_reads": "未计入规则引用的 .entropaxis/data 实例、项目材料及 Skill 正文；读取清单只覆盖声明的规则段",
     "cache_retries": "未观测缓存、重复读取、重试与多轮 Hook 调用",
     "output_billing": "无模型输出、真实 tokenizer usage、计费单价与账单",
 }
@@ -308,7 +313,7 @@ def main() -> int:
         print(exc, file=sys.stderr)
         return 2
     if not routes:
-        print("路由表为空，无可审计对象。检查 .system/config/route_map.json 的 routes 数组。", file=sys.stderr)
+        print("路由表为空，无可审计对象。检查 .entropaxis/config/route_map.json 的 routes 数组。", file=sys.stderr)
         return 2
 
     try:

@@ -1,4 +1,0 @@
-{
-  "_comment": "看板 Provider 实例声明模板：角色 main（团队主看板）/ dev（研发过程看板）→ 具体 CLI 命令数组（如 [\"python3\", \".../dash.py\"]）。本文件由 .system/tools/bootstrap.py 在 .data/templates/board_config.json 缺失时首次渲染；对方用户需自行填入实际 CLI 命令。凭证不进本文件、不进 cli 数组参数——一律经无回显交互录入并存 .data/credentials/。本文件不入版本库。",
-  "providers": {}
-}

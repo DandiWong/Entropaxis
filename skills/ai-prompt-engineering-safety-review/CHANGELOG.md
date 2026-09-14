@@ -8,5 +8,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2026-09-04
 
 ### Added
-- Initial import and registration into Entropaxis root system (`.system/skills/ai-prompt-engineering-safety-review`).
+- Initial import and registration into Entropaxis root system (`.entropaxis/skills/ai-prompt-engineering-safety-review`).
 - Comprehensive AI prompt engineering safety, bias detection, and security review framework.

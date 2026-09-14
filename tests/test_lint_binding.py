@@ -2,19 +2,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools import paths
 from tools.lint_workspace import check_rules_zero_system_binding
 
-# 禁用实体词已外置到 .data/rules/，测试自带虚构词表，不引用任何真实实体
+# 禁用实体词已外置到 data/rules/，测试自带虚构词表，不引用任何真实实体
 _TOKEN_MULTI = "acmeboard"
 _TOKEN_BRAND = "acmecorp"
 _TOKEN_LOCAL = "127.0" + ".0.1"  # 端点字面量拆开拼接，避免测试源码自身命中端点检查
 
 
 def _mk_control_plane(root: Path) -> Path:
-    s = root / ".system"
+    s = root / paths.SYSTEM_DIRNAME
     for sub in ("rules", "tools", "skills/demo", "templates", "tests", "entrypoints"):
         (s / sub).mkdir(parents=True, exist_ok=True)
-    wordlist = root / ".data" / "rules" / "零系统绑定词表.md"
+    wordlist = s / "data" / "rules" / "零系统绑定词表.md"
     wordlist.parent.mkdir(parents=True, exist_ok=True)
     wordlist.write_text(f"- {_TOKEN_MULTI}\n- {_TOKEN_BRAND}（注释不参与匹配）\n", encoding="utf-8")
     return s
@@ -47,7 +48,7 @@ class ZeroBindingLintTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             s = _mk_control_plane(root)
-            (root / ".data" / "rules" / "零系统绑定词表.md").unlink()
+            (s / "data" / "rules" / "零系统绑定词表.md").unlink()
             (s / "rules" / "a.md").write_text(f"调用 {_TOKEN_MULTI} 同步任务。", encoding="utf-8")
             (s / "tools" / "a.py").write_text(f'BASE = "http://{_TOKEN_LOCAL}:8080"\n', encoding="utf-8")
             issues = check_rules_zero_system_binding(root)

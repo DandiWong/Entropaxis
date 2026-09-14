@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """初始化事务胶囊 (Transaction Capsule) 标准目录骨架。
 
-规范真源：`.data/docs/20260910_事务胶囊设计规范/02_方案.md`（`status: active`，
+规范真源：`.entropaxis/data/docs/20260910_事务胶囊设计规范/02_方案.md`（`status: active`，
 经 6 轮对抗性审计，16 项问题全部 `closed`，见同目录 `05_审计报告.md`）。本工具
 经《治理指令》「机制转工具」6 步 SOP 由该规范的原型脚手架纳管而来，核心逻辑
 与审计通过版本逐字一致，只补齐 ApX 行动导向错误契约与 `--json` 结构化输出。
@@ -19,7 +19,7 @@
      反解析，核对与原始输入等值。
 
 用法：
-  python3 .system/tools/init_capsule.py <父目录> <中文主题> --id Tech-N --mode full|light|research [--json]
+  python3 .entropaxis/tools/init_capsule.py <父目录> <中文主题> --id Tech-N --mode full|light|research [--json]
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ def _yaml_str(value: str) -> str:
 
 
 # 文档级 Front Matter 契约：status 枚举与 id 正则必须与
-# .system/schemas/front_matter.schema.json 一致；此处用于生成后自检。
+# .entropaxis/schemas/front_matter.schema.json 一致；此处用于生成后自检。
 DOC_STATUS_ENUM = ("draft", "active", "revised", "completed")
 
 # 各阶段文档的 Front Matter 契约（type, author, status, 是否带 id）

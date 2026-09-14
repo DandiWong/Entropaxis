@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools import paths
 from tools.check_distribution import (
     ToolError,
     build_recipient_tree,
@@ -26,8 +27,8 @@ def _git(repo: Path, *args: str) -> None:
 
 
 def _mk_repo(root: Path) -> Path:
-    """最小 .system 仓库：git init + add，无需 commit（ls-files 读暂存区即可）。"""
-    system = root / ".system"
+    """最小 .entropaxis 仓库：git init + add，无需 commit（ls-files 读暂存区即可）。"""
+    system = root / paths.SYSTEM_DIRNAME
     (system / "skills").mkdir(parents=True)
     _git(system, "init", "-q")
     return system
@@ -89,12 +90,12 @@ class DistributionSetTests(unittest.TestCase):
 
             dest = root / "out"
             build_recipient_tree(system, files, dest)
-            self.assertFalse((dest / ".system" / "skills" / "private-skill").exists())
-            self.assertEqual(scan_leaks(dest / ".system", _TERMS), [])
-            # 收件方工作区非空：只放 .system/ 空壳树求值不到"既有目录未注册"这类缺陷
+            self.assertFalse((dest / paths.SYSTEM_DIRNAME / "skills" / "private-skill").exists())
+            self.assertEqual(scan_leaks(dest / paths.SYSTEM_DIRNAME, _TERMS), [])
+            # 收件方工作区非空：只放 .entropaxis/ 空壳树求值不到"既有目录未注册"这类缺陷
             self.assertTrue((dest / FOREIGN_DIR_PROBE).is_dir())
-            # 探针只播在工作区根，不得混进 .system/（否则会被当成分发内容扫描）
-            self.assertFalse((dest / ".system" / FOREIGN_DIR_PROBE).exists())
+            # 探针只播在工作区根，不得混进 .entropaxis/（否则会被当成分发内容扫描）
+            self.assertFalse((dest / paths.SYSTEM_DIRNAME / FOREIGN_DIR_PROBE).exists())
 
     def test_untracked_file_reported_as_pending(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -112,7 +113,7 @@ class DistributionSetTests(unittest.TestCase):
             system = _mk_repo(root)
             for name in ("shipped", "local-only"):
                 (system / "skills" / name).mkdir()
-            tree = root / "tree" / ".system"
+            tree = root / "tree" / paths.SYSTEM_DIRNAME
             (tree / "rules").mkdir(parents=True)
             (tree / "rules" / "r.md").write_text("调用 local-only Skill 执行。", encoding="utf-8")
             issues = dangling_skill_routes(system, tree, ["skills/shipped/SKILL.md"])
@@ -126,7 +127,7 @@ class DistributionSetTests(unittest.TestCase):
             system = _mk_repo(root)
             for name in ("shipped", "local-only"):
                 (system / "skills" / name).mkdir()
-            tree = root / "tree" / ".system"
+            tree = root / "tree" / paths.SYSTEM_DIRNAME
             (tree / "rules").mkdir(parents=True)
             (tree / "rules" / "r.md").write_text("通用规则正文，不引用任何私有能力。", encoding="utf-8")
             self.assertEqual(dangling_skill_routes(system, tree, ["skills/shipped/SKILL.md"]), [])

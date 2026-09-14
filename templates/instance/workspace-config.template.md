@@ -1,6 +1,6 @@
 # 工作区配置（环境与组织参数）
 
-> `.system/rules/` 的参数真源之一：规则正文只含通用逻辑，工作区实例参数统一放本文件；移植到其他环境时仅需替换本文件（与 `reimbursement-config.md` 同构）。
+> `.entropaxis/rules/` 的参数真源之一：规则正文只含通用逻辑，工作区实例参数统一放本文件；移植到其他环境时仅需替换本文件（与 `reimbursement-config.md` 同构）。
 
 ## 共享资料层
 
@@ -26,7 +26,7 @@
 
 ## 角色模态外置 CLI 与模型声明
 
-当认知模态外置为独立 CLI/Agent 进程承担时（跨 CLI 协作，见 `.system/rules/角色协作.md`），本机生效的启动命令。未配置或指定为 `subagent` 时默认使用当前 Agent 的内置 Subagent 机制：
+当认知模态外置为独立 CLI/Agent 进程承担时（跨 CLI 协作，见 `.entropaxis/rules/角色协作.md`），本机生效的启动命令。未配置或指定为 `subagent` 时默认使用当前 Agent 的内置 Subagent 机制：
 
 | 角色模态 | 职责定位 | 承载 CLI | 启动命令 |
 |---|---|---|---|
@@ -36,4 +36,4 @@
 | Designer | 方案设计/原型 demo | subagent | 内置 Subagent 机制 (auto) |
 | Maintainer | 汇报落盘/守门验收/证据核验 | subagent | 内置 Subagent 机制 (auto) |
 
-> 首次初始化后默认全部使用内置 Subagent。可通过 `python3 .system/tools/setup_agents.py` 交互式检测宿主机已安装的外部 Agent CLI 并自动配置。
+> 首次初始化后默认全部使用内置 Subagent。可通过 `python3 .entropaxis/tools/setup_agents.py` 交互式检测宿主机已安装的外部 Agent CLI 并自动配置。

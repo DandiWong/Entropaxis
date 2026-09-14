@@ -1,7 +1,7 @@
 {
   "_meta": {
     "purpose": "确定性关键词路由索引，供 tools/hook_route_match.py 在 UserPromptSubmit 阶段做字面命中的前置注入；语义/转述命中仍依赖模型对根 AGENTS.md 路由表与本文件的理解，本表只兜底提升字面命中的召回率，不替代语义判断。",
-    "source_of_truth": "本表关键词逐条摘自 .system/rules/工作流指令.md、.system/rules/治理指令.md 与 .system/rules/文件交付.md 中已声明的“触发意图/触发场景”原文，不新增未在规则正文出现过的措辞；新增机制的显式触发词时须同步在此登记，避免字面命中漏检。",
+    "source_of_truth": "本表关键词逐条摘自 .entropaxis/rules/工作流指令.md、.entropaxis/rules/治理指令.md 与 .entropaxis/rules/文件交付.md 中已声明的“触发意图/触发场景”原文，不新增未在规则正文出现过的措辞；新增机制的显式触发词时须同步在此登记，避免字面命中漏检。",
     "deliberate_omissions": "规则正文枚举的裸词“任务”未纳入（过于通用，逐字匹配会在几乎所有工作汇报语境下误触发，违反元规则3“薄入口/按需”），改用更具体的“建个任务/记个任务/登记任务”子串；“记录/沉淀”“复盘”等仍按原文保留，存在一定误触发容忍度。",
     "exclude_semantics": "exclude 列出该机制的抑制词：命中任一即判定为他机制语义，本机制不触发。用于消解子串包含造成的误触发（如「根据审计修正」含「审计」但属于修正机制）。",
     "reading_contract": "reads 为文件与小节的显式配对；anchor:null 读取全文。必需依赖列为额外 reads，条件依赖按动作追加。由 route_context 保留适用范围、合并重叠区间；不存在或歧义锚点显式回退全文。"
@@ -23,16 +23,16 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/工作流指令.md",
+          "file": ".entropaxis/rules/工作流指令.md",
           "anchor": "## 工作区初始化 / 新机配置"
         },
         {
-          "file": ".system/rules/文件交付.md",
+          "file": ".entropaxis/rules/文件交付.md",
           "anchor": "### 4.3 程序映射、自动检测与人类仲裁"
         },
         {
-          "file": ".system/rules/控制面布局.md",
-          "anchor": "## `.data/` 写入规约（防人工真源被覆盖）"
+          "file": ".entropaxis/rules/控制面布局.md",
+          "anchor": "## `data/` 写入规约（防人工真源被覆盖）"
         }
       ]
     },
@@ -56,15 +56,15 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/工作流指令.md",
+          "file": ".entropaxis/rules/工作流指令.md",
           "anchor": "## 事务 / 新事务"
         },
         {
-          "file": ".system/rules/项目组织.md",
+          "file": ".entropaxis/rules/项目组织.md",
           "anchor": "## 事务胶囊"
         },
         {
-          "file": ".system/rules/文件交付.md",
+          "file": ".entropaxis/rules/文件交付.md",
           "anchor": "## 2. 交付物命名规范（单一真源）"
         }
       ]
@@ -80,11 +80,11 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/工作流指令.md",
+          "file": ".entropaxis/rules/工作流指令.md",
           "anchor": "## 自定义角色"
         },
         {
-          "file": ".system/rules/角色协作.md",
+          "file": ".entropaxis/rules/角色协作.md",
           "anchor": "### 调度优先序与优雅降级契约 (Dispatch Hierarchy)"
         }
       ]
@@ -99,15 +99,15 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/工作流指令.md",
+          "file": ".entropaxis/rules/工作流指令.md",
           "anchor": "## 定位 / 查找文件"
         },
         {
-          "file": ".system/rules/文件交付.md",
+          "file": ".entropaxis/rules/文件交付.md",
           "anchor": "### 4.2 触发场景"
         },
         {
-          "file": ".system/rules/文件交付.md",
+          "file": ".entropaxis/rules/文件交付.md",
           "anchor": "## 4. 文件落盘与定位查阅必开文件（刚性执行铁律）"
         }
       ]
@@ -133,15 +133,15 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/治理指令.md",
+          "file": ".entropaxis/rules/治理指令.md",
           "anchor": "## 审计"
         },
         {
-          "file": ".system/rules/角色协作.md",
+          "file": ".entropaxis/rules/角色协作.md",
           "anchor": "## AI 时代认知模态分工 (Cognitive Personas)"
         },
         {
-          "file": ".system/rules/文件交付.md",
+          "file": ".entropaxis/rules/文件交付.md",
           "anchor": null
         }
       ]
@@ -158,15 +158,15 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/治理指令.md",
+          "file": ".entropaxis/rules/治理指令.md",
           "anchor": "## 修正"
         },
         {
-          "file": ".system/rules/角色协作.md",
+          "file": ".entropaxis/rules/角色协作.md",
           "anchor": "## AI 时代认知模态分工 (Cognitive Personas)"
         },
         {
-          "file": ".system/rules/文件交付.md",
+          "file": ".entropaxis/rules/文件交付.md",
           "anchor": null
         }
       ]
@@ -183,19 +183,19 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/治理指令.md",
+          "file": ".entropaxis/rules/治理指令.md",
           "anchor": "## 系统自检"
         },
         {
-          "file": ".system/rules/01_根系统治理.md",
+          "file": ".entropaxis/rules/01_根系统治理.md",
           "anchor": null
         },
         {
-          "file": ".system/rules/00_元规则.md",
+          "file": ".entropaxis/rules/00_元规则.md",
           "anchor": null
         },
         {
-          "file": ".system/rules/软件工程.md",
+          "file": ".entropaxis/rules/软件工程.md",
           "anchor": "## 测试与验证"
         }
       ]
@@ -211,11 +211,11 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/治理指令.md",
+          "file": ".entropaxis/rules/治理指令.md",
           "anchor": "## 新迭代 / 新 Feature"
         },
         {
-          "file": ".system/rules/软件工程.md",
+          "file": ".entropaxis/rules/软件工程.md",
           "anchor": null
         }
       ]
@@ -239,19 +239,19 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/治理指令.md",
+          "file": ".entropaxis/rules/治理指令.md",
           "anchor": "## 机制转工具 / 制作工具 (Tool Crafter)"
         },
         {
-          "file": ".system/rules/工具设计.md",
+          "file": ".entropaxis/rules/工具设计.md",
           "anchor": null
         },
         {
-          "file": ".system/rules/00_元规则.md",
+          "file": ".entropaxis/rules/00_元规则.md",
           "anchor": null
         },
         {
-          "file": ".system/rules/01_根系统治理.md",
+          "file": ".entropaxis/rules/01_根系统治理.md",
           "anchor": null
         }
       ]
@@ -267,19 +267,19 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/治理指令.md",
+          "file": ".entropaxis/rules/治理指令.md",
           "anchor": "## 注册 Skill / 注册到 Entropaxis / 注册到根系统"
         },
         {
-          "file": ".system/rules/技能设计.md",
+          "file": ".entropaxis/rules/技能设计.md",
           "anchor": null
         },
         {
-          "file": ".system/rules/00_元规则.md",
+          "file": ".entropaxis/rules/00_元规则.md",
           "anchor": null
         },
         {
-          "file": ".system/rules/01_根系统治理.md",
+          "file": ".entropaxis/rules/01_根系统治理.md",
           "anchor": null
         }
       ]
@@ -291,15 +291,15 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/工作流指令.md",
+          "file": ".entropaxis/rules/工作流指令.md",
           "anchor": "## 同步任务"
         },
         {
-          "file": ".system/rules/看板联动.md",
+          "file": ".entropaxis/rules/看板联动.md",
           "anchor": null
         },
         {
-          "file": ".system/rules/项目组织.md",
+          "file": ".entropaxis/rules/项目组织.md",
           "anchor": null
         }
       ]
@@ -311,15 +311,15 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/工作流指令.md",
+          "file": ".entropaxis/rules/工作流指令.md",
           "anchor": "## 同步"
         },
         {
-          "file": ".system/rules/看板联动.md",
+          "file": ".entropaxis/rules/看板联动.md",
           "anchor": null
         },
         {
-          "file": ".system/rules/项目组织.md",
+          "file": ".entropaxis/rules/项目组织.md",
           "anchor": null
         }
       ]
@@ -333,15 +333,15 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/工作流指令.md",
+          "file": ".entropaxis/rules/工作流指令.md",
           "anchor": "## 任务"
         },
         {
-          "file": ".system/rules/看板联动.md",
+          "file": ".entropaxis/rules/看板联动.md",
           "anchor": null
         },
         {
-          "file": ".system/rules/项目组织.md",
+          "file": ".entropaxis/rules/项目组织.md",
           "anchor": null
         }
       ]
@@ -355,11 +355,11 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/工作流指令.md",
+          "file": ".entropaxis/rules/工作流指令.md",
           "anchor": "## 记录 / 沉淀"
         },
         {
-          "file": ".system/rules/知识沉淀.md",
+          "file": ".entropaxis/rules/知识沉淀.md",
           "anchor": null
         }
       ]
@@ -376,7 +376,7 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/工作流指令.md",
+          "file": ".entropaxis/rules/工作流指令.md",
           "anchor": "## 记为案例"
         }
       ]
@@ -389,7 +389,7 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/工作流指令.md",
+          "file": ".entropaxis/rules/工作流指令.md",
           "anchor": "## 复盘"
         }
       ]
@@ -402,7 +402,7 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/工作流指令.md",
+          "file": ".entropaxis/rules/工作流指令.md",
           "anchor": "## Tip"
         }
       ]
@@ -418,15 +418,15 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/工作流指令.md",
+          "file": ".entropaxis/rules/工作流指令.md",
           "anchor": "## 报销 / 整理发票"
         },
         {
-          "file": ".system/rules/财务报销.md",
+          "file": ".entropaxis/rules/财务报销.md",
           "anchor": null
         },
         {
-          "file": ".system/rules/文件交付.md",
+          "file": ".entropaxis/rules/文件交付.md",
           "anchor": null
         }
       ]
@@ -470,23 +470,23 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/文件交付.md",
+          "file": ".entropaxis/rules/文件交付.md",
           "anchor": "## 1. 文档落盘触发门禁"
         },
         {
-          "file": ".system/rules/角色协作.md",
+          "file": ".entropaxis/rules/角色协作.md",
           "anchor": "## AI 时代认知模态分工 (Cognitive Personas)"
         },
         {
-          "file": ".system/rules/文件交付.md",
+          "file": ".entropaxis/rules/文件交付.md",
           "anchor": "## 2. 交付物命名规范（单一真源）"
         },
         {
-          "file": ".system/rules/文件交付.md",
+          "file": ".entropaxis/rules/文件交付.md",
           "anchor": "## 3. 交付前质量自检门禁"
         },
         {
-          "file": ".system/rules/文件交付.md",
+          "file": ".entropaxis/rules/文件交付.md",
           "anchor": "## 4. 文件落盘与定位查阅必开文件（刚性执行铁律）"
         }
       ]
@@ -505,19 +505,19 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/知识沉淀.md",
+          "file": ".entropaxis/rules/知识沉淀.md",
           "anchor": "## 沉淀形态判定模型"
         },
         {
-          "file": ".system/rules/技能设计.md",
+          "file": ".entropaxis/rules/技能设计.md",
           "anchor": null
         },
         {
-          "file": ".system/rules/00_元规则.md",
+          "file": ".entropaxis/rules/00_元规则.md",
           "anchor": null
         },
         {
-          "file": ".system/rules/01_根系统治理.md",
+          "file": ".entropaxis/rules/01_根系统治理.md",
           "anchor": null
         }
       ]
@@ -554,15 +554,15 @@
       ],
       "reads": [
         {
-          "file": ".system/rules/角色协作.md",
+          "file": ".entropaxis/rules/角色协作.md",
           "anchor": "### 方案生命周期指令与模态映射"
         },
         {
-          "file": ".system/rules/角色协作.md",
+          "file": ".entropaxis/rules/角色协作.md",
           "anchor": "### 调度优先序与优雅降级契约 (Dispatch Hierarchy)"
         },
         {
-          "file": ".system/rules/文件交付.md",
+          "file": ".entropaxis/rules/文件交付.md",
           "anchor": "## 1. 文档落盘触发门禁"
         }
       ]

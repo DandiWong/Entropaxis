@@ -5,7 +5,8 @@
 `sys._MEIPASS`，安装全程不联网、不拉远端。
 
 两条安全边界（均为信任边界，不做简化）：
-  1. **只写 `.system/`**：`.data/` 是用户实例数据与凭据所在，安装与升级全程不触碰；
+  1. **只写 `.entropaxis/`（不含 `data/` 子目录）**：`.entropaxis/data/` 是用户实例数据与
+     凭据所在，安装与升级全程不触碰；
   2. **载荷成员路径校验**：载荷虽由本仓库 `git archive` 产出，但经过随包封装后即为
      外部输入，解压前逐条排除绝对路径与 `..`（Zip Slip）；
 
@@ -49,6 +50,13 @@ PAYLOAD_NAME = "entropaxis-payload.zip"
 # 载荷完整性判据：缺其一即说明拿到的不是一份完整控制面，宁可阻断也不落一半。
 REQUIRED_MEMBERS = ("tools/bootstrap.py", "entrypoints/AGENTS.md", "entrypoints/CLAUDE.md")
 
+# 本文件不导入 tools/paths.py：PyInstaller --onefile 只冻结本脚本的导入图，paths.py 是
+# 随包 ZIP 里的数据，安装完成前不在 sys.path 上；因此控制面目录名与 paths.SYSTEM_DIRNAME
+# 各自独立声明，改名时两处需同步更新（单元测试 test_windows_installer.py 兜底核验一致）。
+SYSTEM_DIRNAME = ".entropaxis"
+LEGACY_SYSTEM_DIRNAME = ".system"
+LEGACY_DATA_DIRNAME = ".data"
+
 
 class ToolError(Exception):
     """工具可恢复业务异常，包含行动导向修复指引。"""
@@ -88,7 +96,7 @@ def _safe_members(archive: zipfile.ZipFile) -> list[str]:
 def _merge_tree(stage: Path, dest: Path) -> int:
     """把暂存树覆盖合并进目标目录：同名文件覆盖，目标侧多出的文件原样保留。
 
-    不用「先删后写」，是因为收件方可能在 `.system/skills/` 下放了自己的私有能力——
+    不用「先删后写」，是因为收件方可能在 `.entropaxis/skills/` 下放了自己的私有能力——
     整目录替换会把它们一并抹掉，而覆盖合并只动本安装包确实带来的那些文件。
     """
     written = 0
@@ -102,13 +110,22 @@ def _merge_tree(stage: Path, dest: Path) -> int:
     return written
 
 
+def detect_legacy_layout(root: Path) -> list[str]:
+    """检测目标工作区根目录下是否残留旧布局（.system/ 或 .data/），只报现象不动手。
+
+    两种成因（旧版本升级遗留 / 某写入方未按契约在根目录误建）现场无法区分，
+    统一报现象并交由用户人工迁移，不在安装流程中顺带处理。
+    """
+    return [name for name in (LEGACY_SYSTEM_DIRNAME, LEGACY_DATA_DIRNAME) if (root / name).is_dir()]
+
+
 def install(payload: bytes, target_root: Path) -> dict:
-    """把控制面装进 `target_root/.system`，返回结构化结果。"""
+    """把控制面装进 `target_root/.entropaxis`，返回结构化结果。"""
     root = Path(target_root).expanduser().resolve()
-    if root.name == ".system":
+    if root.name == SYSTEM_DIRNAME:
         raise ToolError(
             f"❌ 选中的是控制面目录本身: {root}\n"
-            f"👉 修复建议: 请选它的上一层（工作区根目录），安装程序会自动建立 .system 子目录。"
+            f"👉 修复建议: 请选它的上一层（工作区根目录），安装程序会自动建立 {SYSTEM_DIRNAME} 子目录。"
         )
     if root.exists() and not root.is_dir():
         raise ToolError(
@@ -116,11 +133,15 @@ def install(payload: bytes, target_root: Path) -> dict:
             f"👉 修复建议: 请重新选择一个文件夹作为工作区根目录。"
         )
 
-    dest = root / ".system"
-    upgrade = dest.is_dir()
+    legacy = detect_legacy_layout(root)
+
+    dest = root / SYSTEM_DIRNAME
+    # 判据看 tools/ 而非 dest 本身：data/ 现已嵌套进 dest 内，用户只有实例数据、
+    # 控制面从未落地时 dest 已存在但只含 data/——那仍是"安装"，不是"升级"。
+    upgrade = (dest / "tools").is_dir()
 
     with tempfile.TemporaryDirectory(prefix="entropaxis-install-") as tmpdir:
-        stage = Path(tmpdir) / ".system"
+        stage = Path(tmpdir) / SYSTEM_DIRNAME
         try:
             with zipfile.ZipFile(io.BytesIO(payload)) as archive:
                 _safe_members(archive)
@@ -154,6 +175,7 @@ def install(payload: bytes, target_root: Path) -> dict:
         "system_dir": str(dest),
         "written_files": written,
         "mode": "upgrade" if upgrade else "install",
+        "legacy_layout": legacy,
     }
 
 
@@ -164,7 +186,7 @@ def run_bootstrap(workspace: Path) -> dict:
     流程；而收件方此刻很可能还没装系统 Python，也没有第二个解释器可用。`bootstrap.py` 是
     纯标准库、从 `__file__` 派生工作区根，`runpy` 执行它即可拿到正确的安装目录。
     """
-    script = workspace / ".system" / "tools" / "bootstrap.py"
+    script = workspace / SYSTEM_DIRNAME / "tools" / "bootstrap.py"
     try:
         runpy.run_path(str(script), run_name="__main__")
     except SystemExit as exc:
@@ -223,6 +245,8 @@ def main() -> int:
         verb = "升级" if res["mode"] == "upgrade" else "安装"
         if not args.json:
             print(f"✅ 控制面{verb}完成：{res['system_dir']}（{res['written_files']} 个文件）")
+            # 旧布局残留提示由随后 run_bootstrap 内的 print_legacy_layout_hint() 统一打印，
+            # 此处不重复；legacy_layout 字段只为 --json 消费方保留结构化信号。
 
         boot = run_bootstrap(Path(res["workspace"]))
         res["bootstrap"] = boot
@@ -235,7 +259,7 @@ def main() -> int:
             print(
                 f"\n❌ 控制面已就位，但初始化未通过：{boot['error'] or '退出码 ' + str(boot['returncode'])}\n"
                 f"👉 修复建议: 装好 Python 3 后，在安装目录双击 "
-                f".system\\tools\\一键配置工作区.bat 重跑初始化；或把上方报错整段复制给 AI 助手处理。",
+                f".entropaxis\\tools\\一键配置工作区.bat 重跑初始化；或把上方报错整段复制给 AI 助手处理。",
                 file=sys.stderr,
             )
             return 1

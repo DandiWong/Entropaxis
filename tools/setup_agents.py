@@ -3,25 +3,25 @@
 
 用于检测宿主机环境中已安装的各类 Agent CLI（如 omp、claude、codex、gemini、cursor、aider 等），
 提供针对 5 大认知模态（Reviewer、Researcher、Builder、Designer、Maintainer）的最佳命令预设，
-并通过交互式或命令行方式辅助用户配置 .data/templates/workspace-config.md 中的角色承载 CLI。
+并通过交互式或命令行方式辅助用户配置 .entropaxis/data/templates/workspace-config.md 中的角色承载 CLI。
 
 用法:
   # 1. 扫描当前环境已安装的 Agent CLI
-  python3 .system/tools/setup_agents.py --scan
-  python3 .system/tools/setup_agents.py --scan --json
+  python3 .entropaxis/tools/setup_agents.py --scan
+  python3 .entropaxis/tools/setup_agents.py --scan --json
 
   # 2. 校验当前 workspace-config.md 中已配置角色的可用性与降级状态
-  python3 .system/tools/setup_agents.py --verify
+  python3 .entropaxis/tools/setup_agents.py --verify
 
   # 3. 交互式向导配置各个角色的承载 CLI 与启动命令
-  python3 .system/tools/setup_agents.py
+  python3 .entropaxis/tools/setup_agents.py
 
   # 4. 一键为所有角色批量应用指定 Agent 的推荐预设
-  python3 .system/tools/setup_agents.py --apply-preset omp
-  python3 .system/tools/setup_agents.py --apply-preset subagent
+  python3 .entropaxis/tools/setup_agents.py --apply-preset omp
+  python3 .entropaxis/tools/setup_agents.py --apply-preset subagent
 
   # 5. 精确设置指定角色的 CLI 和启动命令
-  python3 .system/tools/setup_agents.py --set-role Reviewer omp "omp --model openai-codex/gpt-5.6-terra"
+  python3 .entropaxis/tools/setup_agents.py --set-role Reviewer omp "omp --model openai-codex/gpt-5.6-terra"
 """
 
 from __future__ import annotations
@@ -37,8 +37,13 @@ import tempfile
 from pathlib import Path
 from typing import Any, NamedTuple
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-DEFAULT_CONFIG_PATH = ROOT / ".data" / "templates" / "workspace-config.md"
+try:
+    from . import paths
+except ImportError:
+    import paths
+
+ROOT = paths.WORKSPACE_ROOT
+DEFAULT_CONFIG_PATH = paths.DATA_DIR / "templates" / "workspace-config.md"
 
 # 5 大标准认知模态及其职责定义
 STANDARD_ROLES: dict[str, str] = {
@@ -269,7 +274,7 @@ def render_role_section(roles_data: dict[str, dict[str, str]]) -> str:
     lines = [
         "## 角色模态外置 CLI 与模型声明",
         "",
-        "当认知模态外置为独立 CLI/Agent 进程承担时（跨 CLI 协作，见 `.system/rules/角色协作.md`），本机生效的启动命令。未配置或指定为 `subagent` 时默认使用当前 Agent 的内置 Subagent 机制：",
+        "当认知模态外置为独立 CLI/Agent 进程承担时（跨 CLI 协作，见 `.entropaxis/rules/角色协作.md`），本机生效的启动命令。未配置或指定为 `subagent` 时默认使用当前 Agent 的内置 Subagent 机制：",
         "",
         "| 角色模态 | 职责定位 | 承载 CLI | 启动命令 |",
         "|---|---|---|---|",
@@ -299,7 +304,7 @@ def update_workspace_config(config_path: Path, roles_data: dict[str, dict[str, s
     """原子更新 workspace-config.md 中的角色模态声明表格，保留前置 Front Matter 和其他章节。"""
     if not config_path.exists():
         print(f"❌ 配置文件不存在: {config_path}", file=sys.stderr)
-        print("👉 修复建议: 请先运行 `python3 .system/tools/bootstrap.py` 初始化基础模板。", file=sys.stderr)
+        print("👉 修复建议: 请先运行 `python3 .entropaxis/tools/bootstrap.py` 初始化基础模板。", file=sys.stderr)
         return False
 
     content = config_path.read_text(encoding="utf-8")
@@ -580,7 +585,7 @@ def main() -> int:
         print(f"📋 当前角色配置生效状态 ({args.config}):\n")
         for r in reports:
             print(f"• {r.get('role')} ({r.get('cli')}): {r.get('msg')}")
-        print("\n💡 提示: 在终端运行 `python3 .system/tools/setup_agents.py` 可进入交互式配置向导。")
+        print("\n💡 提示: 在终端运行 `python3 .entropaxis/tools/setup_agents.py` 可进入交互式配置向导。")
         return 0
 
 

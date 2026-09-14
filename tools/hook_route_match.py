@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """确定性关键词路由前置注入 (UserPromptSubmit Hook).
 
-对用户原始输入做字面关键词匹配，命中 .system/config/route_map.json 中登记的机制时，
+对用户原始输入做字面关键词匹配，命中 .entropaxis/config/route_map.json 中登记的机制时，
 通过 additionalContext 强制提示模型在执行前先读取对应真源规则文件，
 把"要不要读规则"从模型自行判断的概率事件，改为 harness 侧的确定性前置动作。
 
@@ -9,7 +9,7 @@
 转述/意译等语义命中不在本工具覆盖范围内，仍需模型自身依据元规则第 8 条判断。
 
 执行方式（由 .claude/settings.json 的 UserPromptSubmit hook 调用）:
-  python3 .system/tools/hook_route_match.py < stdin(JSON)
+  python3 .entropaxis/tools/hook_route_match.py < stdin(JSON)
 """
 
 from __future__ import annotations

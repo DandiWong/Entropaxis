@@ -141,7 +141,7 @@ class DataProvenanceTests(TestCase):
         self.assertEqual(LW.check_data_source_mapping(SYSTEM_ROOT.parent), [])
 
     def test_no_toplevel_instance_files(self) -> None:
-        data = SYSTEM_ROOT.parent / ".data"
+        data = SYSTEM_ROOT / "data"
         stray = [p.name for p in data.glob("*") if p.is_file() and p.suffix in (".md", ".json")]
         self.assertEqual(stray, [], f"顶层散落实例文件未归桶: {stray}")
 

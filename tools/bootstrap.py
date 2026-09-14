@@ -2,13 +2,18 @@
 """
 工作区根入口与系统配置初始化工具 (Bootstrap)
 用于一键同步工作区根目录的 AGENTS.md / CLAUDE.md 入口文件，自动检测宿主机安装的应用程序，
-生成/维护各类文件格式的默认打开器关联配置 (.data/templates/file-opener.json)，并自适应引导环境。
+生成/维护各类文件格式的默认打开器关联配置 (.entropaxis/data/templates/file-opener.json)，并自适应引导环境。
 """
 import os
 import sys
 import json
 import shutil
 from pathlib import Path
+
+try:
+    from . import paths
+except ImportError:
+    import paths
 
 def render_instance_configs(
     verbose: bool = True,
@@ -17,9 +22,9 @@ def render_instance_configs(
     data_dir: Path | None = None,
     ws_name: str | None = None,
 ) -> bool:
-    """从 .system/templates/*.template.{json,md} 首次渲染到 .data/。
+    """从 .entropaxis/templates/instance/*.template.{json,md} 首次渲染到 .entropaxis/data/。
 
-    - 仅在 .data/ 目标文件完全缺失时写入；存在即不动（避免覆盖用户已填内容）
+    - 仅在 data/ 目标文件完全缺失时写入；存在即不动（避免覆盖用户已填内容）
     - 占位符 {{XXX}} 替换为工作区目录名兜底（无脑填充，明示待填）
     - 不阻断、不抛错；模板文件缺失时跳过
     - 写入用 tempfile + replace 实现原子替换
@@ -28,25 +33,23 @@ def render_instance_configs(
     import tempfile
 
     if templates_dir is None or data_dir is None:
-        tools_dir = Path(__file__).resolve().parent
-        system_dir = tools_dir.parent
-        ws_root = system_dir.parent
+        system_dir = paths.SYSTEM_DIR
         if templates_dir is None:
             templates_dir = system_dir / "templates"
         if data_dir is None:
-            data_dir = ws_root / ".data"
+            data_dir = paths.DATA_DIR
     (data_dir / "templates").mkdir(parents=True, exist_ok=True)
 
     if ws_name is None:
-        ws_name = data_dir.parent.name or "workspace"
+        ws_name = data_dir.parent.parent.name or "workspace"
 
     success = True
     rendered = 0
 
 
-    # templates/data/ 即实例模板白名单——目录按消费方划分，无需硬编码名单
+    # templates/instance/ 即实例模板白名单——目录按消费方划分，无需硬编码名单
     # （项目脚手架在 templates/project/，由 init_project / init_app 消费）
-    data_templates = templates_dir / "data"
+    data_templates = templates_dir / "instance"
     if not data_templates.is_dir():
         if verbose:
             print(f"ℹ️ 未找到实例模板目录 {data_templates}，跳过渲染")
@@ -54,7 +57,7 @@ def render_instance_configs(
 
     for tpl in sorted(data_templates.glob("*.template.json")):
         target_name = tpl.name.replace(".template.json", ".json")
-        # 模板渲染产物一律落 .data/templates/，与源模板同名，路径即来源指针
+        # 模板渲染产物一律落 .entropaxis/data/templates/，与源模板同名，路径即来源指针
         target = data_dir / "templates" / target_name
         if target.exists():
             continue
@@ -66,7 +69,7 @@ def render_instance_configs(
             )
             rendered += 1
             if verbose:
-                print(f"✅ 已从模板渲染 .data/templates/{target_name}（首次，空 providers）")
+                print(f"✅ 已从模板渲染 .entropaxis/data/templates/{target_name}（首次，空 providers）")
         except Exception as exc:
             if verbose:
                 print(f"❌ 渲染 {target_name} 失败: {exc}", file=sys.stderr)
@@ -100,19 +103,19 @@ def render_instance_configs(
             tmp_path.replace(target)
             rendered += 1
             if verbose:
-                print(f"✅ 已从模板渲染 .data/templates/{target_name}（首次，占位符已替换为目录名兜底）")
+                print(f"✅ 已从模板渲染 .entropaxis/data/templates/{target_name}（首次，占位符已替换为目录名兜底）")
         except Exception as exc:
             if verbose:
                 print(f"❌ 渲染 {target_name} 失败: {exc}", file=sys.stderr)
             success = False
 
     if verbose and rendered == 0:
-        print("ℹ️ .data/ 实例模板无需渲染（目标文件已全部存在）")
+        print("ℹ️ .entropaxis/data/ 实例模板无需渲染（目标文件已全部存在）")
     return success
 
 
 def stamp_new_instances(verbose: bool = True) -> None:
-    """给刚渲染出来的 `.data/` 实例文件补盖来源与写入策略标记。
+    """给刚渲染出来的 `.entropaxis/data/` 实例文件补盖来源与写入策略标记。
 
     渲染与盖章分属两个工具，但对新工作区来说是同一件事的两半：不在初始化里闭合，
     新人第一次体检就会看到几条"实例文件缺来源标记"建议，而这批文件恰恰是初始化
@@ -131,12 +134,12 @@ def stamp_new_instances(verbose: bool = True) -> None:
             sys.path.remove(str(tools_dir))
     stamped = sum(1 for p in provenance.target_files() if provenance.stamp(p))
     if verbose and stamped:
-        print(f"✅ 已为 {stamped} 个 .data/ 实例文件补盖来源标记")
+        print(f"✅ 已为 {stamped} 个 .entropaxis/data/ 实例文件补盖来源标记")
 
 
 def sync_entrypoints(verbose: bool = True) -> bool:
     """
-    将 .system/entrypoints 下的根入口真源物理同步至工作区根目录。
+    将 .entropaxis/entrypoints 下的根入口真源物理同步至工作区根目录。
     为避免 Synology Drive / 云同步网盘在跨平台同步时对软链接产生 Conflict 冲突，
     采用幂等文件复制（shutil.copy2）作为标准同步策略。
     """
@@ -164,7 +167,7 @@ def sync_entrypoints(verbose: bool = True) -> bool:
                 dst.unlink()
             shutil.copy2(src, dst)
             if verbose:
-                print(f"✅ 入口文件同步就绪: {filename} <- .system/entrypoints/{filename}")
+                print(f"✅ 入口文件同步就绪: {filename} <- .entropaxis/entrypoints/{filename}")
         except Exception as e:
             if verbose:
                 print(f"❌ 入口同步失败 ({filename}): {e}", file=sys.stderr)
@@ -265,7 +268,7 @@ def _report_opener(config: dict) -> None:
     如自建 CLI）不会出现在检测结果里，于是每次运行都像被重置了一样，
     进而诱导 Agent 去"修正"配置，把人工仲裁值真的覆盖掉。
     """
-    print("📖 当前生效的文件打开器映射（.data/templates/file-opener.json）：")
+    print("📖 当前生效的文件打开器映射（.entropaxis/data/templates/file-opener.json）：")
     for info in config.get("associations", {}).values():
         mark = "🔒人工仲裁" if info.get("arbitrated") else "自动匹配"
         exts = ", ".join(info.get("extensions", []))
@@ -304,14 +307,14 @@ def _write_opener_config(target_file: Path, config: dict, verbose: bool) -> None
         with open(target_file, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
         if verbose:
-            print("✅ 已成功生成本机打开器配置: .data/templates/file-opener.json")
+            print("✅ 已成功生成本机打开器配置: .entropaxis/data/templates/file-opener.json")
     except Exception as e:
         if verbose:
-            print(f"❌ 写入 .data/templates/file-opener.json 失败: {e}", file=sys.stderr)
+            print(f"❌ 写入 .entropaxis/data/templates/file-opener.json 失败: {e}", file=sys.stderr)
 
 def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system_dir: Path | None = None) -> dict:
     """
-    初始化或自愈本机文件打开器关联配置 (.data/templates/file-opener.json)。
+    初始化或自愈本机文件打开器关联配置 (.entropaxis/data/templates/file-opener.json)。
 
     合并保留策略（默认）：目标配置存在且合法时，仅回填缺失的格式与字段，
     人工仲裁的 selected_app/command 持久保留，内容无变化时不重写文件；
@@ -320,8 +323,8 @@ def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system
     """
     tools_dir = Path(__file__).resolve().parent
     system_dir = Path(system_dir) if system_dir is not None else tools_dir.parent
-    data_dir = system_dir.parent / ".data"
-    template_file = system_dir / "templates" / "data" / "file-opener.template.json"
+    data_dir = system_dir / "data"
+    template_file = system_dir / "templates" / "instance" / "file-opener.template.json"
     target_file = data_dir / "templates" / "file-opener.json"
 
     if not template_file.exists():
@@ -373,15 +376,32 @@ def print_windows_hints() -> None:
     再行操作；否则直接放弃该路径。
   • PowerShell 输出异常：若 PowerShell 返回空或报错，改用 cmd /c 执行等效命令，
     或用 Out-File 将输出写入临时文件再读取。
-  • 目录可见性：安装后需隐藏 .system 和 .data 目录：
-    attrib +h +s <工作区路径>\\.system
-    attrib +h +s <工作区路径>\\.data
+  • 目录可见性：安装后需隐藏 .entropaxis 目录（data/ 已在其内，一并隐藏）：
+    attrib +h +s <工作区路径>\\.entropaxis
 """)
+
+def print_legacy_layout_hint() -> None:
+    """检测工作区根目录下的旧布局残留（.system/ 或 .data/），只提示不自动迁移。
+
+    两种成因（旧版本升级遗留 / 某写入方未按契约在根目录误建）现场无法区分，
+    因此文案不区分来源，只给出统一的人工迁移指引；全量搬迁须由用户显式指令
+    触发，不得由初始化顺带执行（见《控制面布局》「.data/ 写入规约」硬约束 3）。
+    """
+    found = paths.legacy_layout_present()
+    if not found:
+        return
+    print("\n⚠️ 检测到工作区根目录下存在旧布局残留：" + "、".join(found))
+    print("👉 请人工确认后手动迁移，不会自动执行：")
+    if paths.LEGACY_SYSTEM_DIRNAME in found:
+        print(f"   mv {paths.LEGACY_SYSTEM_DIRNAME} {paths.SYSTEM_DIRNAME}")
+    if paths.LEGACY_DATA_DIRNAME in found:
+        print(f"   mv {paths.LEGACY_DATA_DIRNAME} {paths.SYSTEM_DIRNAME}/data")
+
 
 if __name__ == "__main__":
     print("🚀 开始初始化/自愈工作区配置...")
 
-
+    print_legacy_layout_hint()
 
     if sync_entrypoints(verbose=True):
         # 看板 Token 检查延后到首次实际使用看板 Skill 时触发（见《工作流指令》初始化章节），

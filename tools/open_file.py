@@ -10,8 +10,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
-DEFAULT_CONFIG_PATH = WORKSPACE_ROOT / ".data" / "templates" / "file-opener.json"
+try:
+    from . import paths
+except ImportError:
+    import paths
+
+WORKSPACE_ROOT = paths.WORKSPACE_ROOT
+DEFAULT_CONFIG_PATH = paths.DATA_DIR / "templates" / "file-opener.json"
 
 
 def _load_config(path: Path) -> tuple[dict, str]:
@@ -212,7 +217,7 @@ def open_paths(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="按 .data/templates/file-opener.json 打开文件；仅在配置缺失或失败时降级。"
+        description="按 .entropaxis/data/templates/file-opener.json 打开文件；仅在配置缺失或失败时降级。"
     )
     parser.add_argument("paths", nargs="+", help="要打开的文件或目录，可一次传入多个")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="打开器配置路径")

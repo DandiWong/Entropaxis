@@ -41,4 +41,4 @@ docs/YYYYMMDD_主题/
 
 日期与主旨之间只有一个下划线；主旨使用英文 PascalCase 名词/动词短语，不含空格、连字符或额外下划线。task spec 使用 `TaskID_PascalCaseTopic.md`（不带日期前缀，日期只在档头 `generated: { at: … }` 注明），例如 `Bug-28_StageLogLost.md`。固定入口、工作流文件、机器契约和有正式命名要求的专用模板除外。
 
-> 命名规范唯一真源：交付物命名在工作区 `.system/rules/项目组织.md`，task spec 命名在 `.system/rules/软件工程.md`；本文件是随项目分发的离线副本，规范更新时同步。
+> 命名规范唯一真源：交付物命名在工作区 `.entropaxis/rules/项目组织.md`，task spec 命名在 `.entropaxis/rules/软件工程.md`；本文件是随项目分发的离线副本，规范更新时同步。

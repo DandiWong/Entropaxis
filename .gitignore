@@ -7,3 +7,8 @@ __pycache__/
 
 # Skill 分发包构建产物（本地生成，不入库）
 skills/*.zip
+
+# 实例面：文件一旦存在即人工真源，见 rules/控制面布局.md「data/ 写入规约」
+# 必须带前导斜杠锚定顶层——无锚点会匹配任意层级同名目录，误伤已跟踪的
+# templates/instance/（历史上曾叫 templates/data/，与此互为前车之鉴）
+/data/

@@ -8,7 +8,7 @@ metadata:
 
 # 🛠️ Tool Crafter — 机制工具化与高级工具研发套件
 
-本 Skill 提供将工作区高频操作、复合 CLI 命令、机械规则计算或破坏性动作**标准化转化为系统级工具 (`.system/tools/<name>.py`)** 的端到端自动化流水线。
+本 Skill 提供将工作区高频操作、复合 CLI 命令、机械规则计算或破坏性动作**标准化转化为系统级工具 (`.entropaxis/tools/<name>.py`)** 的端到端自动化流水线。
 
 核心方法论依据：
 - 规则真源：[`../../rules/工具设计.md`](../../rules/工具设计.md)（形态判定见 `知识沉淀.md`）
@@ -32,10 +32,10 @@ metadata:
 ```text
 Phase 1: 机制准入审查 (Funnel)   ➔ 核对《工具设计》五维判据（确定性/频次/安全/ROI/零绑定）
 Phase 2: 接口与契约设计 (Spec)  ➔ 确定动词_名词、参数类型清洗、结构化输出与行动导向报错
-Phase 3: 纯标准库代码编写 (Code) ➔ 基于 templates/tool.template.py 生成 .system/tools/<name>.py
-Phase 4: 自动化单测驱动 (TDD)    ➔ 编写 .system/tests/test_<name>.py（覆盖正常与边界拦截）
+Phase 3: 纯标准库代码编写 (Code) ➔ 基于 templates/tool.template.py 生成 .entropaxis/tools/<name>.py
+Phase 4: 自动化单测驱动 (TDD)    ➔ 编写 .entropaxis/tests/test_<name>.py（覆盖正常与边界拦截）
 Phase 5: 双重体检门禁 (Verify)  ➔ 跑通 unittest (100%) 与 lint_workspace.py (全绿)
-Phase 6: 路由装配与交付验证 (Done)➔ 挂载使用说明至 .data/rules/tips.md，给出检查对象/证据/结论/未覆盖范围
+Phase 6: 路由装配与交付验证 (Done)➔ 挂载使用说明至 .entropaxis/data/rules/tips.md，给出检查对象/证据/结论/未覆盖范围
 ```
 
 ---
@@ -43,7 +43,7 @@ Phase 6: 路由装配与交付验证 (Done)➔ 挂载使用说明至 .data/rules
 ## 3. 详细执行 SOP
 
 ### Phase 1 · 机制准入审查 (Funnel Check)
-在写任何代码前，先对照 [`.system/rules/工具设计.md`](../../rules/工具设计.md) 第 2 节逐项检查：
+在写任何代码前，先对照 [`.entropaxis/rules/工具设计.md`](../../rules/工具设计.md) 第 2 节逐项检查：
 1. **确定性**：逻辑是否具备确定性输入输出（非主观润色/文本发散）？
 2. **复用频次**：是否跨项目复用或为日常核心高频操作？
 3. **安全收敛**：能否将原本开放的任意 Shell 收敛为受控参数？
@@ -60,13 +60,13 @@ Phase 6: 路由装配与交付验证 (Done)➔ 挂载使用说明至 .data/rules
    - `👉 修复建议: ...（指导 Agent 如何修改参数或修复环境）`
 
 ### Phase 3 · 代码编写 (Code Generation)
-参考 `templates/tool.template.py` 编写 `.system/tools/<name>.py`：
+参考 `templates/tool.template.py` 编写 `.entropaxis/tools/<name>.py`：
 - **纯 Python 标准库**：严格禁止 `import` 第三方未内置包；
 - **零系统绑定**：严禁出现业务机构名、测试环境 IP/本地主机地址或私有密钥；
 - **原子暂存**：涉及文件写入时，必须在 `tempfile.TemporaryDirectory` 中生成后原子替换。
 
 ### Phase 4 · 自动化单测编写 (TDD)
-在 `.system/tests/test_<name>.py` 中编写标准 `unittest.TestCase`：
+在 `.entropaxis/tests/test_<name>.py` 中编写标准 `unittest.TestCase`：
 - 测试正常执行路径与输出结果；
 - 测试非法输入时是否抛出带修复指引的 `ToolError`；
 - 测试 `--json` 格式解析是否合规。
@@ -74,11 +74,11 @@ Phase 6: 路由装配与交付验证 (Done)➔ 挂载使用说明至 .data/rules
 ### Phase 5 · 双重体检门禁 (Dual Gate)
 在终端执行双重验证：
 ```bash
-python3 -m unittest discover -s .system/tests -t .system
-python3 .system/tools/lint_workspace.py
+python3 -m unittest discover -s .entropaxis/tests -t .entropaxis
+python3 .entropaxis/tools/lint_workspace.py
 ```
 必须确保单元测试与工作区体检全部通过。
 
 ### Phase 6 · 路由装配与交付验证 (Wire & Deliver)
-1. 在 `.data/rules/tips.md` 追加该工具的操作提示（`- TIP：...`）；
-2. 依据 [`.system/rules/软件工程.md`](../../rules/软件工程.md)「检查按影响选」给出检查对象/证据/结论/未覆盖范围，交付成果。
+1. 在 `.entropaxis/data/rules/tips.md` 追加该工具的操作提示（`- TIP：...`）；
+2. 依据 [`.entropaxis/rules/软件工程.md`](../../rules/软件工程.md)「检查按影响选」给出检查对象/证据/结论/未覆盖范围，交付成果。

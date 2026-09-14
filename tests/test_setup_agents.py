@@ -20,7 +20,7 @@ from tools.setup_agents import (
 )
 
 SAMPLE_CONFIG_WITH_FULL_ROLES = """---
-source: .system/templates/workspace-config.template.md
+source: .entropaxis/templates/instance/workspace-config.template.md
 managed_by: bootstrap.py
 policy: merge-only
 ---
@@ -49,7 +49,7 @@ policy: merge-only
 """
 
 SAMPLE_CONFIG_OLD_REVIEWER_ONLY = """---
-source: .system/templates/workspace-config.template.md
+source: .entropaxis/templates/instance/workspace-config.template.md
 ---
 
 # 工作区配置
@@ -109,7 +109,7 @@ class SetupAgentsTests(TestCase):
 
         content = self.config_file.read_text(encoding="utf-8")
         # 验证保留了原有的 Front Matter 和组织名称
-        self.assertIn("source: .system/templates/workspace-config.template.md", content)
+        self.assertIn("source: .entropaxis/templates/instance/workspace-config.template.md", content)
         self.assertIn("「示例组织」", content)
         # 验证更新了角色
         self.assertIn("claude", content)

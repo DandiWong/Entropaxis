@@ -5,7 +5,7 @@
 本工具取到载荷，随后用 PyInstaller 把 `install_windows.py` 与这份载荷一起冻结成单文件
 exe——exe 双击即装，全程不联网、不拉远端。本工具本身不做冻结（那一步需要 Windows）。
 
-载荷一律取自 `git archive`（版本库跟踪集），而非文件系统上的 `.system/` 目录——私有 Skill
+载荷一律取自 `git archive`（版本库跟踪集），而非文件系统上的 `.entropaxis/` 目录——私有 Skill
 靠自带 `.gitignore` 排除出版本库但物理仍在，直接打包目录会把内部端点连同业务口径一起发出去。
 《README》分发信道条款因此在这里由取数方式本身兑现，不依赖调用者记得绕开哪些目录。
 

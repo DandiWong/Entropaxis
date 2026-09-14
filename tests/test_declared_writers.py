@@ -11,11 +11,12 @@ import textwrap
 import unittest
 from pathlib import Path
 
+from tools import paths
 from tools.lint_workspace import check_declared_writers
 
 
 def _mk_control_plane(root: Path, known: str, *, tools: dict | None = None, skills: dict | None = None) -> None:
-    system = root / ".system"
+    system = root / paths.SYSTEM_DIRNAME
     (system / "tools").mkdir(parents=True, exist_ok=True)
     (system / "tools" / "stamp_data_provenance.py").write_text(
         textwrap.dedent(f"""\
@@ -81,7 +82,7 @@ class DeclaredWriterTests(unittest.TestCase):
             root = Path(td)
             _mk_control_plane(
                 root,
-                '{"x.json": {"source": ".system/templates/x.template.json", "managed_by": "人工"}}',
+                '{"x.json": {"source": ".entropaxis/templates/x.template.json", "managed_by": "人工"}}',
             )
             issues = check_declared_writers(root)
             self.assertTrue(any("来源声明失效" in i for i in issues), issues)

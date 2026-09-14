@@ -7,11 +7,11 @@
 
 两种用法：
   只读复核（兼容旧用法）：
-    python3 .system/tools/check_audit_gate.py <审计报告路径>
+    python3 .entropaxis/tools/check_audit_gate.py <审计报告路径>
   原子校验并提交（拟写入的关闭后状态一次性校验+落盘，closed 与 waived_by_user 均须过此关）：
-    python3 .system/tools/check_audit_gate.py --candidate <候选报告路径> --commit <目标路径>
+    python3 .entropaxis/tools/check_audit_gate.py --candidate <候选报告路径> --commit <目标路径>
 
-字段契约见 .system/schemas/audit_report.schema.json。schema_version 缺失
+字段契约见 .entropaxis/schemas/audit_report.schema.json。schema_version 缺失
 按旧 independence 契约只读解析；**只要 Front Matter 出现 schema_version 键**（无论是否
 能解析为合法整数）即视为声明使用新契约，全量校验该契约——不会因为版本号写错就静默
 退回旧契约放行（第 4 轮外置复核实测抓到的 fail-open）。
@@ -30,8 +30,10 @@ import unicodedata
 
 try:
     from tools import validate_schema as vs
+    from tools import paths
 except ImportError:  # 以脚本方式直接运行时 tools/ 自身在 sys.path 上
     import validate_schema as vs
+    import paths
 
 FRONT_MATTER_PATTERN = re.compile(r"^[\s\u00ad\u200b-\u200f\u202a-\u202e\u2060\ufeff]*---\n(.*?)\n---", re.DOTALL)
 
@@ -591,10 +593,10 @@ def check_report(text: str) -> list[str]:
 
 
 def _find_workspace_root(start: Path) -> Path | None:
-    """从 start 向上找到以 `.system` 为子目录的工作区根；找不到返回 None。"""
+    """从 start 向上找到以 `.entropaxis` 为子目录的工作区根；找不到返回 None。"""
     current = start.resolve()
     for _ in range(8):
-        if (current / ".system").is_dir():
+        if (current / paths.SYSTEM_DIRNAME).is_dir():
             return current
         if current.parent == current:
             return None

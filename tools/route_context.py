@@ -4,8 +4,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
-_RULE_PATH = re.compile(r"\.system/rules/[^/\\]+\.md")
+try:
+    from . import paths
+except ImportError:
+    import paths
+
+WORKSPACE_ROOT = paths.WORKSPACE_ROOT
+_RULE_PATH = re.compile(r"\.entropaxis/rules/[^/\\]+\.md")
 _HEADING = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?)|[ \t]*)$")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
@@ -72,7 +77,7 @@ def resolve_route_reads(route: dict, root: Path = WORKSPACE_ROOT) -> list[dict]:
             raise ValueError("每个 reads 项必须且只能包含 file、anchor。")
         file, anchor = item["file"], item["anchor"]
         if not isinstance(file, str) or not _RULE_PATH.fullmatch(file):
-            raise ValueError("reads.file 须指向 .system/rules/ 下的 Markdown 文件。")
+            raise ValueError("reads.file 须指向 .entropaxis/rules/ 下的 Markdown 文件。")
         if anchor is not None and (not isinstance(anchor, str) or not re.match(r"^#{1,6} \S", anchor)):
             raise ValueError(f"{file} 的 anchor 须为标题原文或 null（全文）。")
         by_file.setdefault(file, []).append(item)
@@ -82,7 +87,7 @@ def resolve_route_reads(route: dict, root: Path = WORKSPACE_ROOT) -> list[dict]:
     for file, items in by_file.items():
         path = root / file
         try:
-            path.resolve().relative_to(root / ".system" / "rules")
+            path.resolve().relative_to(root / paths.SYSTEM_DIRNAME / "rules")
         except ValueError:
             raise ValueError(f"{file} 越出规则目录，拒绝读取；请修正路径或软链。")
         try:

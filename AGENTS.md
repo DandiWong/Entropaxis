@@ -20,10 +20,10 @@
 1. **归属判别与最小修改**：按元规则确认内容唯一归属；修改 `entrypoints/AGENTS.md` 时同步工作区根 `AGENTS.md`。
 2. **单一真源与去重**：禁止在 `rules/` 中出现具体业务系统名称或在项目入口复制规则正文。
 3. **双重体检门禁（必须通过）**：
-   - 单元测试：`python3 -m unittest discover -s tests -t .`（在 `.system` 目录下）
+   - 单元测试：`python3 -m unittest discover -s tests -t .`（在 `.entropaxis` 目录下）
    - 工作区体检：`python3 tools/lint_workspace.py`（全部阻断项与治理建议项通过）
 4. **交付验证**：每次系统自迭代完成后，按《软件工程》「检查按影响选」给出检查对象/证据/结论/未覆盖范围，不产出数字评分。
-5. **Git 交付（仅限 .system 本身）**：
-   - 精确 `git add <file>` 暂存 `.system/` 变更文件；
+5. **Git 交付（仅限 .entropaxis 本身）**：
+   - 精确 `git add <file>` 暂存 `.entropaxis/` 变更文件；
    - 验证通过且无阻断问题时，自动执行 `git commit`；**远程写入按用户指令单独判断，不自动 `git push`**（“有权限”不等于“已授权”）；
    - ⚠️ **严禁对业务项目仓库执行自动提交或推送**。

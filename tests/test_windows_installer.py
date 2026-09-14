@@ -1,6 +1,6 @@
 """Windows exe 安装包：载荷导出侧与安装侧的契约测试。
 
-覆盖三处容易静默失效的地方：安装只写 `.system/` 不碰 `.data/`、越界成员路径必须阻断、
+覆盖三处容易静默失效的地方：安装只写 `.entropaxis/` 不碰 `.entropaxis/data/`、越界成员路径必须阻断、
 以及初始化不得经 `sys.executable` 起子进程（冻结后那会递归重启安装程序）。
 """
 
@@ -38,21 +38,21 @@ class InstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "工作区"
             root.mkdir()
-            (root / ".data").mkdir()
-            (root / ".data" / "凭据.md").write_text("用户数据", encoding="utf-8")
+            (root / installer.SYSTEM_DIRNAME / "data").mkdir(parents=True)
+            (root / installer.SYSTEM_DIRNAME / "data" / "凭据.md").write_text("用户数据", encoding="utf-8")
 
             res = installer.install(_fake_payload(), root)
 
             self.assertEqual(res["mode"], "install")
-            self.assertTrue((root / ".system" / "tools" / "bootstrap.py").is_file())
-            self.assertEqual((root / ".data" / "凭据.md").read_text(encoding="utf-8"), "用户数据")
+            self.assertTrue((root / installer.SYSTEM_DIRNAME / "tools" / "bootstrap.py").is_file())
+            self.assertEqual((root / installer.SYSTEM_DIRNAME / "data" / "凭据.md").read_text(encoding="utf-8"), "用户数据")
 
     def test_reinstall_keeps_local_private_skills(self) -> None:
         """覆盖合并而非整目录替换：收件方自己放的私有能力不能被升级抹掉。"""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             installer.install(_fake_payload(), root)
-            private = root / ".system" / "skills" / "私有能力" / "SKILL.md"
+            private = root / installer.SYSTEM_DIRNAME / "skills" / "私有能力" / "SKILL.md"
             private.parent.mkdir(parents=True)
             private.write_text("本机私有", encoding="utf-8")
 
@@ -63,7 +63,7 @@ class InstallTests(unittest.TestCase):
 
     def test_choosing_system_dir_itself_is_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            wrong = Path(tmp) / ".system"
+            wrong = Path(tmp) / installer.SYSTEM_DIRNAME
             wrong.mkdir()
             with self.assertRaises(installer.ToolError) as ctx:
                 installer.install(_fake_payload(), wrong)
@@ -124,7 +124,7 @@ class BootstrapExecutionTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            script = root / ".system" / "tools" / "bootstrap.py"
+            script = root / installer.SYSTEM_DIRNAME / "tools" / "bootstrap.py"
             script.parent.mkdir(parents=True)
             script.write_text(
                 "from pathlib import Path\n"
@@ -142,7 +142,7 @@ class BootstrapExecutionTests(unittest.TestCase):
     def test_bootstrap_failure_is_reported_not_swallowed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            script = root / ".system" / "tools" / "bootstrap.py"
+            script = root / installer.SYSTEM_DIRNAME / "tools" / "bootstrap.py"
             script.parent.mkdir(parents=True)
             script.write_text("raise RuntimeError('模板缺失')\n", encoding="utf-8")
 

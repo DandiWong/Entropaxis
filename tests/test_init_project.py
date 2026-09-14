@@ -7,6 +7,7 @@ SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
+from tools import paths
 from tools.backfill_frontmatter import classify
 from tools.init_app import AppInitError, init_app
 from tools.init_project import ProjectInitError, init_project
@@ -155,13 +156,13 @@ class InitProjectTests(TestCase):
             self.assertEqual(check(workspace), [], check.__name__)
 
     def test_missing_data_declaration_is_advisory_not_blocking(self) -> None:
-        """未落地的 .data/ 实例声明只进建议项——否则新克隆的工作区开箱即体检失败。"""
+        """未落地的 data/ 实例声明只进建议项——否则新克隆的工作区开箱即体检失败。"""
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)
-            rules = workspace / ".system" / "rules"
+            rules = workspace / paths.SYSTEM_DIRNAME / "rules"
             rules.mkdir(parents=True)
             (rules / "示例规则.md").write_text(
-                "参数见 [`.data/rules/示例配置.md`](../../.data/rules/示例配置.md)。\n",
+                "参数见 [`.entropaxis/data/rules/示例配置.md`](../data/rules/示例配置.md)。\n",
                 encoding="utf-8",
             )
             self.assertEqual(check_system_markdown_links(workspace), [])
@@ -169,14 +170,14 @@ class InitProjectTests(TestCase):
             self.assertEqual(len(advisories), 1, advisories)
             self.assertIn("实例声明待落地", advisories[0])
 
-            (workspace / ".data" / "rules").mkdir(parents=True)
-            (workspace / ".data" / "rules" / "示例配置.md").write_text("x\n", encoding="utf-8")
+            (workspace / paths.SYSTEM_DIRNAME / "data" / "rules").mkdir(parents=True)
+            (workspace / paths.SYSTEM_DIRNAME / "data" / "rules" / "示例配置.md").write_text("x\n", encoding="utf-8")
             self.assertEqual(check_data_declaration_links(workspace), [])
 
     def test_zero_system_binding_flags_hardcoded_local_endpoint(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)
-            tools_dir = workspace / ".system" / "tools"
+            tools_dir = workspace / paths.SYSTEM_DIRNAME / "tools"
             tools_dir.mkdir(parents=True)
             # 拆开拼接端点字面量，避免测试源码自身命中端点禁词
             (tools_dir / "demo.py").write_text('URL = "http://127.0' ".0.1:9000" '\n', encoding="utf-8")

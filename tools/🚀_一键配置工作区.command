@@ -9,7 +9,7 @@ echo "🚀 正在为您初始化智能工作区环境..."
 echo "========================================================"
 echo ""
 
-python3 .system/tools/bootstrap.py
+python3 .entropaxis/tools/bootstrap.py
 
 echo ""
 echo "========================================================"

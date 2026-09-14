@@ -23,7 +23,7 @@ metadata:
 
 信息不足时允许填写“待补充”，但项目名称必须明确。
 
-初始化前先确认目标目录不存在；如需关联看板，使用工作区声明的主看板 Provider CLI（`.data/templates/board_config.json` 的 `main` 角色；不手写 HTTP 请求，不走本地端口，子命令以其 `--help` 为准）：
+初始化前先确认目标目录不存在；如需关联看板，使用工作区声明的主看板 Provider CLI（`.entropaxis/data/templates/board_config.json` 的 `main` 角色；不手写 HTTP 请求，不走本地端口，子命令以其 `--help` 为准）：
 
 - 关联现有项目：`project get <id>` 确认项目存在，把项目 ID 写入本项目 `docs/.board.json`（结构见《看板联动.md》）。
 - 创建新项目：`project add --name "<项目名>"`，取响应中的项目 ID 写入 `docs/.board.json`。
@@ -31,7 +31,7 @@ metadata:
 
 主看板 Provider 未声明或不可用时，不得直连其底层数据存储；完成目录初始化但明确报告尚未关联，优雅降级为纯本地离线初始化。
 
-从 `.system` 根目录调用（初始化通用业务/综合项目）：
+从 `.entropaxis` 根目录调用（初始化通用业务/综合项目）：
 
 ```bash
 python3 tools/init_project.py "<项目名>" \
@@ -45,7 +45,7 @@ python3 tools/init_project.py "<项目名>" \
   --dashboard-project-id "<主看板返回或确认的项目ID>"
 ```
 
-该命令创建标准的通用项目分层结构（`RawInput/`、`01_项目管理/`、`02_产品设计/`、`03_工程研发/`、`04_运营增长/`、`Archive/` 以及 `README.md`、`01_项目管理/DECISIONS.md`、`AGENTS.md`、`CLAUDE.md`），并把该项目**自动追加**进 `.data/templates/registry.md` 映射表（append-only，重复立项不产生第二行）——**不要再手工补写这一行**。
+该命令创建标准的通用项目分层结构（`RawInput/`、`01_项目管理/`、`02_产品设计/`、`03_工程研发/`、`04_运营增长/`、`Archive/` 以及 `README.md`、`01_项目管理/DECISIONS.md`、`AGENTS.md`、`CLAUDE.md`），并把该项目**自动追加**进 `.entropaxis/data/templates/registry.md` 映射表（append-only，重复立项不产生第二行）——**不要再手工补写这一行**。
 
 当项目需要在 `03_工程研发/<app>/` 下初始化独立软件工程代码仓库时，调用软件工程脚手架：
 

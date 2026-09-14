@@ -13,10 +13,10 @@ class HookRouteMatchTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        (self.root / '.system/rules').mkdir(parents=True)
+        (self.root / '.entropaxis/rules').mkdir(parents=True)
 
     def rule(self, name, text):
-        file = '.system/rules/' + name + '.md'
+        file = '.entropaxis/rules/' + name + '.md'
         (self.root / file).write_text(text, encoding='utf-8')
         return file
 
@@ -65,28 +65,28 @@ class HookRouteMatchTests(unittest.TestCase):
                 self.assertIn('回退全文', build_additional_context([route], self.root))
 
     def test_unreadable_dependency_is_not_successful_empty_read(self):
-        route = {'mechanism': 'test', 'reads': [{'file': '.system/rules/missing.md', 'anchor': None}]}
+        route = {'mechanism': 'test', 'reads': [{'file': '.entropaxis/rules/missing.md', 'anchor': None}]}
         plan = resolve_route_reads(route, self.root)
         self.assertTrue(plan[0]['missing'])
         self.assertIsNone(plan[0]['start_line'])
         self.assertIn('读取未完成', build_additional_context([route], self.root))
 
     def test_rule_path_cannot_escape_control_plane(self):
-        for file in ('../private.md', '.system/rules/../../private.md'):
+        for file in ('../private.md', '.entropaxis/rules/../../private.md'):
             with self.subTest(file=file), self.assertRaises(ValueError):
                 resolve_route_reads({'reads': [{'file': file, 'anchor': None}]}, self.root)
         outside = self.root / 'private.md'
         outside.write_text('private', encoding='utf-8')
-        (self.root / '.system/rules/link.md').symlink_to(outside)
+        (self.root / '.entropaxis/rules/link.md').symlink_to(outside)
         with self.assertRaises(ValueError):
-            resolve_route_reads({'reads': [{'file': '.system/rules/link.md', 'anchor': None}]}, self.root)
+            resolve_route_reads({'reads': [{'file': '.entropaxis/rules/link.md', 'anchor': None}]}, self.root)
 
     def test_schema_rejects_old_contract_and_invalid_anchor_types(self):
         schema = load_schema('route_map')
         base = {'_meta': {'purpose': 'test', 'source_of_truth': 'test'}, 'routes': []}
         for anchor in (None, '## Section'):
             base['routes'] = [{'mechanism': 'test', 'keywords': ['test'], 'reads': [
-                {'file': '.system/rules/test.md', 'anchor': anchor}]}]
+                {'file': '.entropaxis/rules/test.md', 'anchor': anchor}]}]
             self.assertEqual(validate(base, schema), [])
         for anchor in (True, 3, [], ''):
             base['routes'][0]['reads'][0]['anchor'] = anchor

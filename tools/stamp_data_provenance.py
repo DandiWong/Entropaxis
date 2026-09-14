@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""为 .data/ 顶层实例文件加盖来源与写入策略标记 (Data Provenance Stamper).
+"""为 data/ 顶层实例文件加盖来源与写入策略标记 (Data Provenance Stamper).
 
 解决两个问题：
-  1. `.data/` 目录人眼看不出每个文件从哪来、谁在维护、能不能重写；
+  1. `data/` 目录人眼看不出每个文件从哪来、谁在维护、能不能重写；
   2. 缺少「已存在即不得整体重写」的显式声明，导致人工配置被 Agent 覆盖。
 
 Markdown 加 YAML Front Matter，JSON 加 `_meta` 键。已有标记的文件只补缺失字段，
 不覆盖既有取值——本工具自身必须遵守它所声明的 merge-only 策略。
 
 执行方式:
-  python3 .system/tools/stamp_data_provenance.py            # 补盖缺失标记
-  python3 .system/tools/stamp_data_provenance.py --check    # 只报告不写入，缺标记时退出码 1
+  python3 .entropaxis/tools/stamp_data_provenance.py            # 补盖缺失标记
+  python3 .entropaxis/tools/stamp_data_provenance.py --check    # 只报告不写入，缺标记时退出码 1
 """
 
 from __future__ import annotations
@@ -20,9 +20,13 @@ import json
 import sys
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-WORKSPACE_ROOT = HERE.parent.parent
-DATA_DIR = WORKSPACE_ROOT / ".data"
+try:
+    from . import paths
+except ImportError:
+    import paths
+
+WORKSPACE_ROOT = paths.WORKSPACE_ROOT
+DATA_DIR = paths.DATA_DIR
 
 VALID_POLICIES = ("merge-only", "append-only", "regenerate-safe")
 
@@ -30,23 +34,23 @@ VALID_POLICIES = ("merge-only", "append-only", "regenerate-safe")
 # 默认最保守：不确定来源时一律当人工真源保护，宁可少改不可误删。
 KNOWN: dict[str, dict[str, str]] = {
     "file-opener.json": {
-        "source": ".system/templates/data/file-opener.template.json",
+        "source": ".entropaxis/templates/instance/file-opener.template.json",
         "managed_by": "bootstrap.py init_file_opener",
         "policy": "merge-only",
         "note": "标 arbitrated 的条目为人工仲裁，任何写入方不得覆盖；全量重扫须显式 --force-rescan-opener",
     },
     "board_config.json": {
-        "source": ".system/templates/data/board_config.template.json",
+        "source": ".entropaxis/templates/instance/board_config.template.json",
         "managed_by": "bootstrap.py render_instance_configs（仅缺失时渲染）",
         "policy": "merge-only",
     },
     "workspace-config.md": {
-        "source": ".system/templates/data/workspace-config.template.md",
+        "source": ".entropaxis/templates/instance/workspace-config.template.md",
         "managed_by": "bootstrap.py render_instance_configs（仅缺失时渲染）+ 人工填写",
         "policy": "merge-only",
     },
     "registry.md": {
-        "source": ".system/templates/data/registry.template.md",
+        "source": ".entropaxis/templates/instance/registry.template.md",
         "managed_by": "init_project.py 立项时追加映射行 + 人工维护排除规则与备注",
         "policy": "merge-only",
     },
@@ -70,7 +74,7 @@ KNOWN: dict[str, dict[str, str]] = {
 FALLBACK = {"source": "未登记（按人工真源保护）", "managed_by": "人工", "policy": "merge-only"}
 
 
-# 三个来源桶：路径本身即指向定义方（见 rules/01_根系统治理.md「.data/ 目录结构」）
+# 三个来源桶：路径本身即指向定义方（见 rules/01_根系统治理.md「.entropaxis/data/ 目录结构」）
 SOURCE_BUCKETS = ("templates", "rules", "skills")
 
 
@@ -126,28 +130,28 @@ def stamp(path: Path) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="为 .data/ 顶层实例文件加盖来源与写入策略标记")
+    parser = argparse.ArgumentParser(description="为 .entropaxis/data/ 顶层实例文件加盖来源与写入策略标记")
     parser.add_argument("--check", action="store_true", help="只报告不写入；存在缺标记文件时退出码 1")
     args = parser.parse_args()
 
     files = target_files()
     if not files:
-        print("ℹ️ .data/ 下没有需要加盖标记的顶层 .md/.json 文件。")
+        print("ℹ️ .entropaxis/data/ 下没有需要加盖标记的顶层 .md/.json 文件。")
         return 0
 
     missing = [p for p in files if not has_provenance(p)]
     if args.check:
         for p in missing:
-            print(f"⚠️ 缺少来源标记: .data/{p.relative_to(DATA_DIR)}\n👉 运行 python3 .system/tools/stamp_data_provenance.py 补盖")
+            print(f"⚠️ 缺少来源标记: .entropaxis/data/{p.relative_to(DATA_DIR)}\n👉 运行 python3 .entropaxis/tools/stamp_data_provenance.py 补盖")
         print(f"{len(files) - len(missing)}/{len(files)} 个文件已有来源标记。")
         return 1 if missing else 0
 
     for p in missing:
         if stamp(p):
             meta = _meta_for(p.name)
-            print(f"✅ .data/{p.relative_to(DATA_DIR)} ← 来源 {meta['source']}｜策略 {meta['policy']}")
+            print(f"✅ .entropaxis/data/{p.relative_to(DATA_DIR)} ← 来源 {meta['source']}｜策略 {meta['policy']}")
     if not missing:
-        print(f"✅ .data/ 全部 {len(files)} 个实例文件均已有来源标记。")
+        print(f"✅ .entropaxis/data/ 全部 {len(files)} 个实例文件均已有来源标记。")
     return 0
 
 

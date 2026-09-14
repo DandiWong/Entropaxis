@@ -3,7 +3,7 @@
 
 用于定期自动维护系统规则与工作区健康度，确保 Agent 在任何情况下保持上下文窗口极简、高信噪比。
 执行方式:
-  python3 .system/tools/lint_workspace.py
+  python3 .entropaxis/tools/lint_workspace.py
 """
 
 from __future__ import annotations
@@ -15,8 +15,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from . import paths
+except ImportError:
+    import paths
+
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent.parent
+ROOT = paths.WORKSPACE_ROOT
 
 # 工作区常驻层预算
 RESIDENT_MAX_LINES = 50
@@ -32,16 +37,16 @@ RULE_MAX_LINES = 120
 RULE_DUP_WINDOW = 25
 RULE_DUP_MAX_REPORTS = 8
 
-EXCLUDE_PATTERNS = (".system", "Archive", "repoes", "skills", "node_modules", "graphify-out")
+EXCLUDE_PATTERNS = (paths.SYSTEM_DIRNAME, "Archive", "repoes", "skills", "node_modules", "graphify-out")
 
-# 零系统绑定/零真实实体禁词按实例声明外置于 .data/rules/零系统绑定词表.md：
+# 零系统绑定/零真实实体禁词按实例声明外置于 .entropaxis/data/rules/零系统绑定词表.md：
 # 词表写死在这里，等于让"防止硬编码组织名"的检查本身成为控制面里唯一硬编码组织名的
 # 文件，随版本库分发给每一个收件方（软件工程.md「检查按影响选」通用性维度「已知盲区」已记载该悖论）。
-BINDING_WORDLIST = ".data/rules/零系统绑定词表.md"
+BINDING_WORDLIST = f"{paths.SYSTEM_DIRNAME}/data/rules/零系统绑定词表.md"
 # 控制面禁止硬编码本地调试端点：外部系统交互必须经声明外置的看板/服务 CLI
 FORBIDDEN_HOST_PATTERN = re.compile(r"127\.0\.0\.1|localhost")
 
-# .system 健康度：控制面可发现、可渲染、可执行的最小契约。
+# .entropaxis 健康度：控制面可发现、可渲染、可执行的最小契约。
 SYSTEM_REQUIRED_DIRECTORIES = ("entrypoints", "rules", "config", "schemas", "templates", "tools", "skills", "tests")
 SYSTEM_REQUIRED_FILES = (
     "AGENTS.md",
@@ -122,7 +127,7 @@ def check_current_state_bloat(root: Path) -> list[str]:
 def check_rule_deduplication(root: Path) -> list[str]:
     """检查 rules/ 各文件与 AGENTS.md 之间是否存在违背单一真源的冗余复制。"""
     issues = []
-    rules_dir = root / ".system" / "rules"
+    rules_dir = root / paths.SYSTEM_DIRNAME / "rules"
     if not rules_dir.exists():
         return issues
 
@@ -153,7 +158,7 @@ def check_rule_budget(root: Path) -> list[str]:
     此前不受任何预算约束——这正是规则体量失控的结构性缺口。本检查补上该门禁。
     """
     issues = []
-    rules_dir = root / ".system" / "rules"
+    rules_dir = root / paths.SYSTEM_DIRNAME / "rules"
     if not rules_dir.exists():
         return issues
     for rf in sorted(rules_dir.glob("*.md")):
@@ -195,7 +200,7 @@ def check_rule_text_repetition(root: Path) -> list[str]:
     重复检测，不理解语义，检测不到的表述不同但含义冲突的规则不在本检查覆盖范围内。
     """
     issues = []
-    rules_dir = root / ".system" / "rules"
+    rules_dir = root / paths.SYSTEM_DIRNAME / "rules"
     if not rules_dir.exists():
         return issues
 
@@ -252,12 +257,12 @@ def check_rule_text_repetition(root: Path) -> list[str]:
 
 
 def check_schema_conformance(root: Path) -> list[str]:
-    """按 .system/schemas/ 校验结构化契约。
+    """按 .entropaxis/schemas/ 校验结构化契约。
 
     此前 route_map 的字段集、Front Matter 的取值域、审计报告的问题标注格式，
     契约都只存在于各自解析器的正则里——改规则的人无从得知自己在破坏一个解析器。
     """
-    tools = root / ".system" / "tools"
+    tools = root / paths.SYSTEM_DIRNAME / "tools"
     if not (tools / "validate_schema.py").exists():
         return []
     sys.path.insert(0, str(tools))
@@ -272,16 +277,17 @@ def check_schema_conformance(root: Path) -> list[str]:
 
 
 def check_data_source_mapping(root: Path) -> list[str]:
-    """双向核验 .data/ 路径与 .system/ 定义方的对应关系。
+    """双向核验 data/ 路径与 .entropaxis/ 定义方的对应关系。
 
-    `.data/` 按定义方分三个桶，路径本身即指向来源：
-      .data/templates/X  ⟺ .system/templates/data/X.template.*
-      .data/skills/<N>/* ⟺ .system/skills/<N>/
-      .data/rules/*      ⟺ 由某条规则声明（具体哪条见文件头 source 字段）
+    `data/` 按定义方分三个桶，路径本身即指向来源：
+      data/templates/X  ⟺ .entropaxis/templates/instance/X.template.*
+      data/skills/<N>/* ⟺ .entropaxis/skills/<N>/
+      data/rules/*      ⟺ 由某条规则声明（具体哪条见文件头 source 字段）
     双向检查能同时抓出孤儿实例文件与失配模板，防结构随时间漂移。
     """
     issues = []
-    data_dir, sys_dir = root / ".data", root / ".system"
+    sys_dir = root / paths.SYSTEM_DIRNAME
+    data_dir = sys_dir / "data"
     if not data_dir.is_dir():
         return issues
 
@@ -290,23 +296,23 @@ def check_data_source_mapping(root: Path) -> list[str]:
         for p in sorted(tpl_dir.glob("*")):
             if not p.is_file() or p.suffix not in (".md", ".json"):
                 continue
-            expect = sys_dir / "templates" / "data" / f"{p.stem}.template{p.suffix}"
+            expect = sys_dir / "templates" / "instance" / f"{p.stem}.template{p.suffix}"
             if not expect.exists():
                 issues.append(
-                    f"[实例孤儿] .data/templates/{p.name} 找不到对应模板 {expect.relative_to(root)}；"
-                    "它不是模板渲染产物，应移入 .data/rules/ 或 .data/skills/<名>/。"
+                    f"[实例孤儿] .entropaxis/data/templates/{p.name} 找不到对应模板 {expect.relative_to(root)}；"
+                    "它不是模板渲染产物，应移入 .entropaxis/data/rules/ 或 .entropaxis/data/skills/<名>/。"
                 )
 
-    # 反向：模板存在却无实例。拆分 templates/data 与 templates/project 后
-    # 该目录内每个模板都必然对应一个 .data/templates/ 实例，可严格双向核验。
-    sys_tpl = sys_dir / "templates" / "data"
+    # 反向：模板存在却无实例。拆分 templates/instance 与 templates/project 后
+    # 该目录内每个模板都必然对应一个 data/templates/ 实例，可严格双向核验。
+    sys_tpl = sys_dir / "templates" / "instance"
     if sys_tpl.is_dir() and tpl_dir.is_dir():
         for t in sorted(sys_tpl.glob("*.template.*")):
             stem, suffix = t.name.split(".template", 1)
             if not (tpl_dir / f"{stem}{suffix}").exists():
                 issues.append(
-                    f"[实例未渲染] .system/templates/data/{t.name} 没有对应实例 "
-                    f".data/templates/{stem}{suffix}；运行 `python3 .system/tools/bootstrap.py` 渲染。"
+                    f"[实例未渲染] .entropaxis/templates/instance/{t.name} 没有对应实例 "
+                    f".entropaxis/data/templates/{stem}{suffix}；运行 `python3 .entropaxis/tools/bootstrap.py` 渲染。"
                 )
 
     skl_dir = data_dir / "skills"
@@ -314,28 +320,28 @@ def check_data_source_mapping(root: Path) -> list[str]:
         for d in sorted(skl_dir.iterdir()):
             if d.is_dir() and not (sys_dir / "skills" / d.name).is_dir():
                 issues.append(
-                    f"[实例孤儿] .data/skills/{d.name}/ 找不到对应 Skill "
-                    f".system/skills/{d.name}/；Skill 已删除时其实例配置应一并清理。"
+                    f"[实例孤儿] .entropaxis/data/skills/{d.name}/ 找不到对应 Skill "
+                    f".entropaxis/skills/{d.name}/；Skill 已删除时其实例配置应一并清理。"
                 )
 
     for p in sorted(data_dir.glob("*")):
         if p.is_file() and p.suffix in (".md", ".json"):
             issues.append(
-                f"[未归桶] .data/{p.name} 位于顶层。按来源归入 templates/（模板渲染）、"
+                f"[未归桶] .entropaxis/data/{p.name} 位于顶层。按来源归入 templates/（模板渲染）、"
                 "rules/（规则声明）或 skills/<名>/（Skill 私有）。"
             )
     return issues
 
 
 def check_data_provenance(root: Path) -> list[str]:
-    """检查 .data/ 顶层实例文件是否声明来源与写入策略。
+    """检查 data/ 顶层实例文件是否声明来源与写入策略。
 
-    `.data/` 是人工真源与实例配置所在地，缺少来源标记时人眼无法判断某文件从哪来、
+    `data/` 是人工真源与实例配置所在地，缺少来源标记时人眼无法判断某文件从哪来、
     谁在维护、能否重写——这正是人工仲裁配置被 Agent 整体覆盖的前置条件。
     只查顶层 .md/.json；`credentials/` 及子目录含凭据，不读不列举。
     """
     issues = []
-    data_dir = root / ".data"
+    data_dir = root / paths.SYSTEM_DIRNAME / "data"
     if not data_dir.is_dir():
         return issues
     # 只扫三个来源桶；credentials/ 与 docs/ 不读不列举（前者含凭据，后者是研究产物）
@@ -355,14 +361,14 @@ def check_data_provenance(root: Path) -> list[str]:
             ok = text.startswith("---\n") and "\npolicy:" in text.split("\n---", 2)[0]
         if not ok:
             issues.append(
-                f"[实例文件缺来源标记] .data/{p.relative_to(data_dir)} 未声明 source/managed_by/policy。"
-                "运行 `python3 .system/tools/stamp_data_provenance.py` 补盖。"
+                f"[实例文件缺来源标记] .entropaxis/data/{p.relative_to(data_dir)} 未声明 source/managed_by/policy。"
+                "运行 `python3 .entropaxis/tools/stamp_data_provenance.py` 补盖。"
             )
     return issues
 
 
 def _is_nested_git_repo_path(path: Path, root: Path) -> bool:
-    """path 是否位于工作区根之外、自带独立 .git 的上游/第三方目录内（含 .system/ 自身）。
+    """path 是否位于工作区根之外、自带独立 .git 的上游/第三方目录内（含 .entropaxis/ 自身）。
     与 registry.md「自带 .git 且非工作区成员的上游仓库不纳入注册表」的排除口径一致，
     防止把有独立代码/内容契约的嵌套仓库误判为待规范化的工作区项目薄壳。"""
     current = path.parent
@@ -490,7 +496,7 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
     不得出现具体业务系统绑定或真实实体；tools/skills/tests 可执行内容额外禁止硬编码本地端点。
     仅检查版本库跟踪文件（非 git 环境退化全扫），业务私有 Skill 依 .gitignore 豁免。"""
     issues = []
-    system = root / ".system"
+    system = root / paths.SYSTEM_DIRNAME
     tracked = _tracked_files(system)
     forbidden = _forbidden_bindings(root)
     if not forbidden:
@@ -581,10 +587,10 @@ def check_board_config_no_credentials(root: Path) -> list[str]:
     board_config.json 的 providers[*] 会被拼进 subprocess 直接执行或读取；任何字段
     （不限于 cli 数组）出现看起来像凭证参数的字符串，或字段名本身就是凭证类命名
     （token/password/secret/headers 等，即便值本身不含标志性子串、不是字符串类型），
-    都等于把凭证写进磁盘配置明文，与凭证只经无回显交互录入、只存 .data/credentials/
+    都等于把凭证写进磁盘配置明文，与凭证只经无回显交互录入、只存 .entropaxis/data/credentials/
     的口径冲突，一律阻断。JSON 解析失败按 fail-closed 处理：无法确认干净就不放行。
     """
-    path = root / ".data" / "templates" / "board_config.json"
+    path = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "board_config.json"
     if not path.is_file():
         return []
     try:
@@ -605,28 +611,28 @@ def check_board_config_no_credentials(root: Path) -> list[str]:
             field_name = ".".join(field_path) if field_path else "<root>"
             reason = f"字段名 {field_name!r} 疑似凭证字段" if key_hit else f"字段 {field_name!r} 值含疑似凭证参数 {node!r}"
             issues.append(
-                f"[Provider 凭证泄漏] .data/templates/board_config.json providers.{role} "
-                f"{reason}；凭证只能经无回显交互录入并存 .data/credentials/，不得写入此文件。"
+                f"[Provider 凭证泄漏] .entropaxis/data/templates/board_config.json providers.{role} "
+                f"{reason}；凭证只能经无回显交互录入并存 .entropaxis/data/credentials/，不得写入此文件。"
             )
     return issues
 
 
 def check_system_layout(root: Path) -> list[str]:
-    """检查 .system 控制面所需目录和入口文件。"""
-    system = root / ".system"
+    """检查 .entropaxis 控制面所需目录和入口文件。"""
+    system = root / paths.SYSTEM_DIRNAME
     issues = []
     for directory in SYSTEM_REQUIRED_DIRECTORIES:
         if not (system / directory).is_dir():
-            issues.append(f"[系统结构缺失] .system/{directory}/ 不存在。")
+            issues.append(f"[系统结构缺失] .entropaxis/{directory}/ 不存在。")
     for filename in SYSTEM_REQUIRED_FILES:
         if not (system / filename).is_file():
-            issues.append(f"[系统入口缺失] .system/{filename} 不存在。")
+            issues.append(f"[系统入口缺失] .entropaxis/{filename} 不存在。")
     return issues
 
 
 def check_system_entry_sync(root: Path) -> list[str]:
-    """检查根入口是否与 .system/entrypoints 的唯一真源一致。"""
-    system = root / ".system"
+    """检查根入口是否与 .entropaxis/entrypoints 的唯一真源一致。"""
+    system = root / paths.SYSTEM_DIRNAME
     issues = []
     for filename in ("AGENTS.md", "CLAUDE.md"):
         source = system / "entrypoints" / filename
@@ -635,14 +641,14 @@ def check_system_entry_sync(root: Path) -> list[str]:
             continue
         if target.read_text(encoding="utf-8") != source.read_text(encoding="utf-8"):
             issues.append(
-                f"[根入口漂移] {filename} 与 .system/entrypoints/{filename} 内容不一致；运行 bootstrap.py 恢复。"
+                f"[根入口漂移] {filename} 与 .entropaxis/entrypoints/{filename} 内容不一致；运行 bootstrap.py 恢复。"
             )
     return issues
 
 
 def _iter_local_links(root: Path):
-    """遍历 .system 内 Markdown 的显式本地链接，产出 (文档, 原始 target, 解析后路径)。"""
-    system = root / ".system"
+    """遍历 .entropaxis 内 Markdown 的显式本地链接，产出 (文档, 原始 target, 解析后路径)。"""
+    system = root / paths.SYSTEM_DIRNAME
     link_pattern = re.compile(r"\[[^\]]*]\(([^)\s]+)(?:\s+[^)]*)?\)")
     tracked = _tracked_files(system)
     for document in system.rglob("*.md"):
@@ -656,8 +662,8 @@ def _iter_local_links(root: Path):
         if tracked is not None and document not in tracked:
             continue
         text = document.read_text(encoding="utf-8")
-        # 同一文档内同一目标只报一次：`[`.data/x.md`](../../.data/x.md)` 这种"链接文字
-        # 本身就是行内代码路径"的写法在规则正文里很常见，不去重会把一处引用报成两条。
+        # 同一文档内同一目标只报一次：`[`.entropaxis/data/x.md`](../data/x.md)` 这种"链接
+        # 文字本身就是行内代码路径"的写法在规则正文里很常见，不去重会把一处引用报成两条。
         seen: set[str] = set()
 
         def _emit(target: str, resolved: Path):
@@ -684,40 +690,41 @@ def _iter_local_links(root: Path):
                 yield item
 
 
-# 反引号内联的工作区绝对路径（`.system/...`、`.data/...`）。规则正文引用工具与实例声明
-# 时大量使用这种形态（如 `python3 .system/tools/init_capsule.py`），而它不是 Markdown
-# 链接——只扫 `](...)` 会让这类引用成为门禁盲区，悬空到分发后才被收件方发现。
+# 反引号内联的工作区绝对路径（`.entropaxis/...`，含其下的 data/ 实例面）。规则正文引用
+# 工具与实例声明时大量使用这种形态（如 `python3 .entropaxis/tools/init_capsule.py`），
+# 而它不是 Markdown 链接——只扫 `](...)` 会让这类引用成为门禁盲区，悬空到分发后才被
+# 收件方发现。data/ 现已嵌套在 .entropaxis/ 之内，前缀由此前的双分支塌缩为单一前缀。
 # 扩展名尾部加 (?![\w*.]) 排除被截断的通配模板（`X.template.*`）。
 _INLINE_PATH_PATTERN = re.compile(
-    r"(?<![\w/.-])((?:\.system|\.data)/[^\s`,，。、；：!?()（）\[\]\"'|]*\.[A-Za-z0-9]{1,8}(?![\w*.]))"
+    r"(?<![\w/.-])(\.entropaxis/[^\s`,，。、；：!?()（）\[\]\"'|]*\.[A-Za-z0-9]{1,8}(?![\w*.]))"
 )
 
 
 def _inline_code_paths(text: str):
-    """产出 Markdown 行内代码中出现的、以 `.system/` 或 `.data/` 开头的工作区相对路径。"""
+    """产出 Markdown 行内代码中出现的、以 `.entropaxis/` 开头的工作区相对路径。"""
     for code in re.findall(r"`([^`\n]*?)`", text):
         for target in _INLINE_PATH_PATTERN.findall(code):
-            # 含占位符的示例路径（`.system/tools/<name>.py`）不是真实引用，跳过。
+            # 含占位符的示例路径（`.entropaxis/tools/<name>.py`）不是真实引用，跳过。
             if any(ch in target for ch in "<>{}*"):
                 continue
             yield target
 
 
 def _points_into_data(path: Path, root: Path) -> bool:
-    """判断链接目标是否落在 .data/ 实例面内（两侧同样 resolve，兼容 /tmp 软链前缀）。"""
+    """判断链接目标是否落在 .entropaxis/data/ 实例面内（两侧同样 resolve，兼容 /tmp 软链前缀）。"""
     try:
-        path.resolve().relative_to((root / ".data").resolve())
+        path.resolve().relative_to((root / paths.SYSTEM_DIRNAME / "data").resolve())
         return True
     except ValueError:
         return False
 
 
 def check_system_markdown_links(root: Path) -> list[str]:
-    """检查 .system 内 Markdown 显式本地链接不指向不存在的路径。
+    """检查 .entropaxis 内 Markdown 显式本地链接不指向不存在的路径。
 
-    指向 `.data/` 的实例声明引用交由第 22 项单独核验：`.data/rules/` 桶按定义无模板
-    （见 `控制面布局.md`「.data/ 目录结构」），首次使用前必然不存在——把它算作阻断项，
-    等于让分发出去的系统在新环境里开箱即红。
+    指向 `.entropaxis/data/` 的实例声明引用交由第 22 项单独核验：`data/rules/` 桶按定义
+    无模板（见 `控制面布局.md`「data/ 目录结构」），首次使用前必然不存在——把它算作
+    阻断项，等于让分发出去的系统在新环境里开箱即红。
     """
     issues = []
     for document, target, resolved in _iter_local_links(root):
@@ -731,9 +738,9 @@ def check_system_markdown_links(root: Path) -> list[str]:
 
 
 def check_data_declaration_links(root: Path) -> list[str]:
-    """核验规则正文引用的 `.data/` 实例声明在本工作区是否已落地。
+    """核验规则正文引用的 `.entropaxis/data/` 实例声明在本工作区是否已落地。
 
-    `01_根系统治理.md` 审计流程第 2 步要求盘点"新初始化/分发场景下悬空的 .data/ 实例
+    `01_根系统治理.md` 审计流程第 2 步要求盘点"新初始化/分发场景下悬空的 data/ 实例
     声明引用"。这类文件由规则在首次使用时创建，缺失是合法初始态而非契约破损，故只报
     建议不阻断；但必须报出来，否则系统分发到新环境后没人知道哪些声明还是空的。
     """
@@ -751,10 +758,10 @@ def check_data_declaration_links(root: Path) -> list[str]:
 def check_system_templates(root: Path) -> list[str]:
     """检查模板完备性与变量契约，保证两个脚手架可独立渲染。
 
-    templates/ 按消费方分两个子目录：data/ 渲染到 .data/（bootstrap），
+    templates/ 按消费方分两个子目录：instance/ 渲染到 data/（bootstrap），
     project/ 是项目脚手架（init_project / init_app）。本检查只管后者。
     """
-    templates = root / ".system" / "templates" / "project"
+    templates = root / paths.SYSTEM_DIRNAME / "templates" / "project"
     issues = []
     required = (
         "AGENTS.template.md",
@@ -771,23 +778,23 @@ def check_system_templates(root: Path) -> list[str]:
     for filename in required:
         template = templates / filename
         if not template.is_file():
-            issues.append(f"[模板缺失] .system/templates/project/{filename} 不存在。")
+            issues.append(f"[模板缺失] .entropaxis/templates/project/{filename} 不存在。")
             continue
         text = template.read_text(encoding="utf-8")
         variables = set(re.findall(r"{{([^{}]+)}}", text))
         unknown = variables - SYSTEM_TEMPLATE_VARIABLES
         if unknown:
             issues.append(
-                f"[模板变量未知] .system/templates/{filename} 包含未声明变量：{', '.join(sorted(unknown))}。"
+                f"[模板变量未知] .entropaxis/templates/{filename} 包含未声明变量：{', '.join(sorted(unknown))}。"
             )
         if "{{" in re.sub(r"{{[^{}]+}}", "", text) or "}}" in re.sub(r"{{[^{}]+}}", "", text):
-            issues.append(f"[模板变量失配] .system/templates/{filename} 含未闭合变量标记。")
+            issues.append(f"[模板变量失配] .entropaxis/templates/{filename} 含未闭合变量标记。")
     return issues
 
 
 def check_system_skills(root: Path) -> list[str]:
     """检查每个系统 Skill 的入口与元数据名称。"""
-    skills = root / ".system" / "skills"
+    skills = root / paths.SYSTEM_DIRNAME / "skills"
     issues = []
     if not skills.is_dir():
         return issues
@@ -810,22 +817,22 @@ def check_system_skills(root: Path) -> list[str]:
     return issues
 
 
-# Skill 正文里对根系统的硬依赖形态：`.system/tools/x.py` 是跨 Skill 的控制面工具，
+# Skill 正文里对根系统的硬依赖形态：`.entropaxis/tools/x.py` 是跨 Skill 的控制面工具，
 # 独立安装的机器上必然不存在，写成无条件前置即跑不起来。
-# 只匹配 tools/：`.system/skills/<自身名>/…` 属自身路径写法，Skill 常以它作为
+# 只匹配 tools/：`.entropaxis/skills/<自身名>/…` 属自身路径写法，Skill 常以它作为
 # "工作区内安装位置"的示例与全局安装形式并列，纳入会产生大量误报。
-_SYSTEM_DEP_PATTERN = re.compile(r"\.system/tools/[\w\-/]+\.py")
+_SYSTEM_DEP_PATTERN = re.compile(r"\.entropaxis/tools/[\w\-/]+\.py")
 _OPTIONAL_MARKERS = ("存在时", "不存在", "若工作区提供", "工作区提供", "仅在", "独立安装")
 
 
 def check_skill_system_independence(root: Path) -> list[str]:
-    """可分发 Skill 不得把 `.system/` 写成运行前置（《技能设计》6.2 独立运行铁律）。
+    """可分发 Skill 不得把 `.entropaxis/` 写成运行前置（《技能设计》6.2 独立运行铁律）。
 
-    Skill 要能脱离本工作区独立安装运行，`.system/tools/x.py` 那条路径在收件方
+    Skill 要能脱离本工作区独立安装运行，`.entropaxis/tools/x.py` 那条路径在收件方
     只装了一个 Skill 的机器上根本不存在。控制面 Skill（frontmatter 声明
-    `scope: control-plane`）以 `.system/` 为作业对象，按定义豁免。
+    `scope: control-plane`）以 `.entropaxis/` 为作业对象，按定义豁免。
     """
-    skills = root / ".system" / "skills"
+    skills = root / paths.SYSTEM_DIRNAME / "skills"
     if not skills.is_dir():
         return []
     issues = []
@@ -846,7 +853,7 @@ def check_skill_system_independence(root: Path) -> list[str]:
                 continue
             issues.append(
                 f"[Skill 根系统硬依赖] {skill_file.relative_to(root)} 行内 "
-                f"`{line.strip()[:60]}` 把 .system/ 路径写成运行前置；"
+                f"`{line.strip()[:60]}` 把 .entropaxis/ 路径写成运行前置；"
                 "独立安装时该路径不存在。改为相对自身目录定位，或标注为「存在时才调用」的可选增强；"
                 "确属控制面 Skill 则在 frontmatter 声明 metadata.scope: control-plane。"
             )
@@ -854,8 +861,8 @@ def check_skill_system_independence(root: Path) -> list[str]:
 
 
 def check_system_tools_compile(root: Path) -> list[str]:
-    """编译 .system/tools 下脚本，阻止控制面工具语法损坏。"""
-    tools = root / ".system" / "tools"
+    """编译 .entropaxis/tools 下脚本，阻止控制面工具语法损坏。"""
+    tools = root / paths.SYSTEM_DIRNAME / "tools"
     issues = []
     if not tools.is_dir():
         return issues
@@ -902,7 +909,7 @@ def check_registry_population(root: Path) -> list[str]:
     第 7 项的反向校验在那一刻必然全量命中——首次体检直接红屏，这不是缺陷而是初始态。
     此处以建议项把同一事实说清楚，登记任一项目后第 7 项自动接管为阻断校验。
     """
-    registry = root / ".data" / "templates" / "registry.md"
+    registry = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.md"
     if not registry.exists():
         return []
     table_tops, exclude_tops = _registered_top_dirs(registry)
@@ -916,7 +923,7 @@ def check_registry_population(root: Path) -> list[str]:
         return []
     return [
         f"[注册表待登记] 项目映射表尚无任何项目，{len(pending)} 个根目录待归属："
-        f"{'、'.join(pending)}。用 `python3 .system/tools/init_project.py <项目名>` 立项，"
+        f"{'、'.join(pending)}。用 `python3 .entropaxis/tools/init_project.py <项目名>` 立项，"
         "或把非项目目录写进注册表「排除规则」；登记任一项目后第 7 项转为阻断校验。"
     ]
 
@@ -931,7 +938,7 @@ def check_declared_writers(root: Path) -> list[str]:
       `<name> Skill`        → Skill 目录存在且其 SKILL.md 提到目标文件名
     只声明人工/Agent 维护的不做机械核验——人是否落笔无法静态判定。
     """
-    system = root / ".system"
+    system = root / paths.SYSTEM_DIRNAME
     provenance = system / "tools" / "stamp_data_provenance.py"
     if not provenance.is_file():
         return []
@@ -950,7 +957,7 @@ def check_declared_writers(root: Path) -> list[str]:
     issues = []
     for target, meta in sorted(known.items()):
         # 1. source 指向控制面内的模板时，该模板必须真实存在（模板搬家后声明最易失修）
-        for path_token in re.findall(r"\.system/[\w./-]+", meta.get("source", "")):
+        for path_token in re.findall(r"\.entropaxis/[\w./-]+", meta.get("source", "")):
             if not (root / path_token).exists():
                 issues.append(
                     f"[来源声明失效] 实例文件 {target} 声明来源 {path_token}，该路径不存在；"
@@ -962,7 +969,7 @@ def check_declared_writers(root: Path) -> list[str]:
         for tool, symbol in re.findall(r"([\w_]+\.py)(?:\s+([A-Za-z_]\w+))?", managed):
             tool_path = system / "tools" / tool
             if not tool_path.is_file():
-                issues.append(f"[写入者不存在] 实例文件 {target} 声明由 {tool} 维护，但 .system/tools/{tool} 不存在。")
+                issues.append(f"[写入者不存在] 实例文件 {target} 声明由 {tool} 维护，但 .entropaxis/tools/{tool} 不存在。")
                 continue
             needle, kind = (symbol, "符号") if symbol else (target, "目标文件名")
             if needle not in tool_path.read_text(encoding="utf-8"):
@@ -991,14 +998,14 @@ def check_routing_integrity(root: Path) -> list[str]:
     root_agents = root / "AGENTS.md"
     if root_agents.exists():
         text = root_agents.read_text(encoding="utf-8")
-        rule_refs = re.findall(r"`(\.system/rules/[^`]+)`", text)
+        rule_refs = re.findall(r"`(\.entropaxis/rules/[^`]+)`", text)
         for ref in rule_refs:
             clean_ref = ref.split("#")[0].strip()
             if not (root / clean_ref).exists():
                 issues.append(f"[根路由断链] 根 AGENTS.md 引用的规则文件 {ref} 不存在。")
 
-    # 2. 检查 .data/templates/registry.md 中的每个项目主目录物理存在
-    registry = root / ".data" / "templates" / "registry.md"
+    # 2. 检查 .entropaxis/data/templates/registry.md 中的每个项目主目录物理存在
+    registry = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.md"
     if registry.exists():
         for line in registry.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -1014,7 +1021,7 @@ def check_routing_integrity(root: Path) -> list[str]:
                         continue
                     proj_dir = root / d.rstrip("/")
                     if not proj_dir.is_dir():
-                        issues.append(f"[注册表断链] .data/templates/registry.md 注册的项目目录 {d} 物理不存在。")
+                        issues.append(f"[注册表断链] .entropaxis/data/templates/registry.md 注册的项目目录 {d} 物理不存在。")
 
     # 2b. 反向校验：工作区根级目录须能在注册表主目录或排除规则中找到归属，
     # 否则新目录会游离于白名单之外而不被察觉（正向校验只查"注册的目录是否存在"，不查"存在的目录是否注册"）。
@@ -1029,7 +1036,7 @@ def check_routing_integrity(root: Path) -> list[str]:
             if child.name in known_tops:
                 continue
             issues.append(
-                f"[根目录未注册] {child.name}/ 既不在 .data/templates/registry.md 的项目映射表，也不在其排除规则中，"
+                f"[根目录未注册] {child.name}/ 既不在 .entropaxis/data/templates/registry.md 的项目映射表，也不在其排除规则中，"
                 "需人工登记项目归属或补充排除规则（不得由 Agent 自行判断归属）。"
             )
 
@@ -1063,7 +1070,7 @@ def check_route_map_integrity(root: Path) -> list[str]:
     import json as _json
 
     issues = []
-    route_map = root / ".system" / "config" / "route_map.json"
+    route_map = root / paths.SYSTEM_DIRNAME / "config" / "route_map.json"
     if not route_map.is_file():
         return issues
     try:
@@ -1116,12 +1123,12 @@ def main() -> int:
     print(f"🔍 开始对工作区进行健康度与上下文瘦身体检: {ROOT}\n" + "=" * 60)
 
     checks = [
-        ("1. .system 结构完整性检查", check_system_layout, True),
+        ("1. .entropaxis 结构完整性检查", check_system_layout, True),
         ("2. 根入口真源同步检查", check_system_entry_sync, True),
-        ("3. .system 路由链接检查", check_system_markdown_links, True),
+        ("3. .entropaxis 路由链接检查", check_system_markdown_links, True),
         ("4. 脚手架模板契约检查", check_system_templates, True),
         ("5. Skill 入口与触发元数据检查", check_system_skills, True),
-        ("6. .system 工具语法检查", check_system_tools_compile, True),
+        ("6. .entropaxis 工具语法检查", check_system_tools_compile, True),
         ("7. 路由完整性与胶囊容器检查", check_routing_integrity, True),
         ("8. 常驻层 Token 预算检查", check_resident_budget, False),
         ("9. 契约状态文件历史堆积检查", check_current_state_bloat, False),
@@ -1134,11 +1141,11 @@ def main() -> int:
         ("16. 确定性路由映射表完整性检查", check_route_map_integrity, True),
         ("17. 规则文件行数预算检查", check_rule_budget, False),
         ("18. 跨规则文件连续文本重复检查", check_rule_text_repetition, False),
-        ("19. .data/ 实例文件来源标记检查", check_data_provenance, False),
+        ("19. .entropaxis/data/ 实例文件来源标记检查", check_data_provenance, False),
         ("19b. 声明写入者存在性检查", check_declared_writers, True),
-        ("20. .data/ 路径与来源映射检查", check_data_source_mapping, False),
+        ("20. .entropaxis/data/ 路径与来源映射检查", check_data_source_mapping, False),
         ("21. 结构化契约 schema 校验", check_schema_conformance, True),
-        ("22. .data/ 实例声明落地检查", check_data_declaration_links, False),
+        ("22. .entropaxis/data/ 实例声明落地检查", check_data_declaration_links, False),
         ("23. 交付物中文主命名检查", check_deliverable_naming, False),
     ]
 
@@ -1157,7 +1164,7 @@ def main() -> int:
 
     print("=" * 60)
     if blocking_issues:
-        print(f"❌ 体检失败：{len(blocking_issues)} 项 .system 控制面契约未满足。")
+        print(f"❌ 体检失败：{len(blocking_issues)} 项 .entropaxis 控制面契约未满足。")
         return 1
     if not all_issues:
         print("🎉 工作区体检完毕：所有控制面与治理规则均符合要求！")

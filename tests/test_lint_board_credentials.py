@@ -3,11 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools import paths
 from tools.lint_workspace import check_board_config_no_credentials
 
 
 def _write_board_config(root: Path, providers: dict) -> None:
-    d = root / ".data" / "templates"
+    d = root / paths.SYSTEM_DIRNAME / "data" / "templates"
     d.mkdir(parents=True, exist_ok=True)
     (d / "board_config.json").write_text(
         json.dumps({"providers": providers}), encoding="utf-8"
@@ -106,7 +107,7 @@ class BoardConfigCredentialLintTests(unittest.TestCase):
         """畸形 JSON 必须报违规，不能因为"解析不了"就悄悄放行。"""
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            d = root / ".data" / "templates"
+            d = root / paths.SYSTEM_DIRNAME / "data" / "templates"
             d.mkdir(parents=True)
             (d / "board_config.json").write_text("{not valid json", encoding="utf-8")
             issues = check_board_config_no_credentials(root)

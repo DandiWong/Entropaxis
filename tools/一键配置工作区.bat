@@ -28,7 +28,7 @@ if not defined PY (
     exit /b 1
 )
 
-%PY% .system\tools\bootstrap.py
+%PY% .entropaxis\tools\bootstrap.py
 if errorlevel 1 (
     echo.
     echo [X] 初始化失败。请把上方报错整段复制给 AI 助手处理。

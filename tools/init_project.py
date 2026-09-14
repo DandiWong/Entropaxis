@@ -9,6 +9,11 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from . import paths
+except ImportError:
+    import paths
+
 
 class ProjectInitError(Exception):
     """项目无法安全初始化。"""
@@ -156,16 +161,16 @@ def init_project(
 
 
 def register_project(workspace: Path, name: str, dashboard_project_id: str = "未关联") -> bool:
-    """把新项目追加进 `.data/templates/registry.md` 映射表，返回是否发生写入。
+    """把新项目追加进 `.entropaxis/data/templates/registry.md` 映射表，返回是否发生写入。
 
     注册表正文声明本工具所属 Skill 是它的唯一写入者，但此前无人真的写——注册表因此在
     新工作区里永远是空表，而它是《项目组织》的项目归属唯一映射基准，也是体检第 7 项
     反向校验的依据。缺这一步，新机器上装好系统后项目索引永远建不起来。
 
-    写入遵守 `.data/` 写入规约：只追加一行，已登记同名项目即跳过，不重写既有内容；
+    写入遵守 `data/` 写入规约：只追加一行，已登记同名项目即跳过，不重写既有内容；
     注册表缺失（尚未 bootstrap）时静默跳过，不阻断立项本身。
     """
-    registry = workspace / ".data" / "templates" / "registry.md"
+    registry = workspace / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.md"
     if not registry.is_file():
         return False
     try:
