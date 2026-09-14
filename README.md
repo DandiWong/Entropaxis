@@ -17,7 +17,7 @@
 
 2. **零门槛极简上手**  
    无需记忆复杂的命令行参数，只需**使用本地 Agent（如 Claude Code / OMP / Cursor / Codex）直接打开工作区根目录**，即可通过自然语言对话完成待办流转、方案审修（审计/修正）、多模态协作（自定义角色）、看板管理、纪要生成、发票报销与知识沉淀。  
-   *（新电脑或非技术同学亦可直接双击一键脚本，或对 Agent 说“初始化”一键就绪：macOS / Linux 用 `.entropaxis/tools/🚀_一键配置工作区.command`，Windows 用 `.entropaxis/tools/一键配置工作区.bat`）*
+   *（新电脑或非技术同学亦可对 Agent 说“初始化”一键就绪，Agent 会执行 `python3 .entropaxis/tools/bootstrap.py`）*
 
 3. **健康度自检**：对 Agent 说“系统自检”即可；异常时说“初始化工作区”一键自愈。
 
@@ -73,7 +73,7 @@
 1. 用浏览器打开 `https://github.com/DandiWong/Entropaxis`（确保已登录 GitHub）
 2. 点击绿色的 **Code** 按钮 → **Download ZIP**
 3. 把下载好的 ZIP 交给 AI 助手，让它帮你解压到工作区
-4. 解压到位后进入 `.entropaxis\tools\`，双击 **`一键配置工作区.bat`**（不是 `.command`，那个是 Mac 用的）
+4. 解压到位后在工作区根目录执行 `python .entropaxis\tools\bootstrap.py`（或对 AI 助手说“初始化”）
 
 #### 让 AI 助手帮你操作网页
 

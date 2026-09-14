@@ -258,8 +258,8 @@ def main() -> int:
         if boot["returncode"] != 0:
             print(
                 f"\n❌ 控制面已就位，但初始化未通过：{boot['error'] or '退出码 ' + str(boot['returncode'])}\n"
-                f"👉 修复建议: 装好 Python 3 后，在安装目录双击 "
-                f".entropaxis\\tools\\一键配置工作区.bat 重跑初始化；或把上方报错整段复制给 AI 助手处理。",
+                f"👉 修复建议: 装好 Python 3 后，在安装目录执行 "
+                f"python .entropaxis\\tools\\bootstrap.py 重跑初始化；或把上方报错整段复制给 AI 助手处理。",
                 file=sys.stderr,
             )
             return 1
