@@ -60,6 +60,20 @@ def _validate_name(name: str) -> str:
     return name
 
 
+def _validate_path(value: str | None) -> str:
+    """校验父目录相对路径，逐段套用单层目录名的安全判据。
+
+    子项目可以嵌套在父目录下（`--path 04A/05B`），也可以与父项目平铺在工作区根
+    （不传 `--path`）。两种布局都合法，因此路径是显式入参而非从父项目 ID 推断。
+    """
+    if value is None or not value.strip():
+        return ""
+    parts = [segment for segment in value.strip().replace("\\", "/").split("/") if segment]
+    for segment in parts:
+        _validate_name(segment)
+    return "/".join(parts)
+
+
 def _validate_date(value: str | None) -> str:
     value = value or datetime.now().strftime("%Y%m%d")
     try:
@@ -99,8 +113,11 @@ def init_project(
     sensitivity: str = "普通内部",
     dashboard_project_id: str = "未关联",
     start: str | None = None,
+    parent: str = "",
+    path: str | None = None,
 ) -> Path:
     name = _validate_name(name)
+    path = _validate_path(path)
     start = _validate_date(start)
     dashboard_project_id = _validate_dashboard_project_id(dashboard_project_id)
     workspace = workspace.expanduser().resolve()
@@ -111,12 +128,15 @@ def init_project(
     if not templates.is_dir():
         raise ProjectInitError(f"模板目录不存在: {templates}")
 
-    target = workspace / name
+    rel_dir = f"{path}/{name}" if path else name
+    if path and not (workspace / path).is_dir():
+        raise ProjectInitError(f"父目录不存在，先建父项目或修正 --path: {workspace / path}")
+    target = workspace / rel_dir
     if target.exists():
         raise ProjectInitError(f"项目目录已存在，拒绝覆盖: {target}")
 
     # 动态计算从项目目录到工作区根的相对深度
-    depth = len((workspace / name).relative_to(workspace).parts)
+    depth = len(Path(rel_dir).parts)
     root_agents_path = "../" * depth + "AGENTS.md"
 
     values = {
@@ -137,7 +157,7 @@ def init_project(
         for source, destination in TEMPLATE_FILES.items()
     }
 
-    with tempfile.TemporaryDirectory(prefix=".project-init-", dir=workspace) as temporary:
+    with tempfile.TemporaryDirectory(prefix=".project-init-", dir=workspace / path if path else workspace) as temporary:
         staging = Path(temporary) / name
         # 1. 知识库与暂存投递箱
         (staging / "_知识库" / "项目资料").mkdir(parents=True)
@@ -156,11 +176,17 @@ def init_project(
             path.write_text(content, encoding="utf-8")
         staging.replace(target)
 
-    register_project(workspace, name, dashboard_project_id)
+    register_project(workspace, name, dashboard_project_id, rel_dir=rel_dir, parent=parent)
     return target
 
 
-def register_project(workspace: Path, name: str, dashboard_project_id: str = "未关联") -> bool:
+def register_project(
+    workspace: Path,
+    name: str,
+    dashboard_project_id: str = "未关联",
+    rel_dir: str | None = None,
+    parent: str = "",
+) -> bool:
     """把新项目追加进 `.entropaxis/data/templates/registry.md` 映射表，返回是否发生写入。
 
     注册表正文声明本工具所属 Skill 是它的唯一写入者，但此前无人真的写——注册表因此在
@@ -177,12 +203,13 @@ def register_project(workspace: Path, name: str, dashboard_project_id: str = "�
         text = registry.read_text(encoding="utf-8")
     except OSError:
         return False
-    if f"`{name}/`" in text:
+    rel_dir = (rel_dir or name).strip("/")
+    if f"`{rel_dir}/`" in text:
         return False
 
     board = dashboard_project_id.strip() or "未关联"
     mapping = "未关联" if board == "未关联" else f"main={board}"
-    row = f"| {name} | {name} | `{name}/` | {mapping} | |\n"
+    row = f"| {name} | {name} | `{rel_dir}/` | {parent} | | {mapping} | |\n"
     # 锚到「项目 ID」表头下方的分隔行：文件里可能不止一张表，按表头定位而非取首个分隔行。
     # 占位行（（待填写））留在原处，新项目追加在它前面——不动人工内容，也不依赖占位行是否还在。
     lines = text.splitlines(keepends=True)
@@ -220,6 +247,11 @@ def _parser() -> argparse.ArgumentParser:
         help="已确认的看板项目 ID；不关联时省略",
     )
     parser.add_argument("--start", help="开始日期 YYYYMMDD")
+    parser.add_argument("--parent", default="", help="父项目的「项目 ID」；顶层项目省略")
+    parser.add_argument(
+        "--path",
+        help="父目录相对路径（如 04A/05B）；嵌套布局才需要，平铺布局省略",
+    )
     return parser
 
 
@@ -241,6 +273,8 @@ def main() -> None:
             sensitivity=args.sensitivity,
             dashboard_project_id=args.dashboard_project_id,
             start=args.start,
+            parent=args.parent,
+            path=args.path,
         )
     except ProjectInitError as error:
         parser.error(str(error))
