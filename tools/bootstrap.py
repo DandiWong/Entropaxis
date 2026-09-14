@@ -13,6 +13,10 @@ from pathlib import Path
 try:
     from . import paths
 except ImportError:
+    # runpy.run_path()（install_windows.py 冻结后调用它的方式）不会把脚本自身目录
+    # 加进 sys.path，跟直接 `python3 bootstrap.py` 的行为不同，这里补上避免
+    # ModuleNotFoundError: No module named 'paths'。
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     import paths
 
 def render_instance_configs(
