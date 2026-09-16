@@ -25,7 +25,7 @@
 ## 排除规则
 
 以下目录不纳入注册表（lint 白名单校验同步排除）：
-- `repo/`、`**/repoes/`、`Archive/`、`node_modules/`
+- `repo/`、`**/repoes/`、`Archive/`、`node_modules/`、`output/`
 - 自带 `.git` 且非工作区成员的上游仓库（LLM-Wiki 除外，其虽有 `.git` 但是工作区成员）
 
 ## 写入规范

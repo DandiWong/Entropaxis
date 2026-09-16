@@ -6,21 +6,17 @@
 
 不属于任何 Dashboard 项目、跨项目共享的资料目录（知识库规则、项目运行规则的共享层判定以此为准）：
 
-| 目录 | 用途 |
-|---|---|
-| `{{ORG_SHARED_DIR_1}}` | {{ORG_SHARED_PURPOSE_1}} |
-| `{{ORG_SHARED_DIR_2}}` | {{ORG_SHARED_PURPOSE_2}} |
-| `{{ORG_SHARED_DIR_3}}` | {{ORG_SHARED_PURPOSE_3}} |
+- `{{ORG_SHARED_DIR_1}}`：{{ORG_SHARED_PURPOSE_1}}
+- `{{ORG_SHARED_DIR_2}}`：{{ORG_SHARED_PURPOSE_2}}
+- `{{ORG_SHARED_DIR_3}}`：{{ORG_SHARED_PURPOSE_3}}
 
 > **默认为空**：多数工作区没有跨项目共享目录，各使用者的目录结构各不相同。确有共享资料层时把占位行改为实际目录名；没有就整行删掉，不影响任何规则生效。
 
 ## 组织名称默认口径
 
-| 参数 | 值 |
-|---|---|
-| 默认名称 | {{ORG_FULL_NAME}} |
-| 禁用缩写 | {{ORG_FORBIDDEN_ABBR}} |
-| 例外 | 对外正式材料以收件方或官方品牌要求为准 |
+- 默认名称：{{ORG_FULL_NAME}}
+- 禁用缩写：{{ORG_FORBIDDEN_ABBR}}
+- 例外：对外正式材料以收件方或官方品牌要求为准
 
 > 首次渲染后请把上述两个必填字段改为本工作区所属组织/公司的真实名称与禁用缩写；不改时新建文档默认使用工作区目录名兜底。
 
@@ -28,12 +24,10 @@
 
 当认知模态外置为独立 CLI/Agent 进程承担时（跨 CLI 协作，见 `.entropaxis/rules/角色协作.md`），本机生效的启动命令。未配置或指定为 `subagent` 时默认使用当前 Agent 的内置 Subagent 机制：
 
-| 角色模态 | 职责定位 | 承载 CLI | 启动命令 |
-|---|---|---|---|
-| Reviewer | 方案审计/对抗评审/架构合规 | subagent | 内置 Subagent 机制 (auto) |
-| Researcher | 调研（可联网）/文献综述 | subagent | 内置 Subagent 机制 (auto) |
-| Builder | 方案实施/核心编码/重构 | subagent | 内置 Subagent 机制 (auto) |
-| Designer | 方案设计/原型 demo | subagent | 内置 Subagent 机制 (auto) |
-| Maintainer | 汇报落盘/守门验收/证据核验 | subagent | 内置 Subagent 机制 (auto) |
+- Reviewer（方案审计/对抗评审/架构合规）：subagent · 启动命令: 内置 Subagent 机制 (auto)
+- Researcher（调研/文献综述）：subagent · 启动命令: 内置 Subagent 机制 (auto)
+- Builder（方案实施/核心编码/重构）：subagent · 启动命令: 内置 Subagent 机制 (auto)
+- Designer（方案设计/原型 demo）：subagent · 启动命令: 内置 Subagent 机制 (auto)
+- Maintainer（汇报落盘/守门验收/证据核验）：subagent · 启动命令: 内置 Subagent 机制 (auto)
 
 > 首次初始化后默认全部使用内置 Subagent。可通过 `python3 .entropaxis/tools/setup_agents.py` 交互式检测宿主机已安装的外部 Agent CLI 并自动配置。

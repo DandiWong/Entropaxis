@@ -138,20 +138,6 @@
     },
     {
       "kind": "positive",
-      "instruction": "把这个 skill 注册到根系统",
-      "expect": [
-        "注册Skill"
-      ]
-    },
-    {
-      "kind": "positive",
-      "instruction": "将它纳入 Entropaxis",
-      "expect": [
-        "注册Skill"
-      ]
-    },
-    {
-      "kind": "positive",
       "instruction": "同步任务",
       "expect": [
         "同步任务",

@@ -8,7 +8,7 @@
 
 - 搜索用 `grep`/`find` 内置工具，多OR词用一次 `multi_grep`；必须走bash 时用 `rg`，不用 `grep`
 - 定位后用 `read` 的offset/limit 只读命中附近；工作区外已知文件直接read
-- 打开本地文件统一执行 `python3 .entropaxis/tools/open_file.py <path>`；不得直接调用 `open`、`start`、`xdg-open` 或应用 CLI 绕过 `.entropaxis/data/templates/file-opener.json`。
+- 打开本地文件统一执行 `python3 .entropaxis/tools/open_file.py <path>`；项目与胶囊定位优先调用 `resolve_project.py` / `find_capsule.py`。
 
 ## 安全边界
 
@@ -18,6 +18,7 @@
 - 外发内容、个人信息和医疗相关材料默认先生成草稿。
 - 修改前检查版本库与工作区状态，只触碰本次任务范围。
 - 信息不足时先说明已知、未知与假设；不得把推断写成事实。
+- 表达简明扼要，讲人话：先给结论，用通俗标准语言，严禁生造黑话与虚浮套话；输出直接呈现核心事实与动作，不打无意义流水账。
 
 ## 会话提示
 
@@ -27,24 +28,22 @@
 
 ## 按需路由
 
-| 任务 / 触发行为 | 真源 |
-|---|---|
-| 新建/生成/导出通用文件，或查找/定位文件位置 | `.entropaxis/rules/文件交付.md` |
-| 系统边界、项目目录结构与组织命名 | `.entropaxis/rules/项目组织.md` |
-| 代码开发、调试与自动化验证 | `.entropaxis/rules/软件工程.md` |
-| 根系统治理与元规则 | `.entropaxis/rules/01_根系统治理.md`；布局与写入语义见 `.entropaxis/rules/控制面布局.md` |
-| 角色职责、跨角色交接与协作验收 | `.entropaxis/rules/角色协作.md` |
-| 工作区自然语言指令与任务解析 | `.entropaxis/rules/指令解析.md` |
-| 日常业务动作指令（事务/同步/任务/沉淀/复盘/初始化/报销）| `.entropaxis/rules/工作流指令.md` |
-| 系统治理动作指令（审计/修正/自检/新迭代/工具化/Skill）| `.entropaxis/rules/治理指令.md` |
-| 表达文风与可视化 | `.entropaxis/rules/表达文风.md` |
-| 对外发布与审批 | `.entropaxis/rules/对外发布.md` |
-| 知识沉淀、Wiki 录入与能力形态判定 | `.entropaxis/rules/知识沉淀.md` |
-| Tool 准入判据与 ApX 工程契约 | `.entropaxis/rules/工具设计.md` |
-| Skill 设计、渐进披露与元数据 | `.entropaxis/rules/技能设计.md` |
-| 分发 / 打包 Skill | `.entropaxis/rules/技能设计.md`（分发包契约）与 `.entropaxis/rules/文件交付.md`（打开 ZIP 所在目录） |
-| Spec、任务状态、任务看板与待办管理 | `.entropaxis/rules/看板联动.md`（按需调用看板 Skill 或本地适配器） |
-| 报销 / 整理发票 | `.entropaxis/rules/工作流指令.md` 与 `.entropaxis/rules/财务报销.md` |
-| 项目注册表（工作区项目索引） | `.entropaxis/data/templates/registry.md` |
+- 新建/生成/导出通用文件，或查找/定位文件位置：`.entropaxis/rules/文件交付.md`
+- 系统边界、项目目录结构与组织命名：`.entropaxis/rules/项目组织.md`
+- 代码开发、调试与自动化验证：`.entropaxis/rules/软件工程.md`
+- 根系统治理与元规则：`.entropaxis/rules/01_根系统治理.md`（布局见 `.entropaxis/rules/控制面布局.md`）
+- 角色职责、跨角色交接与协作验收：`.entropaxis/rules/角色协作.md`
+- 工作区自然语言指令与任务解析：`.entropaxis/rules/指令解析.md`
+- 日常业务动作指令（事务/同步/任务/沉淀/复盘/初始化/报销）：`.entropaxis/rules/工作流指令.md`
+- 系统治理动作指令（审计/修正/自检/新迭代/工具化/Skill）：`.entropaxis/rules/治理指令.md`
+- 表达文风与可视化：`.entropaxis/rules/表达文风.md`
+- 对外发布与审批：`.entropaxis/rules/对外发布.md`
+- 知识沉淀、Wiki 录入与能力形态判定：`.entropaxis/rules/知识沉淀.md`
+- Tool 准入判据与 ApX 工程契约：`.entropaxis/rules/工具设计.md`
+- Skill 设计、渐进披露与元数据：`.entropaxis/rules/技能设计.md`
+- 分发/打包 Skill：`.entropaxis/rules/技能设计.md`（分发包）与 `.entropaxis/rules/文件交付.md`（打开目录）
+- Spec、任务状态、任务看板与待办管理：`.entropaxis/rules/看板联动.md`
+- 报销 / 整理发票：`.entropaxis/rules/工作流指令.md` 与 `.entropaxis/rules/财务报销.md`
+- 项目注册表（工作区项目索引）：`.entropaxis/data/templates/registry.md`
 
 进入具体项目后，先读最近的 `AGENTS.md`，再按其中路由读取 README、Spec 或操作文档。仅在任务涉及外部看板、联网、发布或特定工具时加载对应规则或 Skill。

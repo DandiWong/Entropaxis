@@ -1,0 +1,4 @@
+interface:
+  display_name: "生物医学插画风格转换"
+  short_description: "将现有图转为渐变立体医学插画，保留原有文字、布局与科学关系"
+  default_prompt: "用 $biomedical-style-transfer 通过本机 Codex 订阅额度中的 GPT Image 2.5 转换这张图，保留全部文字、布局与连接关系。"
