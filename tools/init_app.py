@@ -8,18 +8,24 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from . import paths
+except ImportError:
+    import paths
+
 
 class AppInitError(Exception):
     """软件应用无法安全初始化。"""
 
 
+APP_AGENTS_TEMPLATE = "AppAGENTS.template.md"
+CLAUDE_TEMPLATE = "CLAUDE.template.md"
 DOCS_INDEX_TEMPLATE = "DocsIndex.template.md"
 PRODUCT_TEMPLATE = "Product.template.md"
 TASKS_TEMPLATE = "Tasks.template.md"
 CHANGELOG_TEMPLATE = "Changelog.template.md"
 BENCHMARK_TEMPLATE = "Benchmark.template.md"
 RELEASE_NOTE_TEMPLATE = "ReleaseNote.template.md"
-
 def _validate_name(name: str) -> str:
     if (
         name != name.strip()
@@ -72,12 +78,20 @@ def init_app(
     if app_path.exists() and any(app_path.iterdir()):
         raise AppInitError(f"目标应用目录已存在且非空，拒绝覆盖: {app_path}")
 
+    try:
+        rel_path = app_path.relative_to(paths.WORKSPACE_ROOT)
+        depth = len(rel_path.parts)
+        root_agents_path = "../" * depth + "AGENTS.md"
+    except Exception:
+        root_agents_path = "../../../../AGENTS.md"
+
     values = {
         "项目名": name,
         "应用名": name,
         "开始日期": start,
         "产品定位与核心价值": purpose.strip() or "待补充",
         "用户与使用场景": users.strip() or "企业内部研发与业务人员",
+        "ROOT_AGENTS_PATH": root_agents_path,
     }
 
     with tempfile.TemporaryDirectory(prefix=".app-init-", dir=app_path.parent if app_path.parent.exists() else None) as temporary:
@@ -89,6 +103,12 @@ def init_app(
 
         # `docs/` 从此处按实际工程事项创建 YYYYMMDD_主题 容器。
 
+        (staging / "AGENTS.md").write_text(
+            _render(templates / APP_AGENTS_TEMPLATE, values), encoding="utf-8"
+        )
+        (staging / "CLAUDE.md").write_text(
+            _render(templates / CLAUDE_TEMPLATE, values), encoding="utf-8"
+        )
         (staging / "docs" / "README.md").write_text(
             _render(templates / DOCS_INDEX_TEMPLATE, values), encoding="utf-8"
         )
