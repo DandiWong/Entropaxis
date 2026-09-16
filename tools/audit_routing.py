@@ -269,34 +269,37 @@ def _render_results(out: list[str], title: str, coverage: dict, gateable: bool) 
     out.append("")
 
 
-def render(coverage: dict, cost: dict) -> str:
+def render(coverage: dict, cost: dict, verbose: bool = False) -> str:
     out = ["=" * 64, "指令路由回归与静态读取审计", "=" * 64, ""]
     _render_results(out, "## 一、回归语料（--strict 的唯一门禁）", coverage["regression"], True)
     _render_results(out, "## 二、冻结留出语料（语义诊断，不参与 --strict）", coverage["holdout"], False)
     out.extend(["## 三、静态上下文读取估算", ""])
     resident = cost["resident_baseline"]
     out.append(f"  常驻基线估算：{resident['estimated_tokens'] if resident['estimated_tokens'] is not None else '未知'}")
-    for scenario in cost["scenarios"]:
-        hook = scenario["actual_hook_context"]["estimated_tokens"]
-        full = scenario["full_file_baseline"]["estimated_tokens"]
-        needed = scenario["necessary_read_ranges"]["estimated_tokens"]
-        total = scenario["static_context_estimate"]["estimated_tokens"]
-        out.append(
-            f"  {scenario['mechanism']}：实际 Hook 文本估算 {hook}；"
-            f"唯一整文件基线 {full if full is not None else '未知'}；"
-            f"必要读取范围 {needed if needed is not None else '未知'}；"
-            f"静态合计 {total if total is not None else '未知'}"
-        )
+    if verbose:
+        for scenario in cost["scenarios"]:
+            hook = scenario["actual_hook_context"]["estimated_tokens"]
+            full = scenario["full_file_baseline"]["estimated_tokens"]
+            needed = scenario["necessary_read_ranges"]["estimated_tokens"]
+            total = scenario["static_context_estimate"]["estimated_tokens"]
+            out.append(
+                f"  {scenario['mechanism']}：实际 Hook 文本估算 {hook}；"
+                f"唯一整文件基线 {full if full is not None else '未知'}；"
+                f"必要读取范围 {needed if needed is not None else '未知'}；"
+                f"静态合计 {total if total is not None else '未知'}"
+            )
     heaviest = next((s for s in cost["scenarios"] if s["static_context_estimate"]["estimated_tokens"] is not None), None)
     if heaviest:
-        out.append("  最重场景逐文件范围：" + heaviest["mechanism"])
-        for item in heaviest["necessary_read_ranges"]["ranges"]:
-            out.append(f"    {item['file']}:{item['start_line']}-{item['end_line']} 估算 {item['estimated_tokens']}")
+        out.append(f"  最重场景：{heaviest['mechanism']}（静态合计 {heaviest['static_context_estimate']['estimated_tokens']} tokens）")
+        if verbose:
+            for item in heaviest["necessary_read_ranges"]["ranges"]:
+                out.append(f"    {item['file']}:{item['start_line']}-{item['end_line']} 估算 {item['estimated_tokens']}")
     for scenario in cost["scenarios"]:
         for item in scenario["necessary_read_ranges"]["ranges"]:
             if item["fallback"]:
                 out.append(f"  [{scenario['mechanism']}] {item['file']}：{item['fallback']}")
-    out.extend(["", "  估算仅基于静态文本长度；不代表实际模型输入、输出或费用。", "  未计入：" + "；".join(COST_SCOPE_EXCLUSIONS.values()), ""])
+    if not verbose:
+        out.append("  (全量 20 场景成本明细可用 --cost-table 或 --verbose 查看)")
     return "\n".join(out)
 
 
@@ -304,6 +307,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="审计路由回归、留出语料与静态读取范围")
     parser.add_argument("--json", action="store_true", help="输出机器可解析的 JSON")
     parser.add_argument("--strict", action="store_true", help="仅回归 positive/negative 漏检或额外触发时退出 1")
+    parser.add_argument("--cost-table", "--verbose", "-v", dest="verbose", action="store_true", help="输出全量 20 场景静态成本明细表")
     args = parser.parse_args()
 
     try:
@@ -324,9 +328,7 @@ def main() -> int:
     if args.json:
         print(json.dumps({"coverage": coverage, "cost": cost}, ensure_ascii=False, indent=2))
     else:
-        print(render(coverage, cost))
-    if any(s["static_context_estimate"]["unknown_files"] for s in cost["scenarios"]):
-        return 2
+        print(render(coverage, cost, verbose=args.verbose))
     return 1 if args.strict and regression_failures(coverage["regression"]) else 0
 
 

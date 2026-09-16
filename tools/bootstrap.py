@@ -403,23 +403,23 @@ def print_legacy_layout_hint() -> None:
 
 
 if __name__ == "__main__":
-    print("🚀 开始初始化/自愈工作区配置...")
+    verbose = "--verbose" in sys.argv or "-v" in sys.argv
+    force_rescan_opener = "--force-rescan-opener" in sys.argv
+
+    if verbose:
+        print("🚀 开始初始化/自愈工作区配置...")
 
     print_legacy_layout_hint()
 
-    if sync_entrypoints(verbose=True):
-        # 看板 Token 检查延后到首次实际使用看板 Skill 时触发（见《工作流指令》初始化章节），
-        # 初始化阶段不再读取或回显凭证状态。
-        # 打开器配置必须先于通用模板渲染：file-opener.json 的生效结构由 init_file_opener
-        # 按本机探测生成，若让 render_instance_configs 先把模板原样落地，下一步就会把这份
-        # 刚写的文件判为"结构非法"并重建——首次初始化必打印一条自相矛盾的损坏告警，
-        # 恰是《控制面布局》写入规约第 4 条要防的"检测结果与生效配置混淆"。
-        force_rescan_opener = "--force-rescan-opener" in sys.argv
-        init_file_opener(verbose=True, force_rescan=force_rescan_opener)
-        render_instance_configs(verbose=True)
-        stamp_new_instances(verbose=True)
-        print("\n✨ 工作区初始化与自愈完成！")
-        if sys.platform == "win32":
+    if sync_entrypoints(verbose=verbose):
+        init_file_opener(verbose=verbose, force_rescan=force_rescan_opener)
+        render_instance_configs(verbose=verbose)
+        stamp_new_instances(verbose=verbose)
+        if verbose:
+            print("\n✨ 工作区初始化与自愈完成！")
+        else:
+            print("🎉 工作区初始化与自愈完成（入口已同步，实例配置就绪）。")
+        if sys.platform == "win32" and verbose:
             print_windows_hints()
     else:
         sys.exit(1)

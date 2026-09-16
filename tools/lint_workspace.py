@@ -174,6 +174,43 @@ def check_rule_budget(root: Path) -> list[str]:
     return issues
 
 
+MAX_RULE_SYNTAX_TAX_PCT = 10.0
+MAX_ENTRYPOINT_SYNTAX_TAX_PCT = 5.0
+def _compute_syntax_tax_ratio(content: str) -> float:
+    total_chars = len(content)
+    if total_chars == 0:
+        return 0.0
+    lines = content.splitlines()
+    table_sep_pattern = re.compile(r"^\|?[\s\-:|]+\|?$")
+    tax_chars = 0
+    for line in lines:
+        stripped = line.strip()
+        if table_sep_pattern.match(stripped) or (stripped.startswith("|") and stripped.endswith("|")):
+            tax_chars += len(line)
+        excess_spaces = re.findall(r"(?<=\S) {2,}(?=\S)", line)
+        tax_chars += sum(len(m) for m in excess_spaces)
+        tax_chars += len(re.findall(r"[┌┬┐├┼┤└┴┘│─═║╔╦╗╠╬╣╚╩╝]", line))
+    return round((tax_chars / total_chars * 100), 2)
+
+
+def check_syntax_tax_budget(root: Path) -> list[str]:
+    """机械核验规则库与根入口的语法税预算（防止宽大对齐表格与冗余空格腐蚀上下文）。"""
+    issues = []
+    system = root / paths.SYSTEM_DIRNAME
+    entry_ag = system / "entrypoints" / "AGENTS.md"
+    if entry_ag.is_file():
+        ratio = _compute_syntax_tax_ratio(entry_ag.read_text(encoding="utf-8"))
+        if ratio > MAX_ENTRYPOINT_SYNTAX_TAX_PCT:
+            issues.append(f"[常驻入口语法税超标] entrypoints/AGENTS.md 语法税 {ratio}% > {MAX_ENTRYPOINT_SYNTAX_TAX_PCT}%；须去表化为紧凑列表。")
+    rules_dir = system / "rules"
+    if rules_dir.is_dir():
+        for rf in sorted(rules_dir.glob("*.md")):
+            ratio = _compute_syntax_tax_ratio(rf.read_text(encoding="utf-8"))
+            if ratio > MAX_RULE_SYNTAX_TAX_PCT:
+                issues.append(f"[规则语法税超标] rules/{rf.name} 语法税 {ratio}% > {MAX_RULE_SYNTAX_TAX_PCT}%；改用冒号键值行或紧凑列表消税。")
+    return issues
+
+
 def _normalize_rule_text(content: str) -> str:
     """归一化规则正文，供跨文件连续文本重复检测使用。
 
@@ -1110,17 +1147,15 @@ def check_deliverable_naming(root: Path) -> list[str]:
 
 
 def main() -> int:
+    verbose = "--verbose" in sys.argv or "-v" in sys.argv
     if "--fix-claude-md" in sys.argv:
         fixed = fix_claude_md_thin_shell(ROOT)
         if fixed:
-            print(f"🔧 已改写 {len(fixed)} 个 CLAUDE.md 为标准薄壳：")
-            for f in fixed:
-                print(f"   • {f}")
-        else:
+            print("已自动将以下项目的 CLAUDE.md 改写为标准薄壳（一行标题 + @AGENTS.md）：")
+            for p in fixed:
+                print(f"  • {p.relative_to(ROOT)}")
+        elif verbose:
             print("✅ 未发现需要改写的 CLAUDE.md。")
-        print()
-
-    print(f"🔍 开始对工作区进行健康度与上下文瘦身体检: {ROOT}\n" + "=" * 60)
 
     checks = [
         ("1. .entropaxis 结构完整性检查", check_system_layout, True),
@@ -1147,32 +1182,45 @@ def main() -> int:
         ("21. 结构化契约 schema 校验", check_schema_conformance, True),
         ("22. .entropaxis/data/ 实例声明落地检查", check_data_declaration_links, False),
         ("23. 交付物中文主命名检查", check_deliverable_naming, False),
+        ("24. 语法税与 Token 经济性预算检查", check_syntax_tax_budget, True),
     ]
 
     all_issues = []
     blocking_issues = []
+    failed_checks = []
+
+    if verbose:
+        print(f"🔍 开始对工作区进行健康度与上下文瘦身体检: {ROOT}\n" + "=" * 60)
+
     for title, fn, blocking in checks:
         issues = fn(ROOT)
-        status = "✅ 正常" if not issues else f"{'❌ 阻断' if blocking else '⚠️ 建议'} {len(issues)} 项"
-        print(f"{title}: {status}")
-        for issue in issues:
-            print(f"   • {issue}")
-            all_issues.append(issue)
+        if issues:
+            failed_checks.append((title, issues, blocking))
+            all_issues.extend(issues)
             if blocking:
-                blocking_issues.append(issue)
-        print()
+                blocking_issues.extend(issues)
+            if verbose:
+                print(f"{title}: {'❌ 阻断' if blocking else '⚠️ 建议'} {len(issues)} 项")
+                for issue in issues:
+                    print(f"   • {issue}")
+                print()
+        elif verbose:
+            print(f"{title}: ✅ 正常\n")
 
-    print("=" * 60)
+    if not verbose and failed_checks:
+        for title, issues, blocking in failed_checks:
+            print(f"{title}: {'❌ 阻断' if blocking else '⚠️ 建议'} {len(issues)} 项")
+            for issue in issues:
+                print(f"   • {issue}")
+
     if blocking_issues:
         print(f"❌ 体检失败：{len(blocking_issues)} 项 .entropaxis 控制面契约未满足。")
         return 1
     if not all_issues:
-        print("🎉 工作区体检完毕：所有控制面与治理规则均符合要求！")
+        print(f"🎉 工作区体检全绿：全部 {len(checks)} 项门禁通过！")
     else:
         print(f"💡 体检完成：共发现 {len(all_issues)} 项治理优化建议，请按需维护调整。")
     return 0
-
-
 if __name__ == "__main__":
     sys.exit(main())
 
