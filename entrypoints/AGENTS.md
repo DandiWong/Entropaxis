@@ -34,14 +34,14 @@
 - 根系统治理与元规则：`.entropaxis/rules/01_根系统治理.md`（布局见 `.entropaxis/rules/控制面布局.md`）
 - 角色职责、跨角色交接与协作验收：`.entropaxis/rules/角色协作.md`
 - 工作区自然语言指令与任务解析：`.entropaxis/rules/指令解析.md`
-- 日常业务动作指令（事务/同步/任务/沉淀/复盘/初始化/报销）：`.entropaxis/rules/工作流指令.md`
+- 日常业务动作指令（事务/调研/同步/任务/沉淀/复盘/初始化/报销）：`.entropaxis/rules/工作流指令.md`
+- 方案调研、技术选型与多维评估：`.entropaxis/rules/方案调研.md`
 - 系统治理动作指令（审计/修正/自检/新迭代/工具化/Skill）：`.entropaxis/rules/治理指令.md`
 - 表达文风与可视化：`.entropaxis/rules/表达文风.md`
 - 对外发布与审批：`.entropaxis/rules/对外发布.md`
 - 知识沉淀、Wiki 录入与能力形态判定：`.entropaxis/rules/知识沉淀.md`
 - Tool 准入判据与 ApX 工程契约：`.entropaxis/rules/工具设计.md`
-- Skill 设计、渐进披露与元数据：`.entropaxis/rules/技能设计.md`
-- 分发/打包 Skill：`.entropaxis/rules/技能设计.md`（分发包）与 `.entropaxis/rules/文件交付.md`（打开目录）
+- Skill 设计、元数据、打包与分发：`.entropaxis/rules/技能设计.md`（分发包）与 `.entropaxis/rules/文件交付.md`（打开目录）
 - Spec、任务状态、任务看板与待办管理：`.entropaxis/rules/看板联动.md`
 - 报销 / 整理发票：`.entropaxis/rules/工作流指令.md` 与 `.entropaxis/rules/财务报销.md`
 - 项目注册表（工作区项目索引）：`.entropaxis/data/templates/registry.md`

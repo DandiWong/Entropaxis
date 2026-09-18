@@ -45,13 +45,15 @@ except ImportError:
 ROOT = paths.WORKSPACE_ROOT
 DEFAULT_CONFIG_PATH = paths.DATA_DIR / "templates" / "workspace-config.md"
 
-# 5 大标准认知模态及其职责定义
+# 7 大标准认知模态及其职责定义
 STANDARD_ROLES: dict[str, str] = {
-    "Reviewer": "方案审计/对抗评审/架构合规",
-    "Researcher": "调研（可联网）/文献综述",
+    "Architecture": "顶层架构/技术选型/方案设计",
+    "Researcher": "调研（强制联网）/文献综述/竞品查新",
+    "Designer": "视觉美学/UI交互原型/排版呈现",
     "Builder": "方案实施/核心编码/重构",
-    "Designer": "方案设计/原型 demo",
-    "Maintainer": "汇报落盘/守门验收/证据核验",
+    "Reviewer": "方案审计/对抗评审/架构合规",
+    "Maintainer": "全流程验收/守门落盘/证据核验",
+    "Reporter": "汇报总结/周报双周报/交付归档",
 }
 
 
@@ -73,11 +75,13 @@ KNOWN_AGENTS: list[AgentInfo] = [
         version_cmd=[],
         description="无需外部 CLI，直接使用当前 Agent 会话的子代理机制（自闭环默认选项）",
         presets={
+            "Architecture": "内置 Subagent 机制 (auto)",
             "Reviewer": "内置 Subagent 机制 (auto)",
             "Researcher": "内置 Subagent 机制 (auto)",
             "Builder": "内置 Subagent 机制 (auto)",
             "Designer": "内置 Subagent 机制 (auto)",
             "Maintainer": "内置 Subagent 机制 (auto)",
+            "Reporter": "内置 Subagent 机制 (auto)",
         },
     ),
     AgentInfo(
@@ -87,11 +91,13 @@ KNOWN_AGENTS: list[AgentInfo] = [
         version_cmd=["omp", "--version"],
         description="多模型编码与代理工具，支持 OpenAI/Anthropic/Gemini 独立进程调用",
         presets={
+            "Architecture": "omp --model openai-codex/gpt-5.6-terra",
             "Reviewer": "omp --model openai-codex/gpt-5.6-terra",
-            "Researcher": "omp --model google/gemini-2.5-pro",
-            "Builder": "omp --model openai-codex/gpt-5.6-terra",
-            "Designer": "omp --model anthropic/claude-3-7-sonnet",
-            "Maintainer": "omp --model openai-codex/gpt-5.6-terra",
+            "Researcher": "omp --model google-antigravity/gemini-3.8-flash || omp --model minimax-coding-cn/MiniMax-M3",
+            "Builder": "omp --model zhipu-coding-plan/glm-5.3 || claude --model sonnet-5",
+            "Designer": "claude --model sonnet-5",
+            "Maintainer": "claude --model opus-5",
+            "Reporter": "omp --model google-antigravity/gemini-3.8-flash || omp --model minimax-coding-cn/MiniMax-M3",
         },
     ),
     AgentInfo(
@@ -101,11 +107,13 @@ KNOWN_AGENTS: list[AgentInfo] = [
         version_cmd=["claude", "--version"],
         description="Anthropic 官方终端 Agent 工具，擅长深度推理与架构设计",
         presets={
+            "Architecture": "claude --model opus-5",
             "Reviewer": "claude -p \"{prompt}\"",
             "Researcher": "claude -p \"{prompt}\"",
             "Builder": "claude",
-            "Designer": "claude -p \"{prompt}\"",
-            "Maintainer": "claude",
+            "Designer": "claude --model sonnet-5",
+            "Maintainer": "claude --model opus-5",
+            "Reporter": "claude -p \"{prompt}\"",
         },
     ),
     AgentInfo(
@@ -242,7 +250,8 @@ def parse_role_table(content: str) -> dict[str, dict[str, str]]:
         if not in_role_section or not stripped.startswith("|") or not stripped.endswith("|"):
             continue
 
-        cols = [c.strip() for c in stripped.split("|")[1:-1]]
+        raw_cols = re.split(r"(?<!\\)\|", stripped)[1:-1]
+        cols = [c.strip().replace(r"\|", "|") for c in raw_cols]
         if not cols or cols[0] in ("角色", "角色模态") or set(cols[0]) <= set("-: "):
             continue
 
@@ -292,9 +301,10 @@ def render_role_section(roles_data: dict[str, dict[str, str]]) -> str:
         cli = info.get("cli") or "subagent"
         cmd = info.get("cmd") or "内置 Subagent 机制 (auto)"
         if cli != "subagent" and not cmd.startswith("`") and not cmd.startswith("内置"):
-            cmd_display = f"`{cmd}`"
+            cmd_escaped = cmd.replace("|", r"\|")
+            cmd_display = f"`{cmd_escaped}`"
         else:
-            cmd_display = cmd
+            cmd_display = cmd.replace("|", r"\|")
         lines.append(f"| {role} | {duty} | {cli} | {cmd_display} |")
 
     return "\n".join(lines)
@@ -355,20 +365,35 @@ def verify_roles(config_path: Path) -> list[dict[str, Any]]:
                 "msg": "✅ 使用当前 Agent 内置 Subagent 机制（系统默认，开箱即用）。",
             })
             continue
+        # 支持多候选命令降级链（通过 || 分隔）
+        sub_cmds = [c.strip().strip("`") for c in cmd.split("||")]
+        valid_cmds = []
+        missing_cmds = []
 
-        # 提取命令的主执行程序名（如 `omp --model ...` -> `omp`）
-        first_token = cli.split()[0] if cli else cmd.split()[0]
-        first_token = first_token.strip("`'\"")
+        for sc in sub_cmds:
+            if not sc:
+                continue
+            tokens = sc.split()
+            prog = tokens[0].strip("`'\"")
+            p_path = shutil.which(prog)
+            if p_path:
+                valid_cmds.append((sc, prog, p_path))
+            else:
+                missing_cmds.append((sc, prog))
 
-        cli_path = shutil.which(first_token)
-        if cli_path:
+        if valid_cmds:
+            primary = valid_cmds[0]
+            fallbacks = valid_cmds[1:]
+            fallback_desc = f"（配置了 {len(fallbacks)} 个备选降级）" if fallbacks else ""
+            msg = f"✅ 外置进程就绪: 主选 `{primary[1]}` ({primary[2]}) {fallback_desc}。"
+            if missing_cmds:
+                msg += f" ⚠️ 部分备选 CLI 未找到: {', '.join(m[1] for m in missing_cmds)}。"
             reports.append({
                 "role": role,
                 "cli": cli,
                 "cmd": cmd,
-                "path": cli_path,
                 "status": "external_ok",
-                "msg": f"✅ 外置独立进程就绪: 探测到 `{first_token}` ({cli_path})。",
+                "msg": msg,
             })
         else:
             reports.append({
@@ -376,12 +401,8 @@ def verify_roles(config_path: Path) -> list[dict[str, Any]]:
                 "cli": cli,
                 "cmd": cmd,
                 "status": "external_missing",
-                "msg": (
-                    f"⚠️ 外置 CLI `{first_token}` 在 PATH 中未找到！"
-                    f"运行时将自动优雅降级为内置 Subagent 机制。"
-                ),
+                "msg": f"⚠️ 外置 CLI 均未在 PATH 中找到！运行时将自动优雅降级为内置 Subagent 机制。",
             })
-
     return reports
 
 
