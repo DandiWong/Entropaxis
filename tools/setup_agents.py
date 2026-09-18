@@ -523,9 +523,19 @@ def main() -> int:
     parser.add_argument("--verify", "-v", action="store_true", help="校验当前 workspace-config.md 中的角色命令可用性")
     parser.add_argument("--apply-preset", metavar="AGENT", help="一键为所有角色应用指定 Agent 的预设 (如 omp/subagent/claude)")
     parser.add_argument("--set-role", nargs=3, metavar=("ROLE", "CLI", "CMD"), help="设定指定角色的承载 CLI 和启动命令")
+    parser.add_argument("--migrate-command-profiles", action="store_true",
+                        help="把角色表自由命令迁移为结构化 command_profiles（保守判定：含引号/转义拒迁标 needs-manual-conversion；幂等不覆盖；实现委托 dispatch_role.py）")
+    parser.add_argument("--dry-run", action="store_true", help="配合 --migrate-command-profiles：仅报告不写入")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="指定 workspace-config.md 路径")
 
     args = parser.parse_args()
+
+    if args.migrate_command_profiles:
+        try:
+            from . import dispatch_role  # noqa: PLC0415 - 单一实现避免双头迁移逻辑
+        except ImportError:
+            import dispatch_role  # noqa: PLC0415
+        return dispatch_role.migrate_config(args.config, apply=not args.dry_run)
 
     if args.scan:
         detected = detect_installed_agents()

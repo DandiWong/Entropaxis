@@ -108,6 +108,14 @@ instantiated_stages: [{instantiated}]
 optional_stages: [00_原始素材, assets]
 # 跨胶囊引用只记稳定 ID（如 Tech-105），严禁相对路径强绑定
 relations: []
+# 角色指派档案（三级解析第 1 级真源；契约 schemas/roles_manifest.schema.json）
+# mode 省略=沿链继承第 3 级，仅可 strict（单向收紧）；assignments 由 Manager 经
+# tools/dispatch_role.py 写入/更新，手工编辑须同步 revision
+roles_manifest:
+  assigned_at: {date}T00:00:00+08:00
+  assigned_by: init_capsule.py
+  revision: 0
+  assignments: []
 """
 
 

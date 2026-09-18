@@ -1,0 +1,68 @@
+{
+  "$comment": "角色指派档案（capsule.yaml::roles_manifest 与 workers.yaml::roles_manifest）的机器契约。真源定义见 rules/角色协作.md「角色指派与三级就近解析」。关键不变量：mode 单向收紧——档案级只允许 strict，graceful 仅第 3 级用户配置经 dispatch_authorizations 声明（越权/含硬门禁角色即整条无效）；调度五态与审计终态分离——无 waived，豁免仅问题级（见 audit_report.schema.json critical_acks）；档案零命令——只存 command_profile 标识，命令本体唯一存在于第 3 级 command_profiles（command_profile.schema.json）。跨字段语义（status==succeeded ⇒ deliverable_sha256 必填、target_sha256 变化 ⇒ succeeded 失效回 pending、argv_sha256 回执核验）由 tools/dispatch_role.py 执行。consumer: tools/dispatch_role.py, tests/test_dispatch_role.py, lint_workspace.py。",
+  "title": "roles_manifest",
+  "target": "capsule.yaml::roles_manifest / workers.yaml::roles_manifest",
+  "type": "object",
+  "required": ["assigned_at", "assigned_by", "revision", "assignments"],
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "$comment": "档案级禁 graceful（fail-closed 收紧）；省略=沿链继承第 3 级 default_dispatch_mode。",
+      "type": "string",
+      "enum": ["strict"]
+    },
+    "assigned_at": { "type": "string", "format": "date-time" },
+    "assigned_by": { "type": "string", "minLength": 1 },
+    "revision": { "type": "integer", "minimum": 0 },
+    "assignments": {
+      "$comment": "init_capsule.py 脚手架预置空列表（revision:0、无指派），故不设 minItems；非空时的跨字段语义由 dispatch_role.py 执行。",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["assignment_id", "role", "command_profile", "target_path", "target_sha256", "deliverable", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "assignment_id": {
+            "$comment": "跨轮次稳定 ID；同级改写时保留，禁重编号。",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+          },
+          "role": {
+            "type": "string",
+            "enum": ["Architecture", "Researcher", "Designer", "Builder", "Reviewer", "Maintainer", "Reporter"]
+          },
+          "command_profile": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "target_path": { "type": "string", "minLength": 1 },
+          "target_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "deliverable": { "type": "string", "minLength": 1 },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "running", "succeeded", "failed", "blocked"]
+          },
+          "attempts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["profile", "argv_sha256", "started_at", "ended_at"],
+              "additionalProperties": true,
+              "properties": {
+                "profile": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+                "argv_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "exit_code": { "type": "integer" },
+                "timeout": { "type": "boolean" },
+                "started_at": { "type": "string", "format": "date-time" },
+                "ended_at": { "type": "string", "format": "date-time" },
+                "report_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "failure_code": {
+                  "type": "string",
+                  "enum": ["UNCONFIGURED", "SUBAGENT_AUTO", "NOT_EXECUTABLE", "TIMEOUT", "NO_VALID_OUTPUT", "CHAIN_EXHAUSTED"]
+                }
+              }
+            }
+          },
+          "deliverable_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    }
+  }
+}

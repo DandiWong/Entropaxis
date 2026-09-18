@@ -89,7 +89,7 @@
         },
         {
           "file": ".entropaxis/rules/角色协作.md",
-          "anchor": "### 调度优先序与优雅降级契约 (Dispatch Hierarchy)"
+          "anchor": "### 调度优先序与降级契约 (Dispatch Hierarchy)"
         }
       ]
     },
@@ -581,7 +581,7 @@
         },
         {
           "file": ".entropaxis/rules/角色协作.md",
-          "anchor": "### 调度优先序与优雅降级契约 (Dispatch Hierarchy)"
+          "anchor": "### 调度优先序与降级契约 (Dispatch Hierarchy)"
         },
         {
           "file": ".entropaxis/rules/文件交付.md",

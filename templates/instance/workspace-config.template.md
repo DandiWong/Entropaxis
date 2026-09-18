@@ -31,3 +31,14 @@
 - Maintainer（汇报落盘/守门验收/证据核验）：subagent · 启动命令: 内置 Subagent 机制 (auto)
 
 > 首次初始化后默认全部使用内置 Subagent。可通过 `python3 .entropaxis/tools/setup_agents.py` 交互式检测宿主机已安装的外部 Agent CLI 并自动配置。
+## 角色调度参数（三级解析第 3 级）
+
+> 承载调度的参数真源（`rules/角色协作.md`「角色指派三级解析与调度门禁」；机器契约 `schemas/command_profile.schema.json`）。`default_dispatch_mode` 仅用户可改；`command_profiles` 由 `setup_agents.py --migrate-command-profiles` 从上表迁移生成（保守判定，拒迁项标 needs-manual-conversion），亦可手工维护。
+
+```yaml
+default_dispatch_mode: strict
+
+command_profiles: {}
+
+dispatch_authorizations: []
+```

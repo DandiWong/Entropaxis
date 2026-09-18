@@ -415,13 +415,8 @@ if __name__ == "__main__":
         init_file_opener(verbose=verbose, force_rescan=force_rescan_opener)
         render_instance_configs(verbose=verbose)
         stamp_new_instances(verbose=verbose)
-        print("🎉 工作区初始化与自愈完成（入口已同步，实例配置就绪）。")
-        print("\n💡 工作区已具备完整兜底（所有角色默认使用内置 Subagent，开箱即用）。")
-        print("👉 如需进阶配置，可按需通过以下入口自定义：")
-        print("   • 角色与多模型绑定：运行 `python3 .entropaxis/tools/setup_agents.py` 或说「自定义角色」")
-        print("   • 文件默认打开程序：对 Agent 说「配置打开方式」（关联 Office / PDF 桌面软件）")
-        print("   • 组织名称口径声明：在 `.entropaxis/data/templates/workspace-config.md` 声明组织正名与禁用缩写")
-        print("   • 业务项目别名登记：在 `.entropaxis/data/templates/registry.md` 登记你的项目与口语别名")
+        print("🎉 工作区初始化与自愈完成（入口已同步，实例配置就绪；角色默认内置 Subagent 兜底）。")
+        print("💡 进阶自定义：`setup_agents.py` 绑定多模型 / 说「配置打开方式」「自定义角色」 / registry.md 登记别名 / workspace-config.md 组织口径")
         if sys.platform == "win32" and verbose:
             print_windows_hints()
     else:
