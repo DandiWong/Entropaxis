@@ -28,6 +28,18 @@ except ImportError:
 
 CAPSULE_RE = re.compile(r"^\d{8}_")
 
+# 受审对象定位（《治理指令》审计 §2 / 修正 §2）：审计与修正都要先找"最新出现的方案或实施规格"。
+# 形态真源见《文件交付》2.1（胶囊内 `序数_类型.md`）与 2.3（独立 Spec `<ID>_中文主题.md`、
+# 配套审计报告 `Audit_<ID>_*.md`）。
+# ponytail: 只按文件名形态 + mtime 排序返回候选，不猜"哪个才是本次受审对象"——多候选时
+# 由调用方按规则向用户确认，工具不代做主观裁定。
+ARTIFACT_PATTERNS = {
+    "proposal": ("02_方案.md", "*_方案.md"),
+    "spec": ("04_Spec_*.md", "*-[0-9]*_*.md"),
+    "audit": ("05_审计报告.md", "Audit_*.md"),
+}
+_ARTIFACT_SKIP = {".git", "node_modules", "__pycache__", ".pytest_cache", "Archive"}
+
 # 缺失时的安装指引。按平台给一条可直接粘贴的命令。
 # ponytail: 只报不装——跨 brew/apt/dnf/pacman/winget/scoop 写自动安装要处理 sudo 交互与
 # 各自的失败模式，代价远超收益；确有需要再加 --install 走非交互包管理器。
@@ -172,6 +184,55 @@ def find_capsule(query: str, root: Path, scope: str = "workspace",
     }
 
 
+def find_artifacts(kind: str, root: Path, query: str | None = None,
+                   limit: int = 20, timeout: int = 60) -> dict:
+    """定位最新的方案 / Spec / 审计报告候选，按修改时间倒排。
+
+    query 给出时先用既有胶囊检索把范围收敛到命中的胶囊目录，命中不到才退回整个
+    search_root——收敛是省 token 的主要来源，全库 rglob 是兜底不是主路径。
+    """
+    if kind not in ARTIFACT_PATTERNS:
+        raise CapsuleFindError(f"未知交付物类型 {kind!r}，可选：{'/'.join(ARTIFACT_PATTERNS)}")
+
+    scopes: list[Path] = []
+    matched_project = None
+    if query:
+        report = find_capsule(query, root, scope="workspace", capsules_only=True, timeout=timeout)
+        matched_project = report["matched_project"]
+        scopes = [root / r for r in report["results"]]
+    if not scopes:
+        scopes = [root]
+
+    seen: dict[Path, float] = {}
+    for scope in scopes:
+        if not scope.is_dir():
+            continue
+        for pattern in ARTIFACT_PATTERNS[kind]:
+            for hit in scope.rglob(pattern):
+                if not hit.is_file() or _ARTIFACT_SKIP & set(hit.parts):
+                    continue
+                seen[hit.resolve()] = hit.stat().st_mtime
+
+    ordered = sorted(seen.items(), key=lambda kv: kv[1], reverse=True)
+    results = []
+    for path, mtime in ordered[:limit]:
+        try:
+            rel = str(path.relative_to(root.resolve()))
+        except ValueError:
+            rel = str(path)
+        results.append({"path": rel, "mtime": int(mtime)})
+
+    return {
+        "kind": kind,
+        "query": query,
+        "matched_project": matched_project,
+        "scopes": [str(s) for s in scopes],
+        "count": len(ordered),
+        "truncated": len(ordered) > limit,
+        "results": results,
+    }
+
+
 def doctor() -> dict:
     """报告本机可用后端与缺失项的安装命令，不执行任何安装。"""
     system = platform.system()
@@ -197,6 +258,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=int, default=60, help="单次检索超时秒数")
     parser.add_argument("--json", action="store_true", help="输出 JSON")
     parser.add_argument("--doctor", action="store_true", help="只报告可用检索后端与安装建议")
+    parser.add_argument("--latest-artifact", choices=tuple(ARTIFACT_PATTERNS),
+                        help="定位最新的方案/Spec/审计报告候选（审计与修正的受审对象定位）")
+    parser.add_argument("--limit", type=int, default=20, help="交付物候选返回上限，默认 20")
     return parser
 
 
@@ -207,6 +271,27 @@ def main() -> None:
     if args.doctor:
         print(json.dumps(doctor(), ensure_ascii=False, indent=2))
         return
+
+    if args.latest_artifact:
+        try:
+            report = find_artifacts(args.latest_artifact, args.root.expanduser().resolve(),
+                                    query=args.query, limit=args.limit, timeout=args.timeout)
+        except CapsuleFindError as error:
+            print(f"❌ {error}\n👉 用法：find_capsule.py --latest-artifact audit [主题词]", file=sys.stderr)
+            raise SystemExit(2)
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return
+        if not report["results"]:
+            print(f"❌ 未找到 {args.latest_artifact} 类交付物（范围 {report['scopes'][0]}）", file=sys.stderr)
+            print("👉 换主题词收敛范围，或确认该胶囊内确已产出该阶段文档", file=sys.stderr)
+            raise SystemExit(1)
+        for item in report["results"]:
+            print(item["path"])
+        if report["truncated"]:
+            print(f"… 另有 {report['count'] - len(report['results'])} 条，用 --limit 放宽", file=sys.stderr)
+        return
+
     if not args.query:
         parser.error("缺少检索词\n👉 用法：find_capsule.py <主题词> [--scope machine]")
 

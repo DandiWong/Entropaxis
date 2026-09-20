@@ -128,5 +128,69 @@ class BackendDispatchTests(unittest.TestCase):
             self.assertIn("fd", report["install_hints"])
 
 
+class LatestArtifactTests(unittest.TestCase):
+    """受审对象定位（《治理指令》审计 §2 / 修正 §2）。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        capsule = self.root / "20260901_某主题方案"
+        capsule.mkdir()
+        for name in ("01_调研.md", "02_方案.md", "05_审计报告.md", "04_Spec_Tech-1.md"):
+            (capsule / name).write_text("x", encoding="utf-8")
+        self.capsule = capsule
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_finds_each_artifact_kind(self):
+        for kind, expected in (("proposal", "02_方案.md"),
+                               ("audit", "05_审计报告.md"),
+                               ("spec", "04_Spec_Tech-1.md")):
+            report = FC.find_artifacts(kind, self.root)
+            self.assertIn(expected, [Path(r["path"]).name for r in report["results"]], kind)
+
+    def test_results_ordered_newest_first(self):
+        old = self.capsule / "02_方案.md"
+        new_capsule = self.root / "20260920_新主题方案"
+        new_capsule.mkdir()
+        newer = new_capsule / "02_方案.md"
+        newer.write_text("y", encoding="utf-8")
+        import os
+        os.utime(old, (1_600_000_000, 1_600_000_000))
+        os.utime(newer, (1_700_000_000, 1_700_000_000))
+        report = FC.find_artifacts("proposal", self.root)
+        self.assertEqual(Path(report["results"][0]["path"]).parent.name, "20260920_新主题方案")
+
+    def test_unknown_kind_reports_actionable_error(self):
+        with self.assertRaises(FC.CapsuleFindError) as ctx:
+            FC.find_artifacts("nope", self.root)
+        self.assertIn("proposal", str(ctx.exception))
+
+    def test_archive_and_vcs_dirs_are_skipped(self):
+        for skipped in ("Archive", ".git"):
+            buried = self.root / skipped / "20260101_旧方案"
+            buried.mkdir(parents=True)
+            (buried / "02_方案.md").write_text("x", encoding="utf-8")
+        report = FC.find_artifacts("proposal", self.root)
+        self.assertFalse([r for r in report["results"] if "Archive" in r["path"] or ".git" in r["path"]])
+
+    def test_limit_truncates_and_flags(self):
+        for day in range(2, 10):
+            extra = self.root / f"202609{day:02d}_批量方案"
+            extra.mkdir()
+            (extra / "02_方案.md").write_text("x", encoding="utf-8")
+        report = FC.find_artifacts("proposal", self.root, limit=3)
+        self.assertEqual(len(report["results"]), 3)
+        self.assertTrue(report["truncated"])
+        self.assertGreater(report["count"], 3)
+
+    def test_empty_result_is_not_an_error(self):
+        with tempfile.TemporaryDirectory() as empty:
+            report = FC.find_artifacts("audit", Path(empty))
+            self.assertEqual(report["results"], [])
+            self.assertFalse(report["truncated"])
+
+
 if __name__ == "__main__":
     unittest.main()

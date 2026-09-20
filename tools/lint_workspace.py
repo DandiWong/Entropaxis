@@ -47,7 +47,7 @@ BINDING_WORDLIST = f"{paths.SYSTEM_DIRNAME}/data/rules/零系统绑定词表.md"
 FORBIDDEN_HOST_PATTERN = re.compile(r"127\.0\.0\.1|localhost")
 
 # .entropaxis 健康度：控制面可发现、可渲染、可执行的最小契约。
-SYSTEM_REQUIRED_DIRECTORIES = ("entrypoints", "rules", "config", "schemas", "templates", "tools", "skills", "tests")
+SYSTEM_REQUIRED_DIRECTORIES = ("entrypoints", "rules", "schemas", "templates", "tools", "skills", "tests")
 SYSTEM_REQUIRED_FILES = (
     "AGENTS.md",
     "README.md",
@@ -296,7 +296,7 @@ def check_rule_text_repetition(root: Path) -> list[str]:
 def check_schema_conformance(root: Path) -> list[str]:
     """按 .entropaxis/schemas/ 校验结构化契约。
 
-    此前 route_map 的字段集、Front Matter 的取值域、审计报告的问题标注格式，
+    此前 Front Matter 的取值域、审计报告的问题标注格式，
     契约都只存在于各自解析器的正则里——改规则的人无从得知自己在破坏一个解析器。
     """
     tools = root / paths.SYSTEM_DIRNAME / "tools"
@@ -310,7 +310,7 @@ def check_schema_conformance(root: Path) -> list[str]:
     finally:
         if str(tools) in sys.path:
             sys.path.remove(str(tools))
-    return [f"[违反 schema] {e}" for e in (vs.check_route_map() + vs.check_audit_report_schema_selftest())]
+    return [f"[违反 schema] {e}" for e in vs.check_audit_report_schema_selftest()]
 
 
 def check_data_source_mapping(root: Path) -> list[str]:
@@ -1102,37 +1102,6 @@ def check_routing_integrity(root: Path) -> list[str]:
     return issues
 
 
-def check_route_map_integrity(root: Path) -> list[str]:
-    """检查确定性路由映射表 (route_map.json) 结构完整且目标文件真实存在。"""
-    import json as _json
-
-    issues = []
-    route_map = root / paths.SYSTEM_DIRNAME / "config" / "route_map.json"
-    if not route_map.is_file():
-        return issues
-    try:
-        data = _json.loads(route_map.read_text(encoding="utf-8"))
-    except _json.JSONDecodeError as error:
-        return [f"[路由映射表解析失败] {route_map.relative_to(root)}: {error.msg}"]
-    for entry in data.get("routes", []):
-        mechanism = entry.get("mechanism", "<未命名机制>")
-        if not entry.get("keywords"):
-            issues.append(f"[路由映射缺关键词] 机制「{mechanism}」未声明 keywords。")
-        if __package__:
-            from .route_context import resolve_route_reads
-        else:
-            from route_context import resolve_route_reads
-        try:
-            resolved = resolve_route_reads(entry, root)
-        except ValueError as error:
-            issues.append(f"[路由读取契约] 机制「{mechanism}」：{error}")
-            continue
-        for item in resolved:
-            if item["fallback"]:
-                issues.append(f"[路由读取异常] 机制「{mechanism}」{item['file']}：{item['fallback']}")
-    return issues
-
-
 def check_deliverable_naming(root: Path) -> list[str]:
     issues = []
     has_chinese_pattern = re.compile(r"[\u4e00-\u9fa5]")
@@ -1148,12 +1117,17 @@ def check_deliverable_naming(root: Path) -> list[str]:
 
 def main() -> int:
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
+    # --json 供 report_selfcheck.py 等下游消费，避免消费方去 parse 人读散文（《工具设计》3.3 结构化输出）
+    as_json = "--json" in sys.argv
+    fixed_claude_md = []
     if "--fix-claude-md" in sys.argv:
-        fixed = fix_claude_md_thin_shell(ROOT)
-        if fixed:
+        fixed_claude_md = [str(p.relative_to(ROOT)) for p in fix_claude_md_thin_shell(ROOT)]
+        if as_json:
+            pass
+        elif fixed_claude_md:
             print("已自动将以下项目的 CLAUDE.md 改写为标准薄壳（一行标题 + @AGENTS.md）：")
-            for p in fixed:
-                print(f"  • {p.relative_to(ROOT)}")
+            for p in fixed_claude_md:
+                print(f"  • {p}")
         elif verbose:
             print("✅ 未发现需要改写的 CLAUDE.md。")
 
@@ -1173,7 +1147,6 @@ def main() -> int:
         ("15b. 看板 Provider 凭证泄漏检查", check_board_config_no_credentials, True),
         ("15c. 项目注册表登记进度检查", check_registry_population, False),
         ("15d. Skill 根系统独立性检查", check_skill_system_independence, True),
-        ("16. 确定性路由映射表完整性检查", check_route_map_integrity, True),
         ("17. 规则文件行数预算检查", check_rule_budget, False),
         ("18. 跨规则文件连续文本重复检查", check_rule_text_repetition, False),
         ("19. .entropaxis/data/ 实例文件来源标记检查", check_data_provenance, False),
@@ -1189,7 +1162,7 @@ def main() -> int:
     blocking_issues = []
     failed_checks = []
 
-    if verbose:
+    if verbose and not as_json:
         print(f"🔍 开始对工作区进行健康度与上下文瘦身体检: {ROOT}\n" + "=" * 60)
 
     for title, fn, blocking in checks:
@@ -1199,13 +1172,31 @@ def main() -> int:
             all_issues.extend(issues)
             if blocking:
                 blocking_issues.extend(issues)
-            if verbose:
+            if verbose and not as_json:
                 print(f"{title}: {'❌ 阻断' if blocking else '⚠️ 建议'} {len(issues)} 项")
                 for issue in issues:
                     print(f"   • {issue}")
                 print()
-        elif verbose:
+        elif verbose and not as_json:
             print(f"{title}: ✅ 正常\n")
+
+    if as_json:
+        print(json.dumps({
+            "root": str(ROOT),
+            "total_checks": len(checks),
+            "blocking_count": len(blocking_issues),
+            "advisory_count": len(all_issues) - len(blocking_issues),
+            "passed": not blocking_issues,
+            "fixed_claude_md": fixed_claude_md,
+            "checks": [
+                {"title": t, "blocking": b, "issues": i}
+                for t, i, b in failed_checks
+            ],
+            "passed_checks": [
+                t for t, _, _ in checks if t not in {ft for ft, _, _ in failed_checks}
+            ],
+        }, ensure_ascii=False, indent=2))
+        return 1 if blocking_issues else 0
 
     if not verbose and failed_checks:
         for title, issues, blocking in failed_checks:
