@@ -1,0 +1,59 @@
+{
+  "$comment": "交付物正文结构契约：按 Front Matter 的 type 取一组结构判据，回答「产出合不合格」而不只是「文件在不在」。真源定义见 rules/方案调研.md（调研四段式与三铁律）与 rules/角色协作.md「成功判据按产出形态取」。消费方：tools/validate_schema.py::check_deliverable_structure。判据一律是结构性的、可机械判定的下限，不评判内容好坏——好坏归 Reviewer，这里只挡「长得像但没做」。 判据先按文件名阶段取（胶囊 NN_类型.md 是既有命名铁律，比 type 更精确——02_方案 与 03_设计 共用 type: Proposal 但结构完全不同），取不到再退回 type。",
+  "title": "deliverable_structure",
+  "target": "事务胶囊内各阶段 Markdown 文档的正文（Front Matter 之后的部分）",
+  "type": "object",
+  "rules": {
+    "Research": {
+      "$comment": "《方案调研》三铁律的可机械化部分：四段式、横向对比 ≥2 方案、信源带真实链接。铁律一「强制联网取证」无法直接机械验证，以「一手信源必须带 URL」作为其可验证的必要条件——没有链接的引用等同于无法复核。",
+      "required_sections": [
+        "执行摘要",
+        "对比",
+        "主推|推荐|落地",
+        "风险"
+      ],
+      "min_table_rows": 3,
+      "min_source_urls": 2,
+      "message": "调研须含四段式（执行摘要/多方案对比矩阵/主推方案与落地路径/风险与 Plan B）、一张 ≥2 候选的对比表、≥2 条带链接的一手信源"
+    },
+    "Proposal": {
+      "$comment": "方案的下限是「有边界、有取舍」：只写主推方案不写替代方案与非目标的，是自卖自夸不是方案。",
+      "required_sections": [
+        "目标|背景",
+        "边界|非目标|Non-goal",
+        "架构|设计|流程",
+        "决策|对比|替代"
+      ],
+      "min_table_rows": 2,
+      "min_source_urls": 0,
+      "message": "方案须含目标、系统边界/非目标、架构或流程设计、核心决策与替代方案对比表"
+    },
+    "Report": {
+      "$comment": "验收/汇报的下限是「结论可追溯到证据」：四要素齐全才谈得上可复核，缺「未覆盖范围」的报告一律高估了自己的结论强度。",
+      "required_sections": [
+        "检查对象|范围|背景",
+        "证据|数据|结果",
+        "结论",
+        "未覆盖|后续|风险"
+      ],
+      "min_table_rows": 0,
+      "min_source_urls": 0,
+      "message": "报告须含检查对象/范围、证据、结论、未覆盖范围或后续项四部分"
+    },
+    "Design": {
+      "$comment": "设计稿的下限是「可实现」：光有效果图没有字段映射与状态处理，前端接不上。",
+      "required_sections": [
+        "拓扑|布局|页面|组件",
+        "字段|数据|映射",
+        "交互|状态|事件",
+        "原型|索引|链接"
+      ],
+      "min_table_rows": 0,
+      "min_source_urls": 0,
+      "message": "设计须含页面/组件拓扑、字段动静映射、交互与状态处理、原型索引"
+    }
+  },
+  "stage_rules": {
+    "^03_设计": "Design"
+  }
+}
