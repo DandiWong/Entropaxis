@@ -67,7 +67,7 @@ DOC_STATUS_ENUM = ("draft", "active", "revised", "completed")
 # 各阶段文档的 Front Matter 契约（type, author, status, 是否带 id）
 STAGE_CONTRACT = {
     "01_调研.md": ("Research", "Researcher", "draft"),
-    "02_方案.md": ("Proposal", "Designer", "draft"),
+    "02_方案.md": ("Proposal", "Architecture", "draft"),
     "03_设计.md": ("Proposal", "Designer", "draft"),
     "07_验收报告.md": ("Report", "Maintainer", "draft"),
 }
@@ -102,7 +102,9 @@ lifecycle: draft
 delivered_at: null        # 交付日
 review_due_at: null       # delivered_at + 30 天：首次价值回收提醒
 closure_deadline: null    # delivered_at + 60 天：正常归档或未度量归档的硬截止
-# 本次已实例化的阶段（单源自 MODE_STAGES，与实际生成文件集恒等）
+# 初始化时实例化的阶段（单源自 MODE_STAGES，与建容器那一刻的文件集恒等）
+# 注意：这是出生快照，不是当前目录清单——05_审计报告、08_汇报 等由后续角色调度产生的
+# 阶段不回填至此，实际产出以目录与 roles_manifest.assignments 为准
 instantiated_stages: [{instantiated}]
 # 全模式通用的按需可选目录，不计入上一行；需要时再建，不预建空目录
 optional_stages: [00_原始素材, assets]
@@ -129,6 +131,7 @@ topic: {topic_q}
 date: {today}
 author: Researcher
 status: draft
+carrier: session-local
 ---
 
 # {topic} · 业务调研与背景
@@ -146,8 +149,9 @@ status: draft
 type: Proposal
 topic: {topic_q}
 date: {today}
-author: Designer
+author: Architecture
 status: draft
+carrier: session-local
 ---
 
 # {topic} · 业务与架构方案
@@ -170,6 +174,7 @@ topic: {topic_q}
 date: {today}
 author: Designer
 status: draft
+carrier: session-local
 ---
 
 # {topic} · 交互与视觉设计
@@ -222,6 +227,7 @@ date: {today}
 author: Maintainer
 id: {task_id}
 status: draft
+carrier: session-local
 ---
 
 # {topic} · 验收报告（工程验收 + 价值回收）
@@ -307,6 +313,10 @@ def _self_check(tmp: Path, task_id: str, topic: str) -> None:
                 typ, author, status
             ):
                 raise _error(f"{md.name} 的 Front Matter 不合规: {fm}", "脚本内部模板异常，请汇报至根系统治理流程。")
+            # carrier 是 Research/Proposal/Report 的条件必填（front_matter.schema.json）；骨架默认
+            # session-local，由 dispatch_role.py 依调度回执改写，模板漏写会让新胶囊开箱即不合规。
+            if fm.get("carrier") != "session-local":
+                raise _error(f"{md.name} 的 carrier 非法: {fm.get('carrier')!r}", "脚本内部模板异常，请汇报至根系统治理流程。")
         if fm.get("status") not in DOC_STATUS_ENUM:
             raise _error(f"{md.name} 的文档状态非法: {fm.get('status')!r}", "脚本内部模板异常，请汇报至根系统治理流程。")
         if _parsed_topic(fm.get("topic", ""), md.name) != topic:

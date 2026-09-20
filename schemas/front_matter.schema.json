@@ -3,18 +3,51 @@
   "title": "front_matter",
   "target": "事务胶囊内各阶段 Markdown 文档顶部的 YAML Front Matter",
   "type": "object",
-  "required": ["type", "topic", "date", "author", "status"],
+  "required": [
+    "type",
+    "topic",
+    "date",
+    "author",
+    "status"
+  ],
   "additionalProperties": false,
   "properties": {
     "type": {
       "type": "string",
-      "enum": ["Spec", "Proposal", "Research", "Audit", "Report", "Changelog"]
+      "enum": [
+        "Spec",
+        "Proposal",
+        "Research",
+        "Audit",
+        "Report",
+        "Changelog"
+      ]
     },
-    "topic": { "type": "string", "minLength": 1 },
-    "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
-    "author": {
+    "topic": {
       "type": "string",
-      "enum": ["Researcher", "Designer", "Builder", "Reviewer", "Maintainer"]
+      "minLength": 1
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "author": {
+      "$comment": "七大认知模态（rules/角色协作.md）；此前缺 Architecture/Reporter，导致 02_方案.md 这类架构产出无合法取值。",
+      "type": "string",
+      "enum": [
+        "Architecture",
+        "Researcher",
+        "Designer",
+        "Builder",
+        "Reviewer",
+        "Maintainer",
+        "Reporter"
+      ]
+    },
+    "carrier": {
+      "$comment": "该交付物的实际承载：成功外置时为 command_profile 名，会话内承载时为 session-local。本字段与 carrier_ref/fallback_reason 构成通用承载三元组；audit_report.schema.json 的 reviewer_mode/reviewer_ref/fallback_reason 是其 Audit 特化形态，两者结构由 tests/test_dispatch_role.py 机械钉死防漂移。由 dispatch_role.py 依调度回执盖章，非模型自述。",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
     },
     "id": {
       "$comment": "研发/Spec 事项必填；ID 前缀体系见 文件交付.md §2.3",
@@ -23,7 +56,12 @@
     },
     "status": {
       "type": "string",
-      "enum": ["draft", "active", "revised", "completed"]
+      "enum": [
+        "draft",
+        "active",
+        "revised",
+        "completed"
+      ]
     },
     "audit_max_rounds": {
       "$comment": "仅 type: Proposal 需覆盖默认轮次上限时声明",
@@ -33,13 +71,59 @@
     "independence": {
       "$comment": "已退役字段，仅 schema_version<2 的历史 Audit 报告使用只读兼容；新报告的字段契约唯一真源见 audit_report.schema.json。",
       "type": "string"
+    },
+    "carrier_ref": {
+      "$comment": "承载的命令原文（外置）或会话标识；对应 audit_report 的 reviewer_ref。档案只存 argv_sha256（可证伪不可还原），此处存原文以便人读核对。",
+      "type": "string",
+      "minLength": 1
+    },
+    "fallback_reason": {
+      "$comment": "未走外置时的结构化原因；取值域与 audit_report.schema.json 的 fallback_reason 完全一致。",
+      "type": "string",
+      "pattern": "^(not_configured|not_executable|launch_failed|timeout|no_valid_output)(:.*)?$"
+    },
+    "receipt_id": {
+      "$comment": "调度回执 ID。承载事实的真源是 data/receipts/ 下由签发者 MAC 签名的回执，本字段只是指针——Front Matter 与模型同权限可写，不能作信任根（审计 C-03）。",
+      "type": "string",
+      "pattern": "^rcpt-[0-9a-f]{16}$"
     }
   },
   "conditional_required": [
     {
-      "when": { "type": "Spec" },
-      "require": ["id"],
+      "when": {
+        "type": "Spec"
+      },
+      "require": [
+        "id"
+      ],
       "message": "type: Spec 必须声明 id（研发事项需可追溯到 Task ID）"
+    },
+    {
+      "when": {
+        "type": "Research"
+      },
+      "require": [
+        "carrier"
+      ],
+      "message": "type: Research 必须声明 carrier（实际承载；外置未跑成即 session-local，不得留空）"
+    },
+    {
+      "when": {
+        "type": "Proposal"
+      },
+      "require": [
+        "carrier"
+      ],
+      "message": "type: Proposal 必须声明 carrier（实际承载；外置未跑成即 session-local，不得留空）"
+    },
+    {
+      "when": {
+        "type": "Report"
+      },
+      "require": [
+        "carrier"
+      ],
+      "message": "type: Report 必须声明 carrier（实际承载；外置未跑成即 session-local，不得留空）"
     }
   ]
 }

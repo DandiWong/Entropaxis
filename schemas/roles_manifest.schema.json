@@ -3,23 +3,45 @@
   "title": "roles_manifest",
   "target": "capsule.yaml::roles_manifest / workers.yaml::roles_manifest",
   "type": "object",
-  "required": ["assigned_at", "assigned_by", "revision", "assignments"],
+  "required": [
+    "assigned_at",
+    "assigned_by",
+    "revision",
+    "assignments"
+  ],
   "additionalProperties": false,
   "properties": {
     "mode": {
       "$comment": "档案级禁 graceful（fail-closed 收紧）；省略=沿链继承第 3 级 default_dispatch_mode。",
       "type": "string",
-      "enum": ["strict"]
+      "enum": [
+        "strict"
+      ]
     },
-    "assigned_at": { "type": "string", "format": "date-time" },
-    "assigned_by": { "type": "string", "minLength": 1 },
-    "revision": { "type": "integer", "minimum": 0 },
+    "assigned_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "assigned_by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
     "assignments": {
       "$comment": "init_capsule.py 脚手架预置空列表（revision:0、无指派），故不设 minItems；非空时的跨字段语义由 dispatch_role.py 执行。",
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["assignment_id", "role", "command_profile", "target_path", "target_sha256", "deliverable", "status"],
+        "$comment": "target_path/target_sha256 非必填：调研、方案等角色的第一步就是凭空产出，没有前序受审对象可指纹；声明了才按「指纹不符 ⇒ succeeded 失效回 pending」核验。deliverable 与 deliverable_ref 二者必居其一——代码型角色（Builder）的产出是一次修订而非一个文件，成功判据由 verify_profile 的退出码给出。",
+        "required": [
+          "assignment_id",
+          "role",
+          "command_profile",
+          "status"
+        ],
         "additionalProperties": false,
         "properties": {
           "assignment_id": {
@@ -29,38 +51,115 @@
           },
           "role": {
             "type": "string",
-            "enum": ["Architecture", "Researcher", "Designer", "Builder", "Reviewer", "Maintainer", "Reporter"]
+            "enum": [
+              "Architecture",
+              "Researcher",
+              "Designer",
+              "Builder",
+              "Reviewer",
+              "Maintainer",
+              "Reporter"
+            ]
           },
-          "command_profile": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
-          "target_path": { "type": "string", "minLength": 1 },
-          "target_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-          "deliverable": { "type": "string", "minLength": 1 },
+          "command_profile": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "target_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "deliverable": {
+            "type": "string",
+            "minLength": 1
+          },
           "status": {
             "type": "string",
-            "enum": ["pending", "running", "succeeded", "failed", "blocked"]
+            "enum": [
+              "pending",
+              "running",
+              "succeeded",
+              "failed",
+              "blocked"
+            ]
           },
           "attempts": {
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["profile", "argv_sha256", "started_at", "ended_at"],
+              "required": [
+                "profile",
+                "argv_sha256",
+                "started_at",
+                "ended_at"
+              ],
               "additionalProperties": true,
               "properties": {
-                "profile": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
-                "argv_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-                "exit_code": { "type": "integer" },
-                "timeout": { "type": "boolean" },
-                "started_at": { "type": "string", "format": "date-time" },
-                "ended_at": { "type": "string", "format": "date-time" },
-                "report_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "profile": {
+                  "type": "string",
+                  "pattern": "^([a-z][a-z0-9-]*|(ack|verify):.+)$",
+                  "$comment": "profile 名，或带类别前缀的非调度条目：ack:<豁免引用>、verify:<校验 profile>。"
+                },
+                "argv_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "exit_code": {
+                  "type": "integer"
+                },
+                "timeout": {
+                  "type": "boolean"
+                },
+                "started_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "ended_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "report_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
                 "failure_code": {
                   "type": "string",
-                  "enum": ["UNCONFIGURED", "SUBAGENT_AUTO", "NOT_EXECUTABLE", "TIMEOUT", "NO_VALID_OUTPUT", "CHAIN_EXHAUSTED"]
+                  "enum": [
+                    "CHAIN_EXHAUSTED",
+                    "NOT_EXECUTABLE",
+                    "NO_VALID_OUTPUT",
+                    "SUBAGENT_AUTO",
+                    "TIMEOUT",
+                    "UNCONFIGURED",
+                    "VERIFY_FAILED"
+                  ]
+                },
+                "target_sha256": {
+                  "$comment": "本次执行所依据的输入指纹。assignment 上的 target_* 只反映最新一跳，依赖历史随执行记录走。",
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
                 }
               }
             }
           },
-          "deliverable_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          "deliverable_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "deliverable_ref": {
+            "$comment": "代码型交付物标识，形如 git:<sha> 或 path:<dir>；与 deliverable 互补。",
+            "type": "string",
+            "minLength": 1
+          },
+          "verify_profile": {
+            "$comment": "成功判据 profile（第 3 级 command_profiles 中的一条，不含 {PROMPT}）；退出码 0 即通过。",
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          }
         }
       }
     }

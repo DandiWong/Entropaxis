@@ -1,0 +1,30 @@
+{
+  "$comment": "目录型/多产物交付物的机器状态围栏（```deliverable-state``` 内的 JSON）。此前只检查『是个对象且 outputs 非空』，声明的输出与文件系统事实之间没有任何绑定——`{\"outputs\":[\"missing.html\"]}` 配任一文件即判有效（审计 M-02）。role 必须与调度角色精确相等，outputs 必须是容器内真实存在的相对路径，由 tools/dispatch_role.py::validate_state_fence 在 schema 校验之后另做存在性核验（文件系统事实不是 schema 能表达的）。",
+  "title": "deliverable_state",
+  "target": "交付物正文中的 ```deliverable-state``` 围栏，全文恰好一个",
+  "type": "object",
+  "required": ["role", "outputs"],
+  "additionalProperties": false,
+  "properties": {
+    "role": {
+      "$comment": "必须与本次调度的角色精确相等；写错即判不合规，不做模糊匹配。",
+      "type": "string",
+      "enum": ["Architecture", "Researcher", "Designer", "Builder", "Reviewer", "Maintainer", "Reporter"]
+    },
+    "outputs": {
+      "$comment": "本次真实产出的文件，相对于交付物容器目录。禁绝对路径与 .. 穿越；每一项都会被核验确实存在且非空。",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?!/)(?!.*\\.\\.)[^\\s].*$"
+      }
+    },
+    "self_check": {
+      "$comment": "自检项，人读用；不参与门禁判定——自述不构成证据。",
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
