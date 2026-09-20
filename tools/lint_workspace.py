@@ -174,6 +174,60 @@ def check_rule_budget(root: Path) -> list[str]:
     return issues
 
 
+# 场景级联预算：一次动作实际读的不是一个规则文件，而是「入口规则 + 它直接指向的下游规则」。
+# 取 5 倍单文件预算为线——一次动作不该需要读满 5 个预算规模的规则才知道怎么做。
+SCENARIO_MAX_LINES = RULE_MAX_LINES * 5
+
+
+def check_scenario_cascade_budget(root: Path) -> list[str]:
+    """核验根入口每个路由场景的深度 1 级联读取量。
+
+    check_rule_budget 逐文件把关，通过不代表场景通过：单个文件都达标，靠互相引用拼出的
+    一次实际加载量仍可数倍于预算，而此前无人度量。
+    只测深度 1：规则图近乎强连通（实测 18 个路由入口里 13 个的无界传递闭包是同一批 23 个
+    文件），再往深只会得出「全库」这个无信息量的结论；深度 1 才对应 Agent 真正会读的范围。
+    级联只计 rules/ 与 schemas/：data/ 实例声明的体量随各工作区业务增长，计入会让控制面
+    的设计预算随实例数据浮动，规则作者也无从处置。
+    """
+    issues = []
+    system = root / paths.SYSTEM_DIRNAME
+    rules_dir = system / "rules"
+    schemas_dir = system / "schemas"
+    if not rules_dir.is_dir():
+        return issues
+
+    def _line_count(path: Path) -> int:
+        try:
+            return len(path.read_text(encoding="utf-8").splitlines())
+        except (OSError, UnicodeDecodeError):
+            return 0
+
+    entries: set[Path] = set()
+    outgoing: dict[Path, set[Path]] = {}
+    for document, _target, resolved in _iter_local_links(root):
+        resolved = Path(os.path.normpath(str(resolved)))
+        if not resolved.is_file():
+            continue
+        if document.parent == system / "entrypoints" and resolved.parent == rules_dir:
+            entries.add(resolved)
+        elif document.parent == rules_dir and resolved.parent in (rules_dir, schemas_dir):
+            outgoing.setdefault(document, set()).add(resolved)
+
+    for entry in sorted(entries):
+        cascade = {entry} | outgoing.get(entry, set())
+        total = sum(_line_count(p) for p in cascade)
+        if total > SCENARIO_MAX_LINES:
+            downstream = sorted(p.name for p in cascade if p != entry)
+            issues.append(
+                f"[场景级联超预算] 路由入口 rules/{entry.name} 的深度 1 级联共 {total} 行"
+                f"（{len(cascade)} 个文件），超建议线 {SCENARIO_MAX_LINES} 行。"
+                f"下游：{'、'.join(downstream)}。"
+                "按《表达文风》「规则瘦身」处理：把被多处引用的公共判据上收为单一真源，"
+                "或将只服务于某一分支的引用下沉到该分支的 Skill。"
+            )
+    return issues
+
+
 MAX_RULE_SYNTAX_TAX_PCT = 10.0
 MAX_ENTRYPOINT_SYNTAX_TAX_PCT = 5.0
 def _compute_syntax_tax_ratio(content: str) -> float:
@@ -1156,6 +1210,7 @@ def main() -> int:
         ("22. .entropaxis/data/ 实例声明落地检查", check_data_declaration_links, False),
         ("23. 交付物中文主命名检查", check_deliverable_naming, False),
         ("24. 语法税与 Token 经济性预算检查", check_syntax_tax_budget, True),
+        ("25. 场景级联 Token 预算检查", check_scenario_cascade_budget, False),
     ]
 
     all_issues = []
