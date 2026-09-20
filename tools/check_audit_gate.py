@@ -566,8 +566,50 @@ def check_report_v3(text: str) -> list[str]:
     return issues
 
 
-def check_report(text: str) -> list[str]:
+def _carrier_consistency_issues(text: str) -> list[str]:
+    """交叉核验「自述的 reviewer_mode」与「回执盖章的 carrier」。
+
+    `reviewer_mode` 由撰写报告的模型自己写，`carrier` 由 dispatch_role.py 依调度回执
+    盖章。两者此前无人比对——会话内承载的报告只要自称 `reviewer_mode: external`，就能
+    关闭 Critical 并通过门禁，而旁边那行 `carrier: session-local` 正好戳穿它。
+    自述与回执冲突时一律按回执为准并判违规：审计独立性不接受自我声明。
+    """
+    fm_text = _front_matter_text(text)
+    if fm_text is None:
+        return []
+    fm = vs.parse_front_matter(f"---\n{fm_text}\n---\n") or {}
+    mode, carrier = fm.get("reviewer_mode"), fm.get("carrier")
+    if not mode or not carrier:
+        return []  # 缺任一字段不在本检查射程内（历史报告无 carrier，空态即初始态）
+    actually_external = carrier != "session-local"
+    if (mode == "external") != actually_external:
+        return [f"reviewer_mode={mode!r} 与 carrier={carrier!r} 冲突；"
+                "承载以回执为准，自述不构成独立性证据（不得凭自我声明取得外置特权）。"]
+    if not actually_external:
+        return []
+    # 声称外置就必须拿得出签名回执：Front Matter 与被审模型同权限可写，
+    # 只比对文内字段等于让被审对象自证（审计 C-03）。信任根在 data/receipts/。
+    try:
+        from . import dispatch_receipt  # type: ignore # noqa: PLC0415
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import dispatch_receipt  # noqa: PLC0415
+    receipt_id = fm.get("receipt_id")
+    if not receipt_id:
+        return [f"carrier={carrier!r} 声称外置承载，但未携带 receipt_id；"
+                "无签名回执不构成独立性证据（历史报告可无此字段，新报告必须有）。"]
+    declared_target = fm.get("target_sha256")
+    ok, why = dispatch_receipt.verify(str(receipt_id), text=text, carrier=str(carrier), role="Reviewer",
+                                      target_sha256=str(declared_target) if declared_target else None)
+    return [] if ok else [f"调度回执核验失败：{why}"]
+
+
+def check_report(text: str, receipt_check: bool = True) -> list[str]:
     """对审计报告全文做门禁核验，返回违规说明列表（空列表即通过）。
+
+    `receipt_check=False` 供调度器在**签发回执之前**做判据校验：回执要等交付物通过判据
+    才签发，签发后才盖 receipt_id——在那之前要求 receipt_id 是循环依赖。调度时刻的承载
+    真相在调度器手里，落盘后的复核仍走完整核验（默认 True）。
 
     schema_version 3：机器状态走 audit-state 围栏 JSON，严格解析、不做任何
     散文规范化。v2/legacy：匹配前先做文本规范化（剥 HTML 注释与 Cf 格式
@@ -576,7 +618,7 @@ def check_report(text: str) -> list[str]:
     # FM 重复键检测对三个分支统一前置：重复键被 dict 静默取末值，可让会话
     # 报告凭第二行 `reviewer_mode: external` 获得外置特权，或令 v3 围栏被
     # v2 分支整体忽略（第 12 轮终验实测，原子接口可被写入）。
-    dup = _fm_duplicate_key_issues(text)
+    dup = _fm_duplicate_key_issues(text) + (_carrier_consistency_issues(text) if receipt_check else [])
     # 含 audit-state 围栏的报告必然是 v3 意图：Front Matter 被破坏（前导
     # 隐形字符、无法解析）时不允许静默落入超宽 legacy 分支无视围栏状态——
     if _front_matter_text(text) is None and "audit-state" in text:
@@ -590,6 +632,31 @@ def check_report(text: str) -> list[str]:
         return dup + check_report_v3(text)
     canonical = _canonical(text)
     return dup + (check_report_v2(canonical) if is_v2(canonical) else check_report_legacy(canonical))
+
+
+def check_target_binding(path: Path) -> list[str]:
+    """核验报告声明的 target_sha256 与磁盘上受审对象的实际指纹一致。
+
+    此前只在 critical_ack 里用到该字段，从不与实际对象比对——报告可以挂着一份**过期**
+    指纹通过门禁，即「复核的是旧版方案，却对新版签了字」（复核 C-02）。
+    """
+    fm = parse_front_matter(path.read_text(encoding="utf-8", errors="replace"))
+    declared, rel = fm.get("target_sha256"), fm.get("target_path")
+    if not declared or not rel:
+        return []  # 未声明受审对象不在本检查射程内（空态即初始态）
+    target = (path.parent / str(rel)).resolve()
+    if not target.is_file():
+        return [f"报告声明的受审对象不存在: {rel}"]
+    actual = hashlib.sha256(target.read_bytes()).hexdigest()
+    if actual != str(declared):
+        return [f"受审指纹过期：报告声明 {str(declared)[:12]}…，{rel} 实际为 {actual[:12]}…；"
+                "复核结论必须绑定它实际审过的那一版，指纹不符即须重新复核。"]
+    return []
+
+
+def check_report_file(path: Path, receipt_check: bool = True) -> list[str]:
+    """文件级完整核验 = 报告契约 + 受审对象指纹绑定。调度器与 CLI 共用此入口。"""
+    return check_report(path.read_text(encoding="utf-8", errors="replace"), receipt_check) + check_target_binding(path)
 
 
 def _find_workspace_root(start: Path) -> Path | None:
@@ -683,7 +750,7 @@ def main() -> int:
     if not path.is_file():
         print(f"[审计报告不存在] {path}", file=sys.stderr)
         return 2
-    issues = check_report(path.read_text(encoding="utf-8"))
+    issues = check_report_file(path)  # 走 path 感知入口：CLI 与调度器共用同一判据（复核 C-02）
     if issues:
         for issue in issues:
             print(f"[Critical违规关闭] {path}: {issue}", file=sys.stderr)

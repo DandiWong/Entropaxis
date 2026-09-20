@@ -3,40 +3,80 @@
   "title": "audit_report",
   "target": "05_审计报告.md / Audit_<ID>_主题方案审计.md",
   "type": "object",
-  "required": ["front_matter", "issue_format", "level_enum", "status_enum"],
+  "required": [
+    "front_matter",
+    "issue_format",
+    "level_enum",
+    "status_enum"
+  ],
   "additionalProperties": false,
   "properties": {
     "front_matter": {
       "$comment": "required 只放老/新报告共有的基线字段；v2 专属字段放 conditional_required（when schema_version==2），否则 schema_version 缺失的历史报告一律校验失败——这正是第 4 轮审计实测抓到的回归（validate_schema.py 对现存 05_审计报告.md 报错缺 5 个 v2 字段）。",
       "type": "object",
-      "required": ["type", "topic", "date", "author", "status"],
+      "required": [
+        "type",
+        "topic",
+        "date",
+        "author",
+        "status"
+      ],
       "additionalProperties": true,
       "properties": {
-        "type": { "type": "string", "enum": ["Audit"] },
-        "topic": { "type": "string", "minLength": 1 },
-        "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
-        "author": { "type": "string", "enum": ["Reviewer"] },
-        "status": { "type": "string", "enum": ["active", "completed"] },
-        "schema_version": {
-          "$comment": "新旧判别的唯一依据。2=v2 行内标注契约（散文解析）；3=v3 audit-state 围栏契约（JSON 单一真源）。此前用 minimum:2 声明，实际却只在恰好等于 2 时触发 conditional_required 的必填字段（R6-C2）；改用 enum 显式枚举在用版本，未来新增版本时同步扩展 enum 与 conditional_required，不再允许'通过范围检查但未接线必填规则'的中间态。",
-          "type": "integer",
-          "enum": [2, 3]
-        },
-        "reviewer_mode": {
+        "type": {
           "type": "string",
-          "enum": ["external", "session"]
+          "enum": [
+            "Audit"
+          ]
         },
-        "reviewer_ref": {
-          "$comment": "外置 CLI 启动命令原文，或会话承载标识。",
+        "topic": {
           "type": "string",
           "minLength": 1
         },
-        "fallback_reason": {
-          "$comment": "reviewer_mode: session 时必填；conditional_required 见下方声明。",
+        "date": {
           "type": "string",
-          "pattern": "^(not_configured|not_executable|launch_failed|timeout|no_valid_output)(:.*)?$"
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
         },
-        "target_path": { "type": "string", "minLength": 1 },
+        "author": {
+          "type": "string",
+          "enum": [
+            "Reviewer"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "completed"
+          ]
+        },
+        "schema_version": {
+          "$comment": "新旧判别的唯一依据。2=v2 行内标注契约（散文解析）；3=v3 audit-state 围栏契约（JSON 单一真源）。此前用 minimum:2 声明，实际却只在恰好等于 2 时触发 conditional_required 的必填字段（R6-C2）；改用 enum 显式枚举在用版本，未来新增版本时同步扩展 enum 与 conditional_required，不再允许'通过范围检查但未接线必填规则'的中间态。",
+          "type": "integer",
+          "enum": [
+            2,
+            3
+          ]
+        },
+        "reviewer_mode": {
+          "type": "string",
+          "enum": [
+            "external",
+            "session"
+          ]
+        },
+        "reviewer_ref": {
+          "$ref": "front_matter.schema.json#/properties/carrier_ref",
+          "$comment": "承载命令原文；定义单源自通用承载三元组的 carrier_ref。"
+        },
+        "fallback_reason": {
+          "$ref": "front_matter.schema.json#/properties/fallback_reason",
+          "$comment": "reviewer_mode: session 时必填；取值域单源自通用三元组。"
+        },
+        "target_path": {
+          "type": "string",
+          "minLength": 1
+        },
         "target_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
@@ -44,22 +84,50 @@
         "independence": {
           "$comment": "已退役字段，仅 schema_version<2 的历史报告使用；schema_version>=2 的新报告写此字段属违规，由 check_audit_gate.py 拒绝。",
           "type": "string"
+        },
+        "carrier": {
+          "$ref": "front_matter.schema.json#/properties/carrier",
+          "$comment": "由 dispatch_role.py 依回执盖章；与自述的 reviewer_mode 交叉核验（check_audit_gate._carrier_consistency_issues）。"
+        },
+        "carrier_ref": {
+          "$ref": "front_matter.schema.json#/properties/carrier_ref"
+        },
+        "receipt_id": {
+          "$ref": "front_matter.schema.json#/properties/receipt_id"
         }
       },
       "conditional_required": [
         {
-          "when": { "schema_version": 2 },
-          "require": ["reviewer_mode", "reviewer_ref", "target_path", "target_sha256"],
+          "when": {
+            "schema_version": 2
+          },
+          "require": [
+            "reviewer_mode",
+            "reviewer_ref",
+            "target_path",
+            "target_sha256"
+          ],
           "message": "schema_version 2 起，reviewer_mode/reviewer_ref/target_path/target_sha256 为必填"
         },
         {
-          "when": { "schema_version": 3 },
-          "require": ["reviewer_mode", "reviewer_ref", "target_path", "target_sha256"],
+          "when": {
+            "schema_version": 3
+          },
+          "require": [
+            "reviewer_mode",
+            "reviewer_ref",
+            "target_path",
+            "target_sha256"
+          ],
           "message": "schema_version 3 起同样必填 v2 的四字段，机器状态另由 audit-state 围栏承载"
         },
         {
-          "when": { "reviewer_mode": "session" },
-          "require": ["fallback_reason"],
+          "when": {
+            "reviewer_mode": "session"
+          },
+          "require": [
+            "fallback_reason"
+          ],
           "message": "reviewer_mode: session 时必须声明 fallback_reason"
         }
       ]
@@ -67,31 +135,55 @@
     "issue_format": {
       "$comment": "正文每条问题的行内标注格式说明（人读文档，冒号前可有空格、级别词大小写不敏感，实际运行时正则见 check_audit_gate.py）。允许取值的唯一机器真源是本文件顶层 level_enum/status_enum——check_audit_gate.py 直接读取这两个数组构建校验逻辑，不再在代码里另存一份硬编码枚举（第 6 轮外置复核指出旧结构的 pattern/enum 从未被检查器读取，等于两份独立维护、只会继续漂移，R6-M3）。ID 无固定格式，仅要求事件内稳定、跨轮不复用、不重编号。",
       "type": "object",
-      "required": ["level_field", "id_field", "status_field"],
+      "required": [
+        "level_field",
+        "id_field",
+        "status_field"
+      ],
       "additionalProperties": false,
       "properties": {
-        "level_field": { "type": "string" },
-        "id_field": { "type": "string" },
-        "status_field": { "type": "string" }
+        "level_field": {
+          "type": "string"
+        },
+        "id_field": {
+          "type": "string"
+        },
+        "status_field": {
+          "type": "string"
+        }
       }
     },
     "sidecar_format": {
       "$comment": "schema_version 3 的机器状态唯一真源：报告正文内恰好一个 ```audit-state``` 围栏，内为合法 JSON（结构如下）。散文问题清单仅为人类叙事，不再被解析器读取——连续 5 轮外置复核证明散文解析的格式变体攻击面无界（第 12 轮用户裁定重构）。issues 的 level/status 取值仍以顶层 level_enum/status_enum 为唯一真源，由 check_audit_gate.py 在结构校验后交叉核对，避免两份枚举漂移。",
       "fence": "audit-state",
       "type": "object",
-      "required": ["issues", "critical_acks"],
+      "required": [
+        "issues",
+        "critical_acks"
+      ],
       "additionalProperties": false,
       "properties": {
         "issues": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "level", "status"],
+            "required": [
+              "id",
+              "level",
+              "status"
+            ],
             "additionalProperties": false,
             "properties": {
-              "id": { "type": "string", "minLength": 1 },
-              "level": { "type": "string" },
-              "status": { "type": "string" }
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "level": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
             }
           }
         },
@@ -99,23 +191,60 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["issue_id", "target_sha256", "confirm_event", "scope"],
+            "required": [
+              "issue_id",
+              "target_sha256",
+              "confirm_event",
+              "scope"
+            ],
             "additionalProperties": false,
             "properties": {
-              "issue_id": { "type": "string", "minLength": 1 },
-              "target_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-              "confirm_event": { "type": "string", "minLength": 1 },
-              "scope": { "type": "string", "minLength": 1 }
+              "issue_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "confirm_event": {
+                "type": "string",
+                "minLength": 1
+              },
+              "scope": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           }
         }
       }
     },
-    "level_enum": { "type": "array", "minItems": 1, "items": { "type": "string" } },
-    "status_enum": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+    "level_enum": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "status_enum": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    }
   },
-  "level_enum": ["Critical", "Major", "Minor"],
-  "status_enum": ["open", "closed", "waived_by_user"],
+  "level_enum": [
+    "Critical",
+    "Major",
+    "Minor"
+  ],
+  "status_enum": [
+    "open",
+    "closed",
+    "waived_by_user"
+  ],
   "instance": {
     "$comment": "本 schema 描述的规范实例，同时作为 validate_schema.py 的自检样例。",
     "front_matter": {
@@ -137,14 +266,35 @@
     },
     "sidecar_format": {
       "issues": [
-        {"id": "C-1", "level": "Critical", "status": "closed"},
-        {"id": "M-1", "level": "Major", "status": "waived_by_user"}
+        {
+          "id": "C-1",
+          "level": "Critical",
+          "status": "closed"
+        },
+        {
+          "id": "M-1",
+          "level": "Major",
+          "status": "waived_by_user"
+        }
       ],
       "critical_acks": [
-        {"issue_id": "M-1", "target_sha256": "0000000000000000000000000000000000000000000000000000000000000000", "confirm_event": "用户于某会话明确确认承担该风险", "scope": "仅 M-1 本条，绑定该指纹"}
+        {
+          "issue_id": "M-1",
+          "target_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "confirm_event": "用户于某会话明确确认承担该风险",
+          "scope": "仅 M-1 本条，绑定该指纹"
+        }
       ]
     },
-    "level_enum": ["Critical", "Major", "Minor"],
-    "status_enum": ["open", "closed", "waived_by_user"]
+    "level_enum": [
+      "Critical",
+      "Major",
+      "Minor"
+    ],
+    "status_enum": [
+      "open",
+      "closed",
+      "waived_by_user"
+    ]
   }
 }

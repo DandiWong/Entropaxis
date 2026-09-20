@@ -1,9 +1,13 @@
 import hashlib
+import io
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from tools import check_audit_gate as cag
 from tools.check_audit_gate import (
     check_candidate_commit,
     check_report,
@@ -705,6 +709,29 @@ class CheckAuditGateV3Tests(unittest.TestCase):
 
 
 
+    def test_v3_self_declared_external_contradicted_by_receipt(self) -> None:
+        """自述 reviewer_mode: external 但回执 carrier: session-local —— 不得凭自我声明取得外置特权。
+
+        `reviewer_mode` 由撰写报告的模型自己写，`carrier` 由 dispatch_role.py 依调度回执盖章；
+        两者此前无人比对，会话内承载的报告自称 external 即可关闭 Critical 通过门禁。
+        """
+        text = self._v3(mode="external").replace(
+            "target_path: 02_方案.md", "carrier: session-local\ncarrier_ref: 当前会话 Agent\ntarget_path: 02_方案.md")
+        self.assertTrue(any("冲突" in i for i in check_report(text)))
+
+    def test_v3_receipt_consistent_carrier_passes(self) -> None:
+        """回执与自述一致时不误伤：external × profile 名、session × session-local。"""
+        ok_ext = self._v3(mode="external", issues=[{"id": "M-1", "level": "Major", "status": "closed"}]).replace(
+            "target_path: 02_方案.md", "carrier: reviewer-primary\ncarrier_ref: omp --model x\ntarget_path: 02_方案.md")
+        self.assertFalse([i for i in check_report(ok_ext) if "冲突" in i])
+        ok_sess = self._v3(mode="session", issues=[{"id": "M-2", "level": "Major", "status": "closed"}]).replace(
+            "target_path: 02_方案.md", "carrier: session-local\ncarrier_ref: 当前会话 Agent\ntarget_path: 02_方案.md")
+        self.assertFalse([i for i in check_report(ok_sess) if "冲突" in i])
+
+    def test_v3_legacy_report_without_carrier_not_penalised(self) -> None:
+        """历史报告没有 carrier 字段，不在本检查射程内（空态即初始态）。"""
+        self.assertFalse([i for i in check_report(self._v3(mode="session")) if "冲突" in i])
+
     def test_v3_leading_invisible_chars_before_delimiter(self) -> None:
         """第 12 轮第五批：BOM+零宽组合位于开头 --- 之前不得令 FM 整体失配
         降级 legacy 放行。"""
@@ -770,3 +797,61 @@ class CheckAuditGateV3Tests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TargetBindingTests(unittest.TestCase):
+    """报告声明的受审指纹必须与磁盘事实一致（复核 C-02）。
+
+    此前该字段只在 critical_ack 里用到、从不与实际对象比对——报告可挂着一份过期指纹
+    通过门禁，即「复核的是旧版方案，却对新版签了字」。
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.target = self.dir / "02_方案.md"
+        self.target.write_text("# 方案 v1\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _report(self, sha: str) -> Path:
+        p = self.dir / "05_审计报告.md"
+        p.write_text("---\ntype: Audit\ntopic: t\ndate: 2026-09-19\nauthor: Reviewer\nstatus: active\n"
+                     "schema_version: 3\nreviewer_mode: session\nreviewer_ref: x\nfallback_reason: not_configured\n"
+                     f"target_path: 02_方案.md\ntarget_sha256: {sha}\n---\n\n"
+                     '# 审计\n\n```audit-state\n{"issues": [], "critical_acks": []}\n```\n', encoding="utf-8")
+        return p
+
+    def _sha(self) -> str:
+        return hashlib.sha256(self.target.read_bytes()).hexdigest()
+
+    def test_matching_fingerprint_passes(self) -> None:
+        self.assertEqual(cag.check_target_binding(self._report(self._sha())), [])
+
+    def test_stale_fingerprint_blocked(self) -> None:
+        p = self._report(self._sha())
+        self.target.write_text("# 方案 v2（已修订）\n", encoding="utf-8")
+        issues = cag.check_target_binding(p)
+        self.assertTrue(any("过期" in i for i in issues), issues)
+
+    def test_missing_target_reported(self) -> None:
+        p = self._report(self._sha())
+        self.target.unlink()
+        self.assertTrue(any("不存在" in i for i in cag.check_target_binding(p)))
+
+    def test_no_declaration_is_out_of_scope(self) -> None:
+        p = self.dir / "legacy.md"
+        p.write_text("---\ntype: Audit\ntopic: t\ndate: 2026-09-19\nauthor: Reviewer\nstatus: active\n---\n\n# 旧报告\n",
+                     encoding="utf-8")
+        self.assertEqual(cag.check_target_binding(p), [])
+
+    def test_cli_uses_path_aware_entry(self) -> None:
+        """CLI 只读入口必须与调度器同判据：此前 main() 调 check_report()，
+        指纹过期的报告在命令行照样通过（复核 C-02 残留旁路）。"""
+        p = self._report(self._sha())
+        self.target.write_text("# 方案 v2（已修订）\n", encoding="utf-8")
+        with mock.patch.object(sys, "argv", ["check_audit_gate.py", str(p)]), \
+                mock.patch.object(sys, "stderr", io.StringIO()) as err:
+            self.assertEqual(cag.main(), 1)
+        self.assertIn("过期", err.getvalue())
