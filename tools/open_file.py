@@ -8,6 +8,7 @@ import json
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 try:
@@ -32,7 +33,12 @@ def _load_config(path: Path) -> tuple[dict, str]:
 
 
 def _association_for(path: Path, config: dict) -> dict | None:
-    if path.is_dir() or not path.suffix:
+    if path.is_dir():
+        # 目录此前一律无关联项，每次打开都记一次「降级」——而降级是要逐项告知用户的
+        # （文件交付 §4.5）。把天天发生、且本来就正确的路径记成异常，会训练人忽略降级提示。
+        assoc = config.get("associations", {}).get("directory")
+        return assoc if isinstance(assoc, dict) and assoc.get("command") else None
+    if not path.suffix:
         return None
     extension = path.suffix.lower()
     for association in config.get("associations", {}).values():
@@ -90,8 +96,12 @@ def _close_if_already_open(path: Path, platform: str, closer=subprocess.run) -> 
     """若办公文档已在桌面办公应用中打开，则先关闭对应窗口以保证后续打开加载磁盘最新内容。"""
     if not path.is_file() or path.suffix.lower() not in OFFICE_EXTENSIONS:
         return False
-    file_name = path.name
+    # AppleScript 字符串字面量转义：文件名含 " 或 \ 时不转义会拼出语法错误的脚本，
+    # 而错误会被下方 except 吞掉，表现为「永远刷新不了」这种无声失效。
+    file_name = path.name.replace("\\", "\\\\").replace('"', '\\"')
     if platform == "darwin":
+        # 必须先把目标进程激活到前台再枚举窗口：WPS 等 Qt/非原生应用只在 frontmost 时
+        # 才惰性暴露 AX 窗口树，后台查询恒返回 0 个窗口，导致关闭逻辑静默空转。
         script = f'''
         tell application "System Events"
             set procNames to name of every process
@@ -99,28 +109,30 @@ def _close_if_already_open(path: Path, platform: str, closer=subprocess.run) -> 
             set closedAny to false
             repeat with p in procNames
                 if p is in officeApps then
-                    tell process p
-                        try
-                            set targetWins to (every window whose name contains "{file_name}")
-                            if (count of targetWins) > 0 then
-                                repeat with w in targetWins
-                                    try
-                                        click (first button whose subrole is "AXCloseButton") of w
-                                        set closedAny to true
-                                    end try
-                                end repeat
-                            end if
-                        end try
-                    end tell
+                    try
+                        set frontmost of process p to true
+                        -- 自适应等待 AX 窗口树就绪，最多 1.5s；就绪即走，不做固定长睡眠
+                        repeat 10 times
+                            if (count of windows of process p) > 0 then exit repeat
+                            delay 0.15
+                        end repeat
+                        tell process p
+                            repeat with w in (every window whose name contains "{file_name}")
+                                try
+                                    click (first button whose subrole is "AXCloseButton") of w
+                                    set closedAny to true
+                                end try
+                            end repeat
+                        end tell
+                    end try
                 end if
             end repeat
             return closedAny
         end tell
         '''
         try:
-            res = closer(["osascript", "-e", script], check=False, capture_output=True, text=True, timeout=5)
+            res = closer(["osascript", "-e", script], check=False, capture_output=True, text=True, timeout=15)
             if res.returncode == 0 and "true" in (res.stdout or "").lower():
-                import time
                 time.sleep(0.3)
                 return True
         except Exception:

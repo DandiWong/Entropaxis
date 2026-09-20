@@ -6,81 +6,240 @@
   "formats": {
     "word": {
       "name": "Word文档",
-      "extensions": [".docx", ".doc"],
+      "extensions": [
+        ".docx",
+        ".doc"
+      ],
       "command": "",
       "candidates": [
-        {"name": "Microsoft Word", "cmd_macos": "open -a \"Microsoft Word\"", "cmd_windows": "start winword", "cmd_linux": "wps"},
-        {"name": "WPS Office", "cmd_macos": "open -a \"wpsoffice\"", "cmd_windows": "start wps", "cmd_linux": "wps"},
-        {"name": "Pages", "cmd_macos": "open -a \"Pages\"", "cmd_windows": "", "cmd_linux": ""}
+        {
+          "name": "Microsoft Word",
+          "cmd_macos": "open -a \"Microsoft Word\"",
+          "cmd_windows": "start winword",
+          "cmd_linux": "wps"
+        },
+        {
+          "name": "WPS Office",
+          "cmd_macos": "open -a \"wpsoffice\"",
+          "cmd_windows": "start wps",
+          "cmd_linux": "wps"
+        },
+        {
+          "name": "Pages",
+          "cmd_macos": "open -a \"Pages\"",
+          "cmd_windows": "",
+          "cmd_linux": ""
+        }
       ]
     },
     "excel": {
       "name": "Excel表格",
-      "extensions": [".xlsx", ".xls", ".csv"],
+      "extensions": [
+        ".xlsx",
+        ".xls",
+        ".csv"
+      ],
       "command": "",
       "candidates": [
-        {"name": "Microsoft Excel", "cmd_macos": "open -a \"Microsoft Excel\"", "cmd_windows": "start excel", "cmd_linux": "et"},
-        {"name": "WPS Office", "cmd_macos": "open -a \"wpsoffice\"", "cmd_windows": "start et", "cmd_linux": "et"},
-        {"name": "Numbers", "cmd_macos": "open -a \"Numbers\"", "cmd_windows": "", "cmd_linux": ""}
+        {
+          "name": "Microsoft Excel",
+          "cmd_macos": "open -a \"Microsoft Excel\"",
+          "cmd_windows": "start excel",
+          "cmd_linux": "et"
+        },
+        {
+          "name": "WPS Office",
+          "cmd_macos": "open -a \"wpsoffice\"",
+          "cmd_windows": "start et",
+          "cmd_linux": "et"
+        },
+        {
+          "name": "Numbers",
+          "cmd_macos": "open -a \"Numbers\"",
+          "cmd_windows": "",
+          "cmd_linux": ""
+        }
       ]
     },
     "ppt": {
       "name": "PPT演示文稿",
-      "extensions": [".pptx", ".ppt"],
+      "extensions": [
+        ".pptx",
+        ".ppt"
+      ],
       "command": "",
       "candidates": [
-        {"name": "Microsoft PowerPoint", "cmd_macos": "open -a \"Microsoft PowerPoint\"", "cmd_windows": "start powerpnt", "cmd_linux": "wpp"},
-        {"name": "WPS Office", "cmd_macos": "open -a \"wpsoffice\"", "cmd_windows": "start wpp", "cmd_linux": "wpp"},
-        {"name": "Keynote", "cmd_macos": "open -a \"Keynote\"", "cmd_windows": "", "cmd_linux": ""}
+        {
+          "name": "Microsoft PowerPoint",
+          "cmd_macos": "open -a \"Microsoft PowerPoint\"",
+          "cmd_windows": "start powerpnt",
+          "cmd_linux": "wpp"
+        },
+        {
+          "name": "WPS Office",
+          "cmd_macos": "open -a \"wpsoffice\"",
+          "cmd_windows": "start wpp",
+          "cmd_linux": "wpp"
+        },
+        {
+          "name": "Keynote",
+          "cmd_macos": "open -a \"Keynote\"",
+          "cmd_windows": "",
+          "cmd_linux": ""
+        }
       ]
     },
     "pdf": {
       "name": "PDF文档",
-      "extensions": [".pdf"],
+      "extensions": [
+        ".pdf"
+      ],
       "command": "",
       "candidates": [
-        {"name": "系统预览 (Preview)", "cmd_macos": "open -a \"Preview\"", "cmd_windows": "", "cmd_linux": "evince"},
-        {"name": "Adobe Acrobat", "cmd_macos": "open -a \"Adobe Acrobat\"", "cmd_windows": "start acrobat", "cmd_linux": ""},
-        {"name": "WPS PDF", "cmd_macos": "open -a \"wpsoffice\"", "cmd_windows": "start wpspdf", "cmd_linux": "wpspdf"}
+        {
+          "name": "系统预览 (Preview)",
+          "cmd_macos": "open -a \"Preview\"",
+          "cmd_windows": "",
+          "cmd_linux": "evince"
+        },
+        {
+          "name": "Adobe Acrobat",
+          "cmd_macos": "open -a \"Adobe Acrobat\"",
+          "cmd_windows": "start acrobat",
+          "cmd_linux": ""
+        },
+        {
+          "name": "WPS PDF",
+          "cmd_macos": "open -a \"wpsoffice\"",
+          "cmd_windows": "start wpspdf",
+          "cmd_linux": "wpspdf"
+        }
       ]
     },
     "image": {
       "name": "图片与矢量图",
-      "extensions": [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"],
+      "extensions": [
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".svg"
+      ],
       "command": "",
       "candidates": [
-        {"name": "系统预览/默认图片查看器", "cmd_macos": "open", "cmd_windows": "start", "cmd_linux": "xdg-open"}
+        {
+          "name": "系统预览/默认图片查看器",
+          "cmd_macos": "open",
+          "cmd_windows": "start",
+          "cmd_linux": "xdg-open"
+        }
       ]
     },
     "markdown": {
       "name": "Markdown与标记文档",
-      "extensions": [".md", ".markdown", ".asciidoc", ".adoc"],
+      "extensions": [
+        ".md",
+        ".markdown",
+        ".asciidoc",
+        ".adoc"
+      ],
       "command": "",
       "candidates": [
-        {"name": "Google Chrome", "cmd_macos": "open -a \"Google Chrome\"", "cmd_windows": "start chrome", "cmd_linux": "google-chrome"},
-        {"name": "Obsidian", "cmd_macos": "open -a \"Obsidian\"", "cmd_windows": "start obsidian", "cmd_linux": "obsidian"},
-        {"name": "Typora", "cmd_macos": "open -a \"Typora\"", "cmd_windows": "start typora", "cmd_linux": "typora"},
-        {"name": "Cursor", "cmd_macos": "open -a \"Cursor\"", "cmd_windows": "cursor", "cmd_linux": "cursor"},
-        {"name": "Visual Studio Code", "cmd_macos": "open -a \"Visual Studio Code\"", "cmd_windows": "code", "cmd_linux": "code"}
+        {
+          "name": "Google Chrome",
+          "cmd_macos": "open -a \"Google Chrome\"",
+          "cmd_windows": "start chrome",
+          "cmd_linux": "google-chrome"
+        },
+        {
+          "name": "Obsidian",
+          "cmd_macos": "open -a \"Obsidian\"",
+          "cmd_windows": "start obsidian",
+          "cmd_linux": "obsidian"
+        },
+        {
+          "name": "Typora",
+          "cmd_macos": "open -a \"Typora\"",
+          "cmd_windows": "start typora",
+          "cmd_linux": "typora"
+        },
+        {
+          "name": "Cursor",
+          "cmd_macos": "open -a \"Cursor\"",
+          "cmd_windows": "cursor",
+          "cmd_linux": "cursor"
+        },
+        {
+          "name": "Visual Studio Code",
+          "cmd_macos": "open -a \"Visual Studio Code\"",
+          "cmd_windows": "code",
+          "cmd_linux": "code"
+        }
       ]
     },
     "html": {
       "name": "HTML原型与网页",
-      "extensions": [".html", ".htm"],
+      "extensions": [
+        ".html",
+        ".htm"
+      ],
       "command": "",
       "candidates": [
-        {"name": "Google Chrome", "cmd_macos": "open -a \"Google Chrome\"", "cmd_windows": "start chrome", "cmd_linux": "google-chrome"},
-        {"name": "Microsoft Edge", "cmd_macos": "open -a \"Microsoft Edge\"", "cmd_windows": "start msedge", "cmd_linux": "microsoft-edge"},
-        {"name": "Safari", "cmd_macos": "open -a \"Safari\"", "cmd_windows": "", "cmd_linux": ""}
+        {
+          "name": "Google Chrome",
+          "cmd_macos": "open -a \"Google Chrome\"",
+          "cmd_windows": "start chrome",
+          "cmd_linux": "google-chrome"
+        },
+        {
+          "name": "Microsoft Edge",
+          "cmd_macos": "open -a \"Microsoft Edge\"",
+          "cmd_windows": "start msedge",
+          "cmd_linux": "microsoft-edge"
+        },
+        {
+          "name": "Safari",
+          "cmd_macos": "open -a \"Safari\"",
+          "cmd_windows": "",
+          "cmd_linux": ""
+        }
       ]
     },
     "code_data": {
       "name": "结构化数据与配置",
-      "extensions": [".yaml", ".yml", ".json"],
+      "extensions": [
+        ".yaml",
+        ".yml",
+        ".json"
+      ],
       "command": "",
       "candidates": [
-        {"name": "Visual Studio Code", "cmd_macos": "open -a \"Visual Studio Code\"", "cmd_windows": "code", "cmd_linux": "code"},
-        {"name": "Cursor", "cmd_macos": "open -a \"Cursor\"", "cmd_windows": "cursor", "cmd_linux": "cursor"}
+        {
+          "name": "Visual Studio Code",
+          "cmd_macos": "open -a \"Visual Studio Code\"",
+          "cmd_windows": "code",
+          "cmd_linux": "code"
+        },
+        {
+          "name": "Cursor",
+          "cmd_macos": "open -a \"Cursor\"",
+          "cmd_windows": "cursor",
+          "cmd_linux": "cursor"
+        }
+      ]
+    },
+    "directory": {
+      "name": "目录/文件夹",
+      "extensions": [],
+      "command": "",
+      "candidates": [
+        {
+          "name": "系统文件管理器（默认）",
+          "cmd_macos": "open",
+          "cmd_windows": "explorer",
+          "cmd_linux": "xdg-open"
+        }
       ]
     }
   }

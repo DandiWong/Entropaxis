@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools import open_file
 from tools.open_file import open_paths
 
 
@@ -194,3 +195,33 @@ class OpenFileTests(unittest.TestCase):
         self.assertEqual(len(closer_calls), 0)
 if __name__ == "__main__":
     unittest.main()
+
+
+class DirectoryAssociationTests(unittest.TestCase):
+    """目录不再永久降级（E）。
+
+    目录此前一律无关联项，每次打开都记一次「降级」；而降级按《文件交付》§4.5 要逐项
+    告知用户——把天天发生且本来就正确的路径记成异常，会训练人忽略降级提示。
+    """
+
+    CONFIG = {"associations": {"directory": {"name": "目录", "extensions": [], "command": "open"}}}
+
+    def test_directory_uses_configured_opener(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            calls = []
+
+            def runner(argv, **kw):
+                calls.append(argv)
+                return subprocess.CompletedProcess(argv, 0, "", "")
+
+            res = open_file._open_path(td, self.CONFIG, "", "darwin", runner, closer=lambda *a, **k: None)
+            self.assertTrue(res["ok"])
+            self.assertFalse(res["used_fallback"], f"目录已配置打开器就不该记降级: {res['reason']}")
+            self.assertEqual(calls[0][0], "open")
+
+    def test_directory_without_config_still_falls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            res = open_file._open_path(
+                td, {"associations": {}}, "", "darwin",
+                lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "", ""), closer=lambda *a, **k: None)
+            self.assertTrue(res["used_fallback"])
