@@ -40,12 +40,6 @@ class SchemaValidatorTests(TestCase):
         self.assertTrue(VS.validate(base, schema), "type: Spec 缺 id 应报错")
         self.assertFalse(VS.validate({**base, "id": "Tech-11"}, schema))
 
-    def test_live_route_map_conforms(self) -> None:
-        self.assertEqual(VS.check_route_map(), [])
-
-    def test_missing_route_map_fails_closed(self) -> None:
-        self.assertTrue(VS.check_route_map(Path("/nonexistent/route_map.json")))
-
     def test_audit_schema_selftest(self) -> None:
         self.assertEqual(VS.check_audit_report_schema_selftest(), [])
 

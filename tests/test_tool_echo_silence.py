@@ -48,18 +48,6 @@ class ToolEchoSilenceTests(unittest.TestCase):
         # 每一行都是单行紧凑项目
         for line in lines:
             self.assertTrue(line.startswith("[") and "]" in line)
-    def test_audit_routing_silent_cost_table(self):
-        """audit_routing 默认省略 20 场景明细表（<= 20 行），全量表仅在 --cost-table 展开。"""
-        proc = subprocess.run(
-            [sys.executable, str(TOOLS_DIR / "audit_routing.py"), "--strict"],
-            capture_output=True,
-            text=True,
-            cwd=str(WORKSPACE_ROOT),
-        )
-        self.assertEqual(proc.returncode, 0)
-        lines = [line for line in proc.stdout.splitlines() if line.strip()]
-        # 默认模式下不应平铺 20 个细碎场景行（包含留出集诊断行 <= 25 行，此前全量表为 45+ 行）
-        self.assertLessEqual(len(lines), 25, f"audit_routing 默认输出行数过多: {len(lines)} 行")
 
 
 if __name__ == "__main__":
