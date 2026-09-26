@@ -5,6 +5,13 @@ All notable changes to the `tool-crafter` skill will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-09-27
+
+### 变更
+- 更名为 `system-evolve`。
+- 删除"结果是否一致"问题：一致性对任何需求都是硬要求，不区分形态；改由 Agent 从现场自判"能否写成固定代码"。
+- 用户要求不提问或整体盘点时，跳过问答，按现场事实自判并标明推断。
+
 ## [2.0.0] - 2026-09-27
 
 ### 变更

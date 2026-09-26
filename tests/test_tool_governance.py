@@ -31,16 +31,16 @@ class ToolGovernanceRuleTests(TestCase):
         self.assertIn("零系统绑定铁律", governance)
         self.assertIn("credentials", layout)
 
-    def test_evolve_crafter_skill_metadata_and_structure(self) -> None:
-        """tool-crafter 已并入 evolve-crafter：形态判定 + Rule/Tool/Skill 落地统一入口。"""
-        self.assertFalse((SYSTEM_ROOT / "skills" / "tool-crafter").exists(), "tool-crafter 已更名为 evolve-crafter")
-        skill_dir = SYSTEM_ROOT / "skills" / "evolve-crafter"
-        self.assertTrue(skill_dir.is_dir(), "evolve-crafter skill dir must exist")
+    def test_system_evolve_skill_metadata_and_structure(self) -> None:
+        """tool-crafter 已并入 system-evolve：形态判定 + Rule/Tool/Skill 落地统一入口。"""
+        self.assertFalse((SYSTEM_ROOT / "skills" / "tool-crafter").exists(), "tool-crafter 已更名为 system-evolve")
+        skill_dir = SYSTEM_ROOT / "skills" / "system-evolve"
+        self.assertTrue(skill_dir.is_dir(), "system-evolve skill dir must exist")
 
         skill_md = skill_dir / "SKILL.md"
-        self.assertTrue(skill_md.exists(), "evolve-crafter SKILL.md must exist")
+        self.assertTrue(skill_md.exists(), "system-evolve SKILL.md must exist")
         content = skill_md.read_text(encoding="utf-8")
-        self.assertIn("name: evolve-crafter", content)
+        self.assertIn("name: system-evolve", content)
         for source in ("知识沉淀.md", "工具设计.md", "技能设计.md", "01_根系统治理.md"):
             self.assertIn(source, content)
 
@@ -66,7 +66,7 @@ class ToolGovernanceRuleTests(TestCase):
         self.assertIn("系统演进", parse_content)
         self.assertIn("机制转工具", parse_content)
         self.assertIn("落成skill", parse_content)
-        self.assertIn("evolve-crafter", parse_content)
+        self.assertIn("system-evolve", parse_content)
 
     def test_tips_contain_tool_crafter_hints(self) -> None:
         tips_path = SYSTEM_ROOT / "data" / "rules" / "tips.md"
@@ -75,7 +75,7 @@ class ToolGovernanceRuleTests(TestCase):
             # 并不存在。断言它必须存在会把 .entropaxis 的测试套件绑死在本机实例数据上。
             self.skipTest("tips.md 尚未落地，属新工作区正常初始态")
         content = tips_path.read_text(encoding="utf-8")
-        self.assertIn("- TIP：你可以说“机制转工具”“落成skill”或“evolve-crafter”", content)
+        self.assertIn("- TIP：你可以说“机制转工具”“落成skill”或“system-evolve”", content)
         self.assertIn("《工具设计》", content)
 
 
