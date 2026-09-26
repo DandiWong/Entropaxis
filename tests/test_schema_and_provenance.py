@@ -96,7 +96,7 @@ class DataProvenanceTests(TestCase):
     def test_stamp_json_and_md(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             d = Path(td)
-            j, m = d / "board_config.json", d / "registry.md"
+            j, m = d / "sample.json", d / "registry.md"
             j.write_text('{"providers": []}', encoding="utf-8")
             m.write_text("# 标题\n正文\n", encoding="utf-8")
 

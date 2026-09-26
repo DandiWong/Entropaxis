@@ -17,8 +17,10 @@ from pathlib import Path
 
 try:
     from . import paths
+    from . import stamp_data_provenance as provenance
 except ImportError:
     import paths
+    import stamp_data_provenance as provenance
 
 HERE = Path(__file__).resolve().parent
 ROOT = paths.WORKSPACE_ROOT
@@ -370,9 +372,8 @@ def check_schema_conformance(root: Path) -> list[str]:
 def check_data_source_mapping(root: Path) -> list[str]:
     """双向核验 data/ 路径与 .entropaxis/ 定义方的对应关系。
 
-    `data/` 按定义方分三个桶，路径本身即指向来源：
+    `data/` 按定义方分两个桶，路径本身即指向来源（Skill 配置随 Skill 目录，不在 data/）：
       data/templates/X  ⟺ .entropaxis/templates/instance/X.template.*
-      data/skills/<N>/* ⟺ .entropaxis/skills/<N>/
       data/rules/*      ⟺ 由某条规则声明（具体哪条见文件头 source 字段）
     双向检查能同时抓出孤儿实例文件与失配模板，防结构随时间漂移。
     """
@@ -385,13 +386,13 @@ def check_data_source_mapping(root: Path) -> list[str]:
     tpl_dir = data_dir / "templates"
     if tpl_dir.is_dir():
         for p in sorted(tpl_dir.glob("*")):
-            if not p.is_file() or p.suffix not in (".md", ".json"):
+            if not p.is_file() or p.suffix not in provenance.DATA_SUFFIXES:
                 continue
             expect = sys_dir / "templates" / "instance" / f"{p.stem}.template{p.suffix}"
             if not expect.exists():
                 issues.append(
                     f"[实例孤儿] .entropaxis/data/templates/{p.name} 找不到对应模板 {expect.relative_to(root)}；"
-                    "它不是模板渲染产物，应移入 .entropaxis/data/rules/ 或 .entropaxis/data/skills/<名>/。"
+                    "它不是模板渲染产物，应移入 .entropaxis/data/rules/（规则声明）或所属 Skill 自身目录。"
                 )
 
     # 反向：模板存在却无实例。拆分 templates/instance 与 templates/project 后
@@ -406,14 +407,13 @@ def check_data_source_mapping(root: Path) -> list[str]:
                     f".entropaxis/data/templates/{stem}{suffix}；运行 `python3 .entropaxis/tools/bootstrap.py` 渲染。"
                 )
 
+    # Skill 自包含：配置随 Skill 目录、凭据放用户级目录，控制面 data/ 不承载任何 Skill 配置
     skl_dir = data_dir / "skills"
-    if skl_dir.is_dir():
-        for d in sorted(skl_dir.iterdir()):
-            if d.is_dir() and not (sys_dir / "skills" / d.name).is_dir():
-                issues.append(
-                    f"[实例孤儿] .entropaxis/data/skills/{d.name}/ 找不到对应 Skill "
-                    f".entropaxis/skills/{d.name}/；Skill 已删除时其实例配置应一并清理。"
-                )
+    if skl_dir.is_dir() and any(skl_dir.iterdir()):
+        issues.append(
+            "[Skill 外部配置] .entropaxis/data/skills/ 下仍有内容；Skill 须自包含，"
+            "把配置移回 .entropaxis/skills/<名>/（私有 Skill 由其 .gitignore 排除），凭据放用户级目录或环境变量。"
+        )
 
     for p in sorted(data_dir.glob("*")):
         if p.is_file() and p.suffix in (".md", ".json"):
@@ -435,22 +435,11 @@ def check_data_provenance(root: Path) -> list[str]:
     data_dir = root / paths.SYSTEM_DIRNAME / "data"
     if not data_dir.is_dir():
         return issues
-    # 只扫三个来源桶；credentials/ 与 docs/ 不读不列举（前者含凭据，后者是研究产物）
-    for p in sorted(q for b in ("templates", "rules", "skills") for q in (data_dir / b).rglob("*")):
-        if not p.is_file() or p.suffix not in (".md", ".json"):
+    # 只扫两个来源桶；credentials/ 与 docs/ 不读不列举（前者含凭据，后者是研究产物）
+    for p in sorted(q for b in provenance.SOURCE_BUCKETS for q in (data_dir / b).rglob("*")):
+        if not p.is_file() or p.suffix not in provenance.DATA_SUFFIXES:
             continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        if p.suffix == ".json":
-            try:
-                ok = isinstance(json.loads(text).get("_meta"), dict)
-            except (json.JSONDecodeError, AttributeError):
-                ok = False
-        else:
-            ok = text.startswith("---\n") and "\npolicy:" in text.split("\n---", 2)[0]
-        if not ok:
+        if not provenance.has_provenance(p):
             issues.append(
                 f"[实例文件缺来源标记] .entropaxis/data/{p.relative_to(data_dir)} 未声明 source/managed_by/policy。"
                 "运行 `python3 .entropaxis/tools/stamp_data_provenance.py` 补盖。"
@@ -563,7 +552,7 @@ def _forbidden_bindings(root: Path) -> list[str]:
     """读取实例声明的禁用实体词表（每行一个 `- 词`），小写归一。
 
     文件缺失或为空时返回空表：这是软降级——结构性检查（本地端点）继续生效，实体词检查
-    停用，由调用方留痕告警，不静默假装通过（《01_根系统治理》演进准则第 2 条）。
+    停用，由调用方留痕告警，不静默假装通过（《系统演进准则》第 7 节「同受约束」）。
     此处**不得**保留任何硬编码兜底词表：那等于把组织实体名重新写回控制面并随版本库分发，
     正是本函数外置化要消除的东西（同准则第 3 条「检查器同受约束」）。
     """
@@ -594,7 +583,7 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
         # 降级必须留痕：静默跳过会让"检查通过"与"检查没跑"在输出上无法区分
         issues.append(
             f"[实体词表未声明] 未读到 {BINDING_WORDLIST}，本轮仅执行结构性端点检查，"
-            "真实实体词检查已降级停用；新工作区请按《01_根系统治理》零系统绑定铁律补齐词表。"
+            "真实实体词检查已降级停用；新工作区请按《系统演进准则》零系统绑定铁律补齐词表。"
         )
 
     def _glob(base: Path, pattern: str) -> list[Path]:
@@ -642,72 +631,6 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
     return issues
 
 
-CREDENTIAL_VALUE_MARKERS = (
-    "--token", "--password", "--secret", "--api-key", "--apikey", "--access-token",
-    "-t ", "token=", "apikey=", "api_key=", "secret=", "password=", "bearer ",
-)
-# 字段名本身即凭证信号：值不含 "--token" 之类子串也一样阻断（第 5 轮实测抓到
-# {"token": "abc123"}、{"headers": {"Authorization": "..."}} 两种绕过——按值扫描
-# 找不到任何标志性子串，但字段名已经把意图写得很清楚）。
-CREDENTIAL_KEY_MARKERS = ("token", "password", "secret", "apikey", "api_key", "authorization", "headers")
-# ponytail: 子串/前缀匹配覆盖常见 CLI 凭证写法与字段命名；无法穷尽任意 shell 拼接形态
-# （如包进 `sh -c "cmd --token x"` 的单个字符串——这类已用子串匹配覆盖，但更深的
-# shell 语法混淆仍需真正的 shell parser），超出本检查的确定性范围——命中即阻断，
-# 未命中不代表安全，只代表本检查没找到。
-
-
-def _iter_nodes(value, path=()):
-    """递归产出 (完整祖先字段名路径, 节点值)，覆盖 dict/list 的每一层——不只是字符串
-    叶子。此前只传递"当前一层"的字段名，递归下探一层就把父字段名覆盖丢失：
-    `{"token": {"value": "abc"}}` 会被看成字段名 "value"（无凭证特征）+ 值
-    "abc"（也无凭证特征），"token" 这个真正暴露意图的字段名从未被检查过
-    （第 6 轮实测抓到，R6-M2）。list 不增加路径段（列表项和其所属字段同属一路径）。
-    """
-    yield path, value
-    if isinstance(value, dict):
-        for k, v in value.items():
-            yield from _iter_nodes(v, path + (k,))
-    elif isinstance(value, list):
-        for v in value:
-            yield from _iter_nodes(v, path)
-
-
-def check_board_config_no_credentials(root: Path) -> list[str]:
-    """看板联动.md「Provider 四态结果契约」前置约束：凭证不进配置正文。
-
-    board_config.json 的 providers[*] 会被拼进 subprocess 直接执行或读取；任何字段
-    （不限于 cli 数组）出现看起来像凭证参数的字符串，或字段名本身就是凭证类命名
-    （token/password/secret/headers 等，即便值本身不含标志性子串、不是字符串类型），
-    都等于把凭证写进磁盘配置明文，与凭证只经无回显交互录入、只存 .entropaxis/data/credentials/
-    的口径冲突，一律阻断。JSON 解析失败按 fail-closed 处理：无法确认干净就不放行。
-    """
-    path = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "board_config.json"
-    if not path.is_file():
-        return []
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return [f"[board_config.json 无法解析] {path}: {exc}；解析失败时不放行，需人工核实内容后再体检。"]
-    issues = []
-    for role, spec in (data.get("providers") or {}).items():
-        for field_path, node in _iter_nodes(spec):
-            # 只在"刚引入该字段名"这一层判定 key_hit（看最后一段），不对每层深度
-            # 重复报告同一个祖先字段——既覆盖任意嵌套深度，又不产生一堆重复告警。
-            key_hit = bool(field_path) and any(
-                marker in field_path[-1].lower() for marker in CREDENTIAL_KEY_MARKERS
-            )
-            value_hit = isinstance(node, str) and any(marker in node.lower() for marker in CREDENTIAL_VALUE_MARKERS)
-            if not (key_hit or value_hit):
-                continue
-            field_name = ".".join(field_path) if field_path else "<root>"
-            reason = f"字段名 {field_name!r} 疑似凭证字段" if key_hit else f"字段 {field_name!r} 值含疑似凭证参数 {node!r}"
-            issues.append(
-                f"[Provider 凭证泄漏] .entropaxis/data/templates/board_config.json providers.{role} "
-                f"{reason}；凭证只能经无回显交互录入并存 .entropaxis/data/credentials/，不得写入此文件。"
-            )
-    return issues
-
-
 def check_system_layout(root: Path) -> list[str]:
     """检查 .entropaxis 控制面所需目录和入口文件。"""
     system = root / paths.SYSTEM_DIRNAME
@@ -748,7 +671,7 @@ def _iter_local_links(root: Path):
         parts = document.relative_to(system).parts
         if len(parts) >= 3 and parts[0] == "skills" and parts[2] == "references":
             continue
-        # 私有 Skill 依 .gitignore 整体排除出版本库（《技能设计》6.2），其内部引用不构成
+        # 私有 Skill 依 .gitignore 整体排除出版本库（《技能设计》2.2），其内部引用不构成
         # 分发契约；只核验跟踪集，与第 13 项零系统绑定检查的作用域保持一致。
         if tracked is not None and document not in tracked:
             continue
@@ -917,7 +840,7 @@ _OPTIONAL_MARKERS = ("存在时", "不存在", "若工作区提供", "工作区�
 
 
 def check_skill_system_independence(root: Path) -> list[str]:
-    """可分发 Skill 不得把 `.entropaxis/` 写成运行前置（《技能设计》6.2 独立运行铁律）。
+    """可分发 Skill 不得把 `.entropaxis/` 写成运行前置（《技能设计》2.2 独立运行铁律）。
 
     Skill 要能脱离本工作区独立安装运行，`.entropaxis/tools/x.py` 那条路径在收件方
     只装了一个 Skill 的机器上根本不存在。控制面 Skill（frontmatter 声明
@@ -1198,7 +1121,6 @@ def main() -> int:
         ("10. 规则单一真源去重检查", check_rule_deduplication, False),
         ("12. CLAUDE.md 薄壳纯净度检查", check_claude_md_thin_shell, False),
         ("13. rules/ 零系统绑定检查", check_rules_zero_system_binding, False),
-        ("15b. 看板 Provider 凭证泄漏检查", check_board_config_no_credentials, True),
         ("15c. 项目注册表登记进度检查", check_registry_population, False),
         ("15d. Skill 根系统独立性检查", check_skill_system_independence, True),
         ("17. 规则文件行数预算检查", check_rule_budget, False),

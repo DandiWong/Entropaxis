@@ -227,7 +227,7 @@ def run_init_chain(workspace: Path) -> tuple[list[str], list[str]]:
 def dangling_skill_routes(system: Path, tree: Path, files: list[str]) -> list[str]:
     """在收件方树上找出「引用了一个不随分发的 Skill」的文件。
 
-    私有 Skill 不随分发本身是设计（《技能设计》6.2 自封装排除），只报它不构成缺陷；
+    私有 Skill 不随分发本身是设计（《技能设计》2.2 自封装排除），只报它不构成缺陷；
     真正的缺陷是**版本库里留下了指向它的指令或规则**——收件方会读到一条无执行体的路由。
     因此只对"被跟踪文件实际引用"的私有 Skill 告警，干净自封装的一律不列
     （逐次列出私有能力清单本身也是一张"哪些能力是私有的"名单）。

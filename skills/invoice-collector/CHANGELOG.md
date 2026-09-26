@@ -6,6 +6,11 @@
 
 本文件记录 `invoice-collector` Skill 的所有显著变更，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.3.0] - 2026-09-26
+
+### Changed
+- 企业与环境参数从控制面实例数据目录收回到 Skill 自身目录 `config.md`（`.gitignore` 排除），Skill 不再读写控制面 `data/`（《技能设计》2.2）。
+
 ## [1.2.0] - 2026-09-13
 
 ### Added

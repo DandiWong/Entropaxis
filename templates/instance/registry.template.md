@@ -16,7 +16,7 @@
 
 ## 外部看板映射规范 (Key-Value)
 
-支持以分号或空格分隔的多系统键值对映射（如 `main=proj_1; dev=iss_8f2; ext=space_qa`），由本地 `.entropaxis/data/templates/board_config.json` 或项目 `docs/.board.json` 解释具体 Provider：
+支持以分号或空格分隔的多系统键值对映射（如 `main=proj_1; dev=iss_8f2; ext=space_qa`），具体由哪个看板 CLI 解释归看板 Skill 自己决定：
 - `main`：团队主看板 / 交付看板 ID
 - `dev`：研发过程 / 轻量 Issue 看板 ID
 - `ext`：企业协作空间 / 第三方平台空间名
