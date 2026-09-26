@@ -90,12 +90,18 @@ def proposal_doc(author: str = "Architecture") -> str:
 
 
 def audit_doc(target_sha: str) -> str:
-    """Reviewer 的成功须过完整审计契约，不只是围栏能解析（审计 C-02）。"""
+    """Reviewer 的成功须过完整审计契约，不只是围栏能解析（审计 C-02）。
+
+    四段式（检查对象/证据/结论/未覆盖范围）是 `deliverable_structure.schema.json`
+    的 `Audit` 规则的机械下限；正文缺任一段即判 NO_VALID_OUTPUT（2026-09-20 M-3 修复后
+    该规则对 Audit 生效，此前静默短路）。
+    """
     return ("---\ntype: Audit\ntopic: 某主题\ndate: 2026-09-19\nauthor: Reviewer\nstatus: active\n"
             "schema_version: 3\nreviewer_mode: session\nreviewer_ref: current-session\n"
             "fallback_reason: not_configured\ncarrier: session-local\n"
             f"target_path: 01.md\ntarget_sha256: {target_sha}\n---\n\n"
-            '# 审计报告\n\n```audit-state\n{"issues": [], "critical_acks": []}\n```\n')
+            '# 审计报告\n\n## 检查对象\n\n受审对象。\n\n## 证据\n\n证据。\n\n## 结论\n\n结论。\n\n'
+            '## 未覆盖范围\n\n未覆盖范围。\n\n```audit-state\n{"issues": [], "critical_acks": []}\n```\n')
 
 
 GOOD_MANIFEST = {
@@ -748,7 +754,9 @@ class StampBeforeCriteriaTests(DispatchRoleTestBase):
         clean = ("---\ntype: Audit\ntopic: 某主题\ndate: 2026-09-19\nauthor: Reviewer\nstatus: active\n"
                  "schema_version: 3\n"
                  f"target_path: 01.md\ntarget_sha256: {dr._sha256_file(target)}\n---\n\n"
-                 '# 审计报告\n\n```audit-state\n{"issues": [], "critical_acks": []}\n```\n')
+                 '# 审计报告\n\n## 检查对象\n\n受审对象。\n\n## 证据\n\n证据。\n\n## 结论\n\n结论。\n\n'
+                 '## 未覆盖范围\n\n未覆盖范围。\n\n'
+                 '```audit-state\n{"issues": [], "critical_acks": []}\n```\n')
         body = self.ws / "clean_report.md"
         body.write_text(clean, encoding="utf-8")
         out = self.ws / "05_审计报告.md"
