@@ -100,23 +100,19 @@ class FreshWorkspaceTests(unittest.TestCase):
                 (root / d).mkdir()
             templates = root / paths.SYSTEM_DIRNAME / "templates" / "instance"
             templates.mkdir(parents=True)
-            (templates / "workspace-config.template.md").write_text(
-                "| `{{ORG_SHARED_DIR_1}}` | {{ORG_SHARED_PURPOSE_1}} |\n"
-                "| `{{ORG_SHARED_DIR_2}}` | {{ORG_SHARED_PURPOSE_2}} |\n"
-                "| `{{ORG_SHARED_DIR_3}}` | {{ORG_SHARED_PURPOSE_3}} |\n",
-                encoding="utf-8",
-            )
+            real = Path(__file__).resolve().parent.parent / "templates" / "instance" / "workspace-config.template.yaml"
+            (templates / real.name).write_text(real.read_text(encoding="utf-8"), encoding="utf-8")
             render_instance_configs(
                 verbose=False,
                 templates_dir=root / paths.SYSTEM_DIRNAME / "templates",
                 data_dir=root / paths.SYSTEM_DIRNAME / "data",
                 ws_name="anybox",
             )
-            out = (root / paths.SYSTEM_DIRNAME / "data" / "templates" / "workspace-config.md").read_text(encoding="utf-8")
+            out = (root / paths.SYSTEM_DIRNAME / "data" / "templates" / "workspace-config.yaml").read_text(encoding="utf-8")
             self.assertNotIn("Clients", out)
             self.assertNotIn("Research", out)
             self.assertNotIn("待确认", out)
-            self.assertEqual(out.count("默认无"), 3)
+            self.assertIn("shared_dirs: []", out)
             self.assertNotIn("{{", out)
 
 

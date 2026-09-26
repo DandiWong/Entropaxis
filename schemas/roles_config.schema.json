@@ -1,0 +1,35 @@
+{
+  "$comment": "角色承载第 3 级配置的机器契约。物理宿主：data/templates/roles.yaml（merge-only；种子 templates/instance/roles.template.yaml）。roles 只存角色→profile 标识，命令本体只在 command_profiles（契约见 command_profile.schema.json）。profile 为 null 表示由当前会话内置 Subagent 承载。",
+  "title": "roles_config",
+  "target": "data/templates/roles.yaml",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["roles", "command_profiles"],
+  "properties": {
+    "_meta": { "type": "object", "required": ["source", "managed_by", "policy"] },
+    "default_dispatch_mode": { "enum": ["strict", "graceful"] },
+    "roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Z][A-Za-z]*$": {
+          "type": "object",
+          "required": ["duty"],
+          "additionalProperties": false,
+          "properties": {
+            "duty": { "type": "string", "minLength": 1 },
+            "profile": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9-]*$" }
+          }
+        }
+      }
+    },
+    "command_profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9-]*$": { "$ref": "command_profile.schema.json#/patternProperties/^[a-z][a-z0-9-]*$" }
+      }
+    },
+    "dispatch_authorizations": { "type": "array" }
+  }
+}

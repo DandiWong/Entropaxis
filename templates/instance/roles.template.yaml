@@ -1,0 +1,17 @@
+_meta:
+  source: .entropaxis/templates/instance/roles.template.yaml
+  managed_by: bootstrap.py render_instance_configs（仅缺失时渲染）+ setup_agents.py --set-role + 人工
+  policy: merge-only
+  schema: .entropaxis/schemas/roles_config.schema.json
+  note: 角色承载第 3 级默认（语义见 rules/角色协作.md）。profile 为空即由当前会话内置 Subagent 承载；命令只写在 command_profiles（argv 数组，{PROMPT} 为任务文本占位符，备选用 fallback_profile，链深 ≤3）。
+default_dispatch_mode: strict
+roles:
+  Architecture: {duty: 顶层架构/技术选型/方案设计, profile: null}
+  Researcher: {duty: 调研（强制联网）/文献综述/竞品查新, profile: null}
+  Designer: {duty: 视觉美学/UI交互原型/排版呈现, profile: null}
+  Builder: {duty: 方案实施/核心编码/重构, profile: null}
+  Reviewer: {duty: 方案审计/对抗评审/架构合规, profile: null}
+  Maintainer: {duty: 全流程验收/守门落盘/证据核验, profile: null}
+  Reporter: {duty: 汇报材料提炼/交付总结, profile: null}
+command_profiles: {}
+dispatch_authorizations: []

@@ -537,14 +537,22 @@ class RealWorkspaceConfigTests(TestCase):
     """对真实实例的集成断言（§3.5 分发验收的测试面）。"""
 
     def test_real_config_has_strict_default(self) -> None:
-        cfg = dr.load_dispatch_config()  # WS_CONFIG
-        self.assertTrue(cfg["present"], "实例 workspace-config.md 缺调度参数 yaml 块（运行 setup_agents.py --migrate-command-profiles）")
+        cfg = dr.load_dispatch_config()  # roles.yaml
+        if not cfg["present"]:
+            self.skipTest("本机尚未初始化 roles.yaml（空态即初始态）")
         mode = cfg["default_dispatch_mode"]
         self.assertIn(mode, ("strict", None), f"default_dispatch_mode 非法: {mode!r}")
 
     def test_real_template_seeded(self) -> None:
-        tpl = dr.SYSTEM_ROOT / "templates" / "instance" / "workspace-config.template.md"
+        tpl = dr.SYSTEM_ROOT / "templates" / "instance" / "roles.template.yaml"
         self.assertIn("default_dispatch_mode: strict", tpl.read_text(encoding="utf-8"))
+
+    def test_real_config_passes_schema(self) -> None:
+        from tools import validate_schema as vs
+        if not dr.ROLES_CONFIG.exists():
+            self.skipTest("本机尚未初始化 roles.yaml")
+        data = yaml.safe_load(dr.ROLES_CONFIG.read_text(encoding="utf-8"))
+        self.assertEqual(vs.validate(data, vs.load_schema("roles_config")), [])
 
 
 class DirectRunTests(DispatchRoleTestBase):
@@ -782,7 +790,7 @@ class StdinIsolationTests(DispatchRoleTestBase):
 
 
 class RealConfigResolutionTests(TestCase):
-    """对真实 workspace-config.md 的解析断言（门禁四律「执行态可见」的可负担部分）。"""
+    """对真实 roles.yaml 的解析断言（门禁四律「执行态可见」的可负担部分）。"""
 
     def test_researcher_chain_resolves_to_declared_cli(self) -> None:
         cfg = dr.load_dispatch_config()

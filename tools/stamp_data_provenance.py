@@ -39,24 +39,19 @@ KNOWN: dict[str, dict[str, str]] = {
         "policy": "merge-only",
         "note": "标 arbitrated 的条目为人工仲裁，任何写入方不得覆盖；全量重扫须显式 --force-rescan-opener",
     },
-    "board_config.json": {
-        "source": ".entropaxis/templates/instance/board_config.template.json",
-        "managed_by": "bootstrap.py render_instance_configs（仅缺失时渲染）",
+    "workspace-config.yaml": {
+        "source": ".entropaxis/templates/instance/workspace-config.template.yaml",
+        "managed_by": "bootstrap.py render_instance_configs（仅缺失时渲染）+ 人工填写",
         "policy": "merge-only",
     },
-    "workspace-config.md": {
-        "source": ".entropaxis/templates/instance/workspace-config.template.md",
-        "managed_by": "bootstrap.py render_instance_configs（仅缺失时渲染）+ 人工填写",
+    "roles.yaml": {
+        "source": ".entropaxis/templates/instance/roles.template.yaml",
+        "managed_by": "bootstrap.py render_instance_configs（仅缺失时渲染）+ setup_agents.py --set-role + 人工",
         "policy": "merge-only",
     },
     "registry.md": {
         "source": ".entropaxis/templates/instance/registry.template.md",
         "managed_by": "init_project.py 立项时追加映射行 + 人工维护排除规则与备注",
-        "policy": "merge-only",
-    },
-    "reimbursement-config.md": {
-        "source": "人工创建",
-        "managed_by": "人工 + Agent 按《财务报销》配置前置门禁补填",
         "policy": "merge-only",
     },
     "tips.md": {
@@ -74,18 +69,34 @@ KNOWN: dict[str, dict[str, str]] = {
 FALLBACK = {"source": "未登记（按人工真源保护）", "managed_by": "人工", "policy": "merge-only"}
 
 
-# 三个来源桶：路径本身即指向定义方（见 rules/01_根系统治理.md「.entropaxis/data/ 目录结构」）
-SOURCE_BUCKETS = ("templates", "rules", "skills")
+# 两个来源桶：路径本身即指向定义方（见 rules/控制面布局.md「data/ 目录结构」）；Skill 配置随 Skill 自身目录
+SOURCE_BUCKETS = ("templates", "rules")
 
 
 def target_files(data_dir: Path = DATA_DIR) -> list[Path]:
-    """只取三个来源桶内的 .md/.json；credentials/ 与 docs/ 一律不碰（前者含凭据）。"""
+    """只取两个来源桶内的 .md/.json/.yaml；credentials/ 与 docs/ 一律不碰（前者含凭据）。"""
     if not data_dir.is_dir():
         return []
     return sorted(
         p for b in SOURCE_BUCKETS for p in (data_dir / b).rglob("*")
-        if p.is_file() and p.suffix in (".md", ".json")
+        if p.is_file() and p.suffix in DATA_SUFFIXES
     )
+
+
+DATA_SUFFIXES = (".md", ".json", ".yaml")
+
+
+def yaml_has_meta(text: str) -> bool:
+    """YAML 实例以顶层 `_meta:` 映射承载标记（与 JSON 同构），须含 policy。"""
+    lines = text.splitlines()
+    if "_meta:" not in lines:
+        return False
+    for line in lines[lines.index("_meta:") + 1:]:
+        if not line.startswith((" ", "\t")):
+            return False
+        if line.strip().startswith("policy:"):
+            return True
+    return False
 
 
 def _meta_for(name: str) -> dict[str, str]:
@@ -102,6 +113,8 @@ def has_provenance(path: Path) -> bool:
             return isinstance(json.loads(text).get("_meta"), dict)
         except (json.JSONDecodeError, AttributeError):
             return False
+    if path.suffix == ".yaml":
+        return yaml_has_meta(text)
     return text.startswith("---\n") and "\npolicy:" in text.split("\n---", 2)[0]
 
 
@@ -122,6 +135,12 @@ def stamp(path: Path) -> bool:
         # _meta 置于首位，便于人眼一打开就看到来源
         data = {"_meta": meta, **data}
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return True
+
+    if path.suffix == ".yaml":
+        # 文本前插而非解析重写：保留人工注释与键序
+        block = "_meta:\n" + "".join(f"  {k}: {json.dumps(v, ensure_ascii=False)}\n" for k, v in meta.items())
+        path.write_text(block + text.lstrip("\n"), encoding="utf-8")
         return True
 
     lines = [f"{k}: {v}" for k, v in meta.items()]

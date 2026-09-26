@@ -1,0 +1,15 @@
+_meta:
+  source: .entropaxis/templates/instance/workspace-config.template.yaml
+  managed_by: bootstrap.py render_instance_configs（仅缺失时渲染）+ 人工填写
+  policy: merge-only
+# 工作区环境与组织参数。规则正文只含通用逻辑，实例参数只放这里；角色承载见同目录 roles.yaml。
+
+# 跨项目共享资料目录（不属于任何项目）。多数工作区没有，保持空列表即可。
+# 格式：- {dir: 目录名/, purpose: 用途}
+shared_dirs: []
+
+# 新建文件夹、文件或正文涉及组织名称时的默认口径；留空时按工作区目录名兜底。
+org:
+  full_name: '{{ORG_FULL_NAME}}'
+  forbidden_abbr: '{{ORG_FORBIDDEN_ABBR}}'
+  exception: 对外正式材料以收件方或官方品牌要求为准

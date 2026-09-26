@@ -2,10 +2,12 @@
 """按 .entropaxis/schemas/ 声明校验结构化契约 (Schema Validator).
 
 只支持 JSON Schema 的一个子集：type / required / properties / items / enum /
-pattern / minLength / minItems / minimum / additionalProperties / conditional_required。
+pattern / minLength / minItems / minimum / additionalProperties / patternProperties /
+conditional_required。
 够用即可——引入完整 JSON Schema 库会违反纯标准库铁律。
 
-schema 用 .json 而非 .yaml：Python 标准库没有 YAML 解析器，用 YAML 就得引入 pyyaml。
+schema 用 .json 而非 .yaml：Python 标准库没有 YAML 解析器。YAML 实例（如 data/templates/roles.yaml）
+由已依赖 PyYAML 的消费方解析后调用本模块 validate()。
 
 执行方式:
   python3 .entropaxis/tools/validate_schema.py                 # 校验全部已接线的目标
@@ -55,12 +57,12 @@ def _resolve_refs(node, _depth: int = 0):
     只支持同目录 + 属性路径这一种形态，不引入完整 JSON Pointer 与远程解析——够用即可。
     存在的理由：同一契约此前只能在两份 schema 里各抄一遍（承载三元组 ⇄ Audit 的
     reviewer_*），靠一条测试钉住防漂移；能引用就不该复制（元规则 #1）。
-    深度上限兜住 A→B→A 的相互引用。
+    深度只在跟随 `$ref` 时累加（普通嵌套不计），上限兜住 A→B→A 的相互引用。
     """
     if _depth > 8:
         raise ValueError("$ref 展开超过 8 层，疑似循环引用")
     if isinstance(node, list):
-        return [_resolve_refs(x, _depth + 1) for x in node]
+        return [_resolve_refs(x, _depth) for x in node]
     if not isinstance(node, dict):
         return node
     ref = node.get("$ref")
@@ -79,7 +81,7 @@ def _resolve_refs(node, _depth: int = 0):
         merged = {k: v for k, v in node.items() if k != "$ref"}
         resolved = _resolve_refs(cur, _depth + 1)
         return {**resolved, **merged} if isinstance(resolved, dict) else resolved
-    return {k: _resolve_refs(v, _depth + 1) for k, v in node.items()}
+    return {k: _resolve_refs(v, _depth) for k, v in node.items()}
 
 
 # `$` 前缀键的豁免只对 schema 文档（含 schema 自检样例）生效，且仅限标准
@@ -126,10 +128,16 @@ def validate(data, schema: dict, path: str = "$", *, allow_schema_directives: bo
             if key not in data:
                 errs.append(f"{path}: 缺少必填字段 {key!r}")
         props = schema.get("properties", {})
-        if schema.get("additionalProperties") is False:
-            for key in data:
-                if key not in props and not (allow_schema_directives and key in _SCHEMA_DIRECTIVE_KEYS):
-                    errs.append(f"{path}: 出现未声明字段 {key!r}（拼写错误或需先在 schema 中登记）")
+        patterns = schema.get("patternProperties", {})
+        for key in data:
+            if key in props:
+                continue
+            matched = [sub for pat, sub in patterns.items() if isinstance(key, str) and re.search(pat, key)]
+            for sub in matched:
+                errs += validate(data[key], sub, f"{path}.{key}", allow_schema_directives=allow_schema_directives)
+            if (not matched and schema.get("additionalProperties") is False
+                    and not (allow_schema_directives and key in _SCHEMA_DIRECTIVE_KEYS)):
+                errs.append(f"{path}: 出现未声明字段 {key!r}（拼写错误或需先在 schema 中登记）")
         for key, sub in props.items():
             if key in data:
                 errs += validate(data[key], sub, f"{path}.{key}", allow_schema_directives=allow_schema_directives)

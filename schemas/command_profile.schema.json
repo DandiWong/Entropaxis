@@ -1,7 +1,7 @@
 {
-  "$comment": "第 3 级 command_profiles 的机器契约。物理宿主：data/templates/workspace-config.md（用户维护，merge-only；种子见 templates/instance/workspace-config.template.md）。命令本体唯一存在于此处——角色指派档案与规则正文均不携带命令（角色协作.md「档案零命令」，档案只存 profile 标识）。argv 为结构化数组，经 subprocess 列表参数执行、无 shell 拼接；禁 shell 元字符（; & | ` $ > < 换行）与 || 内联备选链，备选以 fallback_profile 单跳表达，链深<=3 与环检测由 dispatch_role.py 执行。{PROMPT} 为唯一占位符（调度器替换为任务提示词；--cwd 类工作目录切换用 subprocess 的 cwd 参数表达，不进 argv）。",
+  "$comment": "第 3 级 command_profiles 的机器契约。物理宿主：data/templates/roles.yaml 的 command_profiles 段（merge-only；种子 templates/instance/roles.template.yaml；整文件契约见 roles_config.schema.json）。命令本体唯一存在于此处——角色指派档案与规则正文均不携带命令（角色协作.md「档案零命令」，档案只存 profile 标识）。argv 为结构化数组，经 subprocess 列表参数执行、无 shell 拼接；禁 shell 元字符（; & | ` $ > < 换行）与 || 内联备选链，备选以 fallback_profile 单跳表达，链深<=3 与环检测由 dispatch_role.py 执行。{PROMPT} 为唯一占位符（调度器替换为任务提示词；--cwd 类工作目录切换用 subprocess 的 cwd 参数表达，不进 argv）。",
   "title": "command_profiles",
-  "target": "data/templates/workspace-config.md 的 command_profiles 段",
+  "target": "data/templates/roles.yaml 的 command_profiles 段",
   "type": "object",
   "additionalProperties": false,
   "patternProperties": {

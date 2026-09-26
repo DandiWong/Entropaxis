@@ -26,7 +26,7 @@ def render_instance_configs(
     data_dir: Path | None = None,
     ws_name: str | None = None,
 ) -> bool:
-    """从 .entropaxis/templates/instance/*.template.{json,md} 首次渲染到 .entropaxis/data/。
+    """从 .entropaxis/templates/instance/*.template.{json,md,yaml} 首次渲染到 .entropaxis/data/。
 
     - 仅在 data/ 目标文件完全缺失时写入；存在即不动（避免覆盖用户已填内容）
     - 占位符 {{XXX}} 替换为工作区目录名兜底（无脑填充，明示待填）
@@ -78,26 +78,18 @@ def render_instance_configs(
             if verbose:
                 print(f"❌ 渲染 {target_name} 失败: {exc}", file=sys.stderr)
             success = False
-    for tpl in sorted(data_templates.glob("*.template.md")):
-        target_name = tpl.name.replace(".template.md", ".md")
+    # .md / .yaml 模板按文本渲染（YAML 保留注释，不经解析器重排）
+    for tpl in sorted([*data_templates.glob("*.template.md"), *data_templates.glob("*.template.yaml")]):
+        target_name = tpl.name.replace(".template", "", 1)
         target = data_dir / "templates" / target_name
         if target.exists():
             continue
         try:
             content = tpl.read_text(encoding="utf-8")
-            # 占位符替换为工作区目录名兜底（明示待填）
+            # 占位符替换为工作区目录名兜底（明示待填）。共享资料层模板默认空列表：
+            # 不写死任何具体目录名，也不拿探测结果冒充默认值。
             rendered_content = content.replace("{{ORG_FULL_NAME}}", f"{ws_name}（待填：组织完整名称）")
             rendered_content = rendered_content.replace("{{ORG_FORBIDDEN_ABBR}}", f"{ws_name}-abbr（待填：禁用缩写）")
-            rendered_content = rendered_content.replace("{{ORG_REVIEWER_CLI}}", "omp（待填：reviewer CLI）")
-            rendered_content = rendered_content.replace("{{ORG_REVIEWER_CMD}}", "omp --model <待填>（待填：启动命令）")
-            # 共享资料层默认为空：跨项目共享目录是少数工作区才有的形态，各使用者的目录
-            # 各不相同。既不写死任何具体目录名（那是把某个工作区的形态分发给所有收件方），
-            # 也不拿探测结果去问"是不是共享目录"（多数人答案都是否，等于凭空造一轮确认）。
-            for idx in (1, 2, 3):
-                rendered_content = rendered_content.replace(
-                    f"{{{{ORG_SHARED_DIR_{idx}}}}}", f"（待填：共享资料目录{idx}，默认无）"
-                )
-                rendered_content = rendered_content.replace(f"{{{{ORG_SHARED_PURPOSE_{idx}}}}}", "待填：用途")
             # 原子写入
             with tempfile.NamedTemporaryFile(
                 mode="w", encoding="utf-8", delete=False, dir=str(data_dir / "templates"), prefix=f".{target_name}.tmp."
@@ -416,7 +408,7 @@ if __name__ == "__main__":
         render_instance_configs(verbose=verbose)
         stamp_new_instances(verbose=verbose)
         print("🎉 工作区初始化与自愈完成（入口已同步，实例配置就绪；角色默认内置 Subagent 兜底）。")
-        print("💡 进阶自定义：`setup_agents.py` 绑定多模型 / 说「配置打开方式」「自定义角色」 / registry.md 登记别名 / workspace-config.md 组织口径")
+        print("💡 进阶自定义：说「自定义角色」绑定多模型（roles.yaml） / 「配置打开方式」 / registry.md 登记别名 / workspace-config.yaml 组织口径")
         if sys.platform == "win32" and verbose:
             print_windows_hints()
     else:
