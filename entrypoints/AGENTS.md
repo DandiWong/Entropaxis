@@ -28,22 +28,21 @@
 
 ## 按需路由
 
-- 新建/生成/导出通用文件，或查找/定位文件位置：`.entropaxis/rules/文件交付.md`
-- 系统边界、项目目录结构与组织命名：`.entropaxis/rules/项目组织.md`
-- 代码开发、调试与自动化验证：`.entropaxis/rules/软件工程.md`
-- 根系统治理与元规则：`.entropaxis/rules/01_根系统治理.md`（布局见 `.entropaxis/rules/控制面布局.md`）
-- 角色职责、跨角色交接与协作验收：`.entropaxis/rules/角色协作.md`
-- 工作区自然语言指令与任务解析：`.entropaxis/rules/指令解析.md`
-- 日常业务动作指令（事务/调研/同步/任务/沉淀/复盘/初始化/报销）：`.entropaxis/rules/工作流指令.md`
-- 方案调研、技术选型与多维评估：`.entropaxis/rules/方案调研.md`
-- 系统治理动作指令（审计/修正/自检/新迭代/工具化/Skill）：`.entropaxis/rules/治理指令.md`
-- 表达文风与可视化：`.entropaxis/rules/表达文风.md`
-- 对外发布与审批：`.entropaxis/rules/对外发布.md`
-- 知识沉淀、Wiki 录入与能力形态判定：`.entropaxis/rules/知识沉淀.md`
-- Tool 准入判据与 ApX 工程契约：`.entropaxis/rules/工具设计.md`
-- Skill 设计、元数据、打包与分发：`.entropaxis/rules/技能设计.md`（分发包）与 `.entropaxis/rules/文件交付.md`（打开目录）
-- Spec、任务状态、任务看板与待办管理：`.entropaxis/rules/看板联动.md`
-- 报销 / 整理发票：`.entropaxis/rules/工作流指令.md` 与 `.entropaxis/rules/财务报销.md`
-- 项目注册表（工作区项目索引）：`.entropaxis/data/templates/registry.md`
+- 新建/生成/导出交付文件、查找定位文件、对外发布与审批：`.entropaxis/rules/文件交付.md`（打开闭环第 4 节，发布第 5 节）
+- 项目边界、注册表、事务胶囊与决策底册：`.entropaxis/rules/项目组织.md`
+- 代码开发、调试、测试，新迭代/开分支/发版：`.entropaxis/rules/软件工程.md`
+- 改动 `.entropaxis/`：`.entropaxis/rules/01_根系统治理.md`；设计新规则/工具/Skill 另读 `.entropaxis/rules/系统演进准则.md`；布局见 `.entropaxis/rules/控制面布局.md`
+- 调研→方案→原型→实施→审计→验收→汇报的角色调度与审修闭环：`.entropaxis/rules/角色协作.md`
+- 自然语言指令解析与追问边界：`.entropaxis/rules/指令解析.md`
+- 日常业务动作（事务/调研/同步/任务/沉淀/案例/复盘/初始化/自定义角色/报销）：`.entropaxis/rules/工作流指令.md`
+- 调研质量门禁与交付结构：`.entropaxis/rules/方案调研.md`
+- 审计/修正、系统自检、机制转工具、Skill 分发：`.entropaxis/rules/治理指令.md`
+- 表达文风、可视化与规则瘦身：`.entropaxis/rules/表达文风.md`
+- 知识沉淀形态判定与知识库索引：`.entropaxis/rules/知识沉淀.md`
+- Tool 准入判据与接口契约：`.entropaxis/rules/工具设计.md`
+- Skill 设计、元数据与分发包：`.entropaxis/rules/技能设计.md`
+- Spec、任务状态与外部看板：`.entropaxis/rules/看板联动.md`
+- 报销 / 整理发票：`.entropaxis/rules/财务报销.md`
+- 项目注册表：`.entropaxis/data/templates/registry.md`；角色承载配置：`.entropaxis/data/templates/roles.yaml`
 
 进入具体项目后，先读最近的 `AGENTS.md`，再按其中路由读取 README、Spec 或操作文档。仅在任务涉及外部看板、联网、发布或特定工具时加载对应规则或 Skill。

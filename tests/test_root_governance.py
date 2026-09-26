@@ -22,7 +22,9 @@ class RootGovernanceRuleTests(TestCase):
         Skill 反向依赖控制面 → 独立安装即失效；系统替用户猜默认值 → 把某个工作区的
         长相分发给所有人；拿空态当契约破损 → 开箱即红。
         """
-        content = (SYSTEM_ROOT / "rules" / "01_根系统治理.md").read_text(encoding="utf-8")
+        # 设计判据已拆到《系统演进准则》，SOP 留在《根系统治理》——两份合起来是完整真源
+        content = "".join((SYSTEM_ROOT / "rules" / n).read_text(encoding="utf-8")
+                          for n in ("01_根系统治理.md", "系统演进准则.md"))
 
         self.assertIn("能力三分与执行体归属", content)
         self.assertIn("执行体不随分发的机制", content)

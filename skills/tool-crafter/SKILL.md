@@ -12,7 +12,7 @@ metadata:
 
 核心方法论依据：
 - 规则真源：[`../../rules/工具设计.md`](../../rules/工具设计.md)（形态判定见 `知识沉淀.md`）
-- 系统演进准则：[`../../rules/01_根系统治理.md`](../../rules/01_根系统治理.md)
+- 系统演进准则：[`../../rules/系统演进准则.md`](../../rules/系统演进准则.md)
 - ApX 高级工具工程规范（语义化接口、行动导向错误契约、纯标准库、幂等原子暂存）
 
 ---
@@ -35,7 +35,7 @@ Phase 2: 接口与契约设计 (Spec)  ➔ 确定动词_名词、参数类型清
 Phase 3: 纯标准库代码编写 (Code) ➔ 基于 templates/tool.template.py 生成 .entropaxis/tools/<name>.py
 Phase 4: 自动化单测驱动 (TDD)    ➔ 编写 .entropaxis/tests/test_<name>.py（覆盖正常与边界拦截）
 Phase 5: 双重体检门禁 (Verify)  ➔ 跑通 unittest (100%) 与 lint_workspace.py (全绿)
-Phase 6: 路由装配与交付验证 (Done)➔ 挂载使用说明至 .entropaxis/data/rules/tips.md，给出检查对象/证据/结论/未覆盖范围
+Phase 6: 路由装配与交付验证 (Done)➔ 在调用它的规则或 Skill 写明命令，给出检查对象/证据/结论/未覆盖范围
 ```
 
 ---
@@ -80,5 +80,5 @@ python3 .entropaxis/tools/lint_workspace.py
 必须确保单元测试与工作区体检全部通过。
 
 ### Phase 6 · 路由装配与交付验证 (Wire & Deliver)
-1. 在 `.entropaxis/data/rules/tips.md` 追加该工具的操作提示（`- TIP：...`）；
+1. 在调用它的规则或 Skill 正文写明调用命令；可选在 `.entropaxis/data/rules/tips.md` 追加一条 `- TIP：...`（须用户确认）；
 2. 依据 [`.entropaxis/rules/软件工程.md`](../../rules/软件工程.md)「检查按影响选」给出检查对象/证据/结论/未覆盖范围，交付成果。

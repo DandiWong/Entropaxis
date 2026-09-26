@@ -4,26 +4,16 @@
 
 - 工作区元规则与总路由：`../AGENTS.md`
 - 本目录说明：`README.md`
+- 修改本目录任何文件：先读 `rules/01_根系统治理.md`，按其「自迭代闭环」执行（含测试、体检与仅限本目录的自动提交）
 
 ## 职责划分
 
-- `rules/`：跨项目通用规则真源（零具体系统绑定，纯架构与行为约束）。
-- `config/`：由规则正文派生、供工具消费的机器可读控制面数据。
-- `schemas/`：机器配置与文档元数据的结构化契约。
-- `templates/`：脚手架模板（项目/应用/契约模板，变量严格闭合）。
-- `tools/`：工作区治理、自愈、脚手架与体检脚本。
-- `skills/`：自包含 Agent 能力真源（含 `SKILL.md` 与触发元数据）。
-- `entrypoints/`：根入口唯一物理源（`AGENTS.md`、`CLAUDE.md`）。
+- `rules/`：跨项目通用规则真源（零具体系统绑定）
+- `schemas/`：机器配置与文档元数据的结构化契约
+- `templates/`：`instance/` 渲染到 `data/templates/`，`project/` 为项目脚手架
+- `tools/`：治理、自愈、脚手架与体检脚本
+- `skills/`：自包含 Agent 能力真源（`SKILL.md` + 触发元数据）
+- `entrypoints/`：根入口唯一物理源（`AGENTS.md`、`CLAUDE.md`）
+- `data/`：实例数据与凭据（不入库），布局见 `rules/控制面布局.md`
 
-## 自迭代标准闭环 (SOP)
-
-1. **归属判别与最小修改**：按元规则确认内容唯一归属；修改 `entrypoints/AGENTS.md` 时同步工作区根 `AGENTS.md`。
-2. **单一真源与去重**：禁止在 `rules/` 中出现具体业务系统名称或在项目入口复制规则正文。
-3. **双重体检门禁（必须通过）**：
-   - 单元测试：`python3 -m unittest discover -s tests -t .`（在 `.entropaxis` 目录下）
-   - 工作区体检：`python3 tools/lint_workspace.py`（全部阻断项与治理建议项通过）
-4. **交付验证**：每次系统自迭代完成后，按《软件工程》「检查按影响选」给出检查对象/证据/结论/未覆盖范围，不产出数字评分。
-5. **Git 交付（仅限 .entropaxis 本身）**：
-   - 精确 `git add <file>` 暂存 `.entropaxis/` 变更文件；
-   - 验证通过且无阻断问题时，自动执行 `git commit`；**远程写入按用户指令单独判断，不自动 `git push`**（“有权限”不等于“已授权”）；
-   - ⚠️ **严禁对业务项目仓库执行自动提交或推送**。
+在本目录下运行测试：`python3 -m unittest discover -s tests -t .`；体检：`python3 tools/lint_workspace.py`。

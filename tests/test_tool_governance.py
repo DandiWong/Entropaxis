@@ -26,7 +26,7 @@ class ToolGovernanceRuleTests(TestCase):
         self.assertIn("单跳引用与 500 行预算铁律", skill_content)
         self.assertIn("行动导向的错误契约", tool_content)
         # 红线归各自真源，不再由单一文件复述
-        governance = (SYSTEM_ROOT / "rules" / "01_根系统治理.md").read_text(encoding="utf-8")
+        governance = (SYSTEM_ROOT / "rules" / "系统演进准则.md").read_text(encoding="utf-8")
         layout = (SYSTEM_ROOT / "rules" / "控制面布局.md").read_text(encoding="utf-8")
         self.assertIn("零系统绑定铁律", governance)
         self.assertIn("credentials", layout)
