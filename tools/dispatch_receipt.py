@@ -32,6 +32,7 @@ import hmac
 import json
 import os
 import secrets
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -78,6 +79,47 @@ def content_sha256(path: Path) -> str:
         return _sha256_file(path)
     entries = sorted((str(p.relative_to(path)), _sha256_file(p)) for p in path.rglob("*") if p.is_file())
     return hashlib.sha256(json.dumps(entries, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def target_sha256(path: Path) -> str:
+    """受审对象（依据）指纹唯一实现：文件取字节哈希；目录取 git 追踪文件的有序摘要。
+
+    与 content_sha256 的区别：交付物目录刚产出、尚未入库，必须按全文件计；受审对象目录
+    （整个控制面/代码工程）只计 git 追踪文件，`.git/`、实例面 `data/` 与本地缓存不计入，
+    否则同一对象在两台机器上给出两个指纹。签发（issue）、调度档案（dispatch_role）与
+    审计门禁（check_audit_gate）共用本函数——此前签发端对目录记空串、调度端对目录直接
+    抛异常，目录型外置审计永远核验不过。"""
+    if path.is_file():
+        return _sha256_file(path)
+    root = _find_repo_root(path)
+    tracked = _git_tracked(root) if root else None
+    entries = sorted((str(p.relative_to(path)), _sha256_file(p))
+                     for p in path.rglob("*")
+                     if p.is_file() and (tracked is None or str(p.relative_to(root)) in tracked))
+    return hashlib.sha256(json.dumps(entries, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _find_repo_root(target: Path) -> Path | None:
+    """向上找包含 .git 的目录；找不到返回 None（非 git 目录按全文件计）。"""
+    current = target.resolve()
+    for _ in range(8):
+        if (current / ".git").exists():
+            return current
+        if current.parent == current:
+            return None
+        current = current.parent
+    return None
+
+
+def _git_tracked(repo_root: Path) -> set[str] | None:
+    """git 追踪文件相对 repo_root 的集合；git 不可用时返回 None（降级为全文件）。"""
+    try:
+        proc = subprocess.run(["git", "ls-files", "-z"], cwd=repo_root, capture_output=True, text=True)
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    return set(filter(None, proc.stdout.split("\0")))
 
 
 def body_sha256(path_or_text: Path | str) -> str:
@@ -132,7 +174,7 @@ def issue(role: str, argv_sha256: str, deliverable: Path | None, target: Path | 
         d_sha = content_sha256(deliverable)  # 目录型：绑内容，不绑"签发过"（复核 M-08）
     else:
         d_sha = ""
-    t_sha = _sha256_file(target) if target and target.is_file() else ""
+    t_sha = target_sha256(target) if target and target.exists() else ""
     payload = _payload(role, argv_sha256, d_sha, t_sha, carrier, issued_at)
     key = load_key(create=True)
     mac = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest() if key else UNSIGNED

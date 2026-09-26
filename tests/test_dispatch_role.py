@@ -18,7 +18,7 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest import TestCase
+from unittest import TestCase, mock
 
 import yaml
 
@@ -1197,3 +1197,60 @@ class ReviewerFenceTests(DispatchRoleTestBase):
     def test_every_role_binds_a_doc_type(self) -> None:
         self.assertEqual({r for r, c in dr.ROLE_CRITERIA.items() if not c.get("doc_type")}, set(),
                          "每个角色都须绑定产出类型，否则该类判据仍可被绕过")
+
+
+class ReviewRound2RegressionTests(DispatchRoleTestBase):
+    """2026-09-27 实现审查：旧交付物冒领、目录型依据、代码型指派、锁竞态。"""
+
+    def test_unchanged_existing_deliverable_is_not_success(self) -> None:
+        """退出码 0 但没写交付物：沿用上一轮文件不得盖上本 profile 的承载章并判成功。"""
+        noop = _mkexe(self.scripts, "noop.sh", "#!/bin/sh\nexit 0\n")
+        out = self.ws / "01_调研.md"
+        out.write_text(research_doc(), encoding="utf-8")
+        self.write_config({"researcher-primary": {"argv": [noop, "{PROMPT}"], "timeout_s": 30}})
+        rc = dr.run_direct(self.ws, "Researcher", "调研任务", Path("01_调研.md"), owner="test")
+        self.assertEqual(rc, dr.EXIT_LOCAL)
+        self.assertNotIn("carrier: researcher-primary", out.read_text(encoding="utf-8"))
+
+    def test_directory_target_fingerprinted_not_crashing(self) -> None:
+        append = _mkexe(self.scripts, "append2.sh", f'#!/bin/sh\ncat "{self.ok_body}" > "$2"\n')
+        out = self.ws / "01_调研.md"
+        self.write_config({"researcher-primary": {"argv": [append, "{PROMPT}", str(out)], "timeout_s": 30}})
+        target = self.ws / "pkg"
+        target.mkdir()
+        (target / "a.md").write_text("a\n", encoding="utf-8")
+        cap = self.ws / "capsule.yaml"
+        cap.write_text(yaml.safe_dump({"roles_manifest": {"assigned_at": "2026-09-27T00:00:00+00:00",
+                                                          "assigned_by": "t", "revision": 0, "assignments": []}}),
+                       encoding="utf-8")
+        rc = dr.run_direct(self.ws, "Researcher", "调研任务", Path("01_调研.md"), owner="test", target=Path("pkg"))
+        self.assertEqual(rc, dr.EXIT_OK)
+        rec = yaml.safe_load(cap.read_text(encoding="utf-8"))["roles_manifest"]["assignments"][0]
+        self.assertEqual(rec["target_sha256"], dr._receipt_module().target_sha256(target))
+
+    def test_code_assignment_without_deliverable_is_usage_error(self) -> None:
+        self.write_config({})
+        man = {"assigned_at": "2026-09-27T00:00:00+00:00", "assigned_by": "t", "revision": 1,
+               "assignments": [{"assignment_id": "b1", "role": "Builder", "command_profile": "x",
+                                "deliverable_ref": "git:abc", "status": "pending"}]}
+        (self.ws / "workers.yaml").write_text(yaml.safe_dump({"roles_manifest": man}), encoding="utf-8")
+        self.assertEqual(dr.run_assignment(self.ws, "b1", prompt="p", ack=None, owner="t"), dr.EXIT_USAGE)
+
+    def test_fresh_lock_without_owner_file_is_held(self) -> None:
+        """对方刚建锁目录、尚未写 owner.json 时，不得被当作过期锁挪走。"""
+        w = self.write_workers()
+        s = dr.ManifestStore(w)
+        s.lock_dir.mkdir()
+        self.assertFalse(dr.ManifestStore(w).acquire("b"))
+        self.assertFalse(s.stale_lock_report())
+
+    def test_receipt_binds_directory_target(self) -> None:
+        target = self.ws / "pkg2"
+        target.mkdir()
+        (target / "x.md").write_text("x\n", encoding="utf-8")
+        rcpt = dr._receipt_module()
+        self.assertTrue(rcpt.target_sha256(target))
+        with mock.patch.object(rcpt, "RECEIPT_DIR", self.ws / "receipts"), \
+                mock.patch.object(rcpt, "load_key", return_value=b"k"):
+            rec = rcpt.issue("Reviewer", "a" * 64, None, target, "p")
+        self.assertEqual(rec["target_sha256"], rcpt.target_sha256(target))

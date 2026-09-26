@@ -292,9 +292,15 @@ class ManifestStore:
                 if datetime.now(timezone.utc) <= lease:
                     return False
             except (OSError, ValueError, KeyError):
-                pass
+                # owner.json 读不到：可能是对方刚 mkdir、尚未写入。按锁目录年龄判，未满租期即视为占用——
+                # 此前一律当过期锁挪走，两个进程会同时自认持锁。
+                try:
+                    if time.time() - self.lock_dir.stat().st_mtime <= lease_s:
+                        return False
+                except OSError:
+                    return False
             # 过期锁恢复：归档锁目录（永不静默删除），档案自身即最后一致态
-            stale = self.archive.parent / f".{self.archive.name}.lock.stale-{int(time.time())}"
+            stale = self.archive.parent / f".{self.archive.name}.lock.stale-{time.time_ns()}"
             os.rename(self.lock_dir, stale)
             self.lock_dir.mkdir()
         (self.lock_dir / "owner.json").write_text(
@@ -724,6 +730,8 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
             codes.add("NOT_EXECUTABLE")
             continue
         t0 = time.time()
+        produces_file = deliverable != cwd
+        before = _sha256_path(deliverable) if produces_file and deliverable.exists() else None
         try:
             # stdin 必须显式给 DEVNULL：不给就继承调用者的 stdin，而被调度的 CLI 见 stdin
             # 非 tty 会当成"有管道输入"并读到 EOF 为止——调用者不关闭就永远读不到。实测
@@ -732,7 +740,11 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
             proc = subprocess.run([exe, *argv[1:]], cwd=str(cwd), capture_output=True, text=True,
                                   stdin=subprocess.DEVNULL, timeout=int(prof.get("timeout_s", 900)))
             ended = _now_iso()
-            if proc.returncode == 0 and deliverable != cwd:
+            # 交付物须由本次调用写出或改写：沿用上一轮的既有文件而退出码 0，会被盖上本 profile 的
+            # 承载章并判成功——外置 Reviewer 什么都没做也能记成独立复核。比对须在盖章之前。
+            unchanged = produces_file and proc.returncode == 0 and (
+                not deliverable.exists() or _sha256_path(deliverable) == before)
+            if proc.returncode == 0 and produces_file and not unchanged:
                 # 判据要求的承载四字段只有盖章能提供，而盖章此前排在判据之后——被调度的
                 # 模型要么猜（方案 §3.3 明说不该让它猜），要么照抄上一轮的旧承载字段才能
                 # 过判据；实测第 5 轮 Reviewer 按要求不写这些字段，反被判 NO_VALID_OUTPUT
@@ -741,7 +753,8 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
                 stamp_carrier(deliverable, prof["name"],
                               " ".join(prof.get("argv") or []) or prof["name"],
                               "", audit=(role == "Reviewer"), receipt_id="")
-            reasons = _deliverable_issues(deliverable, role)
+            reasons = (["交付物未被本次调用写出或改写（沿用既有文件不构成本轮产出）"] if unchanged
+                       else _deliverable_issues(deliverable, role))
             ok = proc.returncode == 0 and not reasons
             code = "" if ok else ("NO_VALID_OUTPUT" if proc.returncode == 0 else "CHAIN_EXHAUSTED")
             trace({"role": role, "profile": prof["name"], "argv": argv, "cwd": str(cwd), "executed": True,
@@ -827,11 +840,15 @@ def run_assignment(cwd: Path, assignment_id: str, prompt: str, ack: str | None, 
         if not target_file.exists():
             print(json.dumps({"error": f"target_path 不存在: {target_file}"}, ensure_ascii=False))
             return EXIT_USAGE
-        actual = _sha256_file(target_file)
+        actual = _receipt_module().target_sha256(target_file)
         if actual != a["target_sha256"]:
             print(json.dumps({"error": "target_sha256 与当前对象不符", "declared": a["target_sha256"], "actual": actual,
                               "rule": "succeeded 失效回 pending（方案 §2.5）；请更新指纹后重跑"}, ensure_ascii=False))
             return EXIT_USAGE
+    if not a.get("deliverable"):
+        print(json.dumps({"error": f"指派 {assignment_id} 只有 deliverable_ref（代码型），无交付物文件可判",
+                          "hint": "代码型角色用 run --role Builder --verify <校验profile> 直跑"}, ensure_ascii=False))
+        return EXIT_USAGE
     deliverable = (archive.parent / a["deliverable"]).resolve()
 
     chain = resolve_profile_chain(a["command_profile"], config)
@@ -969,6 +986,7 @@ def run_direct(cwd: Path, role: str, prompt: str, out: Path | None, owner: str,
 
     tier, archive = find_archive_any(cwd)
     archived = False
+    archive_error = None
     if archive is not None:
         key = str(deliverable) if deliverable is not None else f"{role}:{verify or ''}:{target_file}"
         aid = f"{role}-{_sha256_str(key)[:8]}"  # 同一交付物重跑复用同一 ID，禁重编号
@@ -997,12 +1015,12 @@ def run_direct(cwd: Path, role: str, prompt: str, out: Path | None, owner: str,
                 if target_file is not None:
                     # 依据指纹：依据变了，既有 succeeded 即失效（resolve 会标 stale）
                     rec["target_path"] = os.path.relpath(target_file, archive.parent)
-                    rec["target_sha256"] = _sha256_file(target_file)
+                    rec["target_sha256"] = _receipt_module().target_sha256(target_file)
                 if target_file is not None:
                     # 依据指纹随每次执行留痕：assignment 上的 target_* 只反映最新一跳，
                     # 「这版方案当初基于哪份调研」必须在执行记录里查得到。
                     for at in attempts:
-                        at.setdefault("target_sha256", _sha256_file(target_file))
+                        at.setdefault("target_sha256", _receipt_module().target_sha256(target_file))
                 rec["attempts"].extend(attempts)
                 if succeeded and deliverable is not None:
                     rec["deliverable_sha256"] = _sha256_path(deliverable)
@@ -1011,13 +1029,15 @@ def run_direct(cwd: Path, role: str, prompt: str, out: Path | None, owner: str,
                 archived = True
             finally:
                 store.release()
+        else:
+            archive_error = f"档案被有效锁占用，本次指派未落笔: {store.lock_dir}"
 
     receipt = {"outcome": verdict["outcome"], "role": role, "gate": gate, "mode": f"{mode}（{mode_why}）",
                "carrier": carrier, "carrier_ref": carrier_ref, "carrier_stamped": stamped,
                "receipt_id": receipt.get("receipt_id") or None, "receipt_signed": receipt.get("mac", "") not in ("", "unsigned"),
                "deliverable": str(deliverable) if deliverable else None,
                "target": str(target_file) if target_file else None,
-               "archived": archived, "tier": tier, "failure_code": failure or None,
+               "archived": archived, "archive_error": archive_error, "tier": tier, "failure_code": failure or None,
                "fallback_reason": fallback_reason or None, "reason": verdict.get("reason", ""),
                "needs_external_review": verdict.get("needs_external_review", False), "attempts": len(attempts)}
     if verify_result is not None:
@@ -1222,7 +1242,7 @@ def cmd_resolve(cwd: Path) -> int:
             if a.get("target_path"):
                 tp = (archive.parent / a["target_path"]).resolve()
                 row["target"] = a["target_path"]
-                row["stale"] = (not tp.exists()) or _sha256_file(tp) != a.get("target_sha256")
+                row["stale"] = (not tp.exists()) or _receipt_module().target_sha256(tp) != a.get("target_sha256")
             if a.get("verify_profile"):
                 row["verify_profile"] = a["verify_profile"]
             out["assignments"].append(row)

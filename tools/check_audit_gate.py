@@ -641,12 +641,7 @@ def check_target_binding(path: Path) -> list[str]:
 
     此前只在 critical_ack 里用到该字段，从不与实际对象比对——报告可以挂着一份**过期**
     指纹通过门禁，即「复核的是旧版方案，却对新版签了字」（复核 C-02）。
-    受审对象可以是目录（整个控制面/代码工程审计）：目录指纹复用
-    `dispatch_receipt.content_sha256()` 的有序摘要算法，与签发端同一函数重算，
-    两端对称——此前目录型受审对象一律判「不存在」，指纹绑定对这一类审计整体失效
-    （2026-09-20 根系统审计 M-3）。目录指纹只统计 git 追踪文件，与
-    `check_distribution.py` 的分发口径一致；`.git/`、实例面 `data/` 与本地缓存
-    不计入，否则同一控制面在两台机器上给出两个指纹。
+    受审对象可以是目录（整个控制面/代码工程审计），指纹算法见 target_fingerprint。
     """
     fm = parse_front_matter(path.read_text(encoding="utf-8", errors="replace"))
     declared, rel = fm.get("target_sha256"), fm.get("target_path")
@@ -663,41 +658,8 @@ def check_target_binding(path: Path) -> list[str]:
 
 
 def target_fingerprint(target: Path) -> str:
-    """受审对象指纹：文件取字节 SHA-256；目录取 git 追踪文件的有序摘要。
-
-    只读核验、原子写入与 `--fingerprint` 命令共用这一份实现——此前原子写入只认文件，
-    目录型受审对象的报告在 update_audit_state.py / --commit 上永远写不进去。"""
-    if target.is_file():
-        return hashlib.sha256(target.read_bytes()).hexdigest()
-    root = _find_repo_root(target)
-    tracked = _git_tracked(root) if root else None
-    entries = sorted((str(p.relative_to(target)), dispatch_receipt._sha256_file(p))
-                     for p in target.rglob("*")
-                     if p.is_file() and (tracked is None or str(p.relative_to(root)) in tracked))
-    return hashlib.sha256(json.dumps(entries, ensure_ascii=False).encode("utf-8")).hexdigest()
-
-
-def _find_repo_root(target: Path) -> Path | None:
-    """向上找包含 .git 的目录；找不到返回 None（非 git 目录按全文件计）。"""
-    current = target.resolve()
-    for _ in range(8):
-        if (current / ".git").exists():
-            return current
-        if current.parent == current:
-            return None
-        current = current.parent
-    return None
-
-
-def _git_tracked(repo_root: Path) -> set[str] | None:
-    """git 追踪文件相对 repo_root 的集合；git 不可用时返回 None（降级为全文件）。"""
-    try:
-        proc = subprocess.run(["git", "ls-files"], cwd=repo_root, capture_output=True, text=True)
-    except OSError:
-        return None
-    if proc.returncode != 0:
-        return None
-    return set(proc.stdout.split())
+    """受审对象指纹：唯一实现在 dispatch_receipt.target_sha256，签发端、调度端与本门禁同一算法。"""
+    return dispatch_receipt.target_sha256(target)
 
 
 def check_report_file(path: Path, receipt_check: bool = True) -> list[str]:

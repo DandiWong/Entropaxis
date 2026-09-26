@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -119,7 +120,7 @@ def check_current_state_bloat(root: Path) -> list[str]:
                 lines = cs.read_text(encoding="utf-8").splitlines()
                 if len(lines) > MAX_CURRENT_STATE_LINES:
                     issues.append(
-                        f"[决策底册堆积] {cs.relative_to(root)} 共 {len(lines)} 行（建议 $\\le {MAX_CURRENT_STATE_LINES}$ 行）。请检查是否有未归档历史结论，新结论应直接覆盖旧结论。"
+                        f"[决策底册堆积] {cs.relative_to(root)} 共 {len(lines)} 行（建议 ≤ {MAX_CURRENT_STATE_LINES} 行）。请检查是否有未归档历史结论，新结论应直接覆盖旧结论。"
                     )
             except Exception:
                 pass
@@ -467,7 +468,19 @@ def _is_first_party(path: Path, root: Path) -> bool:
     第三方嵌套仓库——后者有自己的内容契约，《01_根系统治理》归属表已声明「第三方或
     上游包约束归其自带的 AGENTS.md」，不得按本工作区规范去改写。
     """
-    return not any(ex in str(path) for ex in EXCLUDE_PATTERNS) and not _is_nested_git_repo_path(path, root)
+    return not _excluded_by_name(path, root, EXCLUDE_PATTERNS) and not _is_nested_git_repo_path(path, root)
+
+
+def _excluded_by_name(path: Path, root: Path, patterns: tuple[str, ...]) -> bool:
+    """按工作区相对路径的各级目录名匹配排除模式。
+
+    此前对绝对路径做子串匹配：工作区本身位于含 `Archive`、`skills` 等字样的路径下时，
+    全部内容被排除，体检"全绿"却什么都没查。"""
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        parts = path.parts
+    return any(ex in part for part in parts for ex in patterns)
 
 
 def check_claude_md_thin_shell(root: Path) -> list[str]:
@@ -476,8 +489,7 @@ def check_claude_md_thin_shell(root: Path) -> list[str]:
     嵌套独立 git 仓库（见 `_is_nested_git_repo_path`）视为上游内容，不纳入检查。"""
     issues = []
     for cm in root.glob("**/CLAUDE.md"):
-        cm_str = str(cm)
-        if any(ex in cm_str for ex in ("Archive", "repoes", "node_modules")):
+        if _excluded_by_name(cm, root, ("Archive", "repoes", "node_modules")):
             continue
         if _is_nested_git_repo_path(cm, root):
             continue
@@ -505,8 +517,7 @@ def fix_claude_md_thin_shell(root: Path) -> list[str]:
     已合规文件不动。"""
     fixed = []
     for cm in root.glob("**/CLAUDE.md"):
-        cm_str = str(cm)
-        if any(ex in cm_str for ex in ("Archive", "repoes", "node_modules")):
+        if _excluded_by_name(cm, root, ("Archive", "repoes", "node_modules")):
             continue
         if _is_nested_git_repo_path(cm, root):
             continue
@@ -600,9 +611,7 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
     binding_targets += _glob(system / "templates", "**/*")
     # 词表外置后 lint 自身不再持有任何禁词，此前的自我豁免随之取消：
     # 检查器与被检查者同一把尺子，控制面里再出现实体词就该被自己抓出来。
-    operational_targets: list[Path] = [
-        p for p in _glob(system / "tools", "*.py") if p.name != "lint_workspace.py"
-    ]
+    operational_targets: list[Path] = _glob(system / "tools", "*.py")
     operational_targets += _glob(system / "skills", "*/SKILL.md")
     operational_targets += _glob(system / "tests", "*.py")
     binding_targets += operational_targets
@@ -618,6 +627,8 @@ def check_rules_zero_system_binding(root: Path) -> list[str]:
                     f"[规则系统绑定] {rf.relative_to(root)} 含禁用关键词「{keyword}」；应为零系统绑定。"
                 )
     for rf in operational_targets:
+        if rf.name == "lint_workspace.py":
+            continue  # 本文件定义端点检测模式本身，只豁免这一项；实体词检查照常覆盖
         try:
             content = rf.read_text(encoding="utf-8")
         except Exception:
@@ -1121,13 +1132,15 @@ def check_routing_integrity(root: Path) -> list[str]:
                 "需人工登记项目归属或补充排除规则（不得由 Agent 自行判断归属）。"
             )
 
-    # 3. 检查事务胶囊目录命名结构（YYYYMMDD_主题）
-    capsule_pattern = re.compile(r"^\d{8}_.+$")
+    # 3. 事务胶囊目录的日期须为有效日历日期（《文件交付》2.1）。glob 已限定 8 位数字前缀，
+    # 此前再用 ^\d{8}_ 复核必然通过，这一项从未报出过任何问题。
     for d in root.glob("**/20[2-3][0-9][0-1][0-9][0-3][0-9]_*"):
         if not d.is_dir() or not _is_first_party(d, root):
             continue
-        if not capsule_pattern.match(d.name):
-            issues.append(f"[胶囊命名异常] 事务胶囊目录 {d.relative_to(root)} 不符合 YYYYMMDD_主题 规范。")
+        try:
+            datetime.strptime(d.name[:8], "%Y%m%d")
+        except ValueError:
+            issues.append(f"[胶囊命名异常] 事务胶囊目录 {d.relative_to(root)} 的日期 {d.name[:8]} 不是有效日期。")
     for agents_doc in root.rglob("AGENTS.md"):
         if agents_doc == root / "AGENTS.md" or not _is_first_party(agents_doc, root):
             continue
