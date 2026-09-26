@@ -48,7 +48,7 @@ class DispatchReceiptTests(TestCase):
 
     def test_production_paths_live_outside_any_capsule(self) -> None:
         """信任根必须在被调度角色的 --cwd 够不着的地方——对生产常量断言，不是测试替身。"""
-        real_dir, real_key = self._old
+        real_dir, real_key = rc.DEFAULT_RECEIPT_DIR, self._old[1]
         data = SYSTEM_ROOT / "data"
         for p in (real_dir, real_key):
             self.assertTrue(str(p).startswith(str(data)), f"{p} 应在 .entropaxis/data/ 下")

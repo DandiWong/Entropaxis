@@ -45,7 +45,9 @@ except ImportError:
     import paths  # type: ignore
 
 SYSTEM_ROOT = paths.SYSTEM_DIR
-RECEIPT_DIR = SYSTEM_ROOT / "data" / "receipts"
+# 环境变量覆盖仅供测试隔离：单测跑一次就往真实回执库灌十几条，会淹没真实调度证据
+DEFAULT_RECEIPT_DIR = SYSTEM_ROOT / "data" / "receipts"
+RECEIPT_DIR = Path(os.environ.get("ENTROPAXIS_RECEIPT_DIR") or DEFAULT_RECEIPT_DIR)
 KEY_FILE = SYSTEM_ROOT / "data" / "credentials" / "dispatch_receipt.key"
 UNSIGNED = "unsigned"
 
