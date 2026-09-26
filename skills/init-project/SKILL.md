@@ -3,7 +3,7 @@ name: init-project
 description: "v1.2.0. 通过简短访谈安全初始化时间线驱动的通用业务/综合项目（4 域 + 2 契约 + RawInput + Archive）；需要代码工程时，改在 03_工程研发/<app>/ 以独立软件应用脚手架初始化 PRODUCT、tasks、src、test 与 docs。用户要求新建、初始化或 init 项目/应用工作区时使用；拒绝覆盖已有目录。"
 metadata:
   scope: control-plane
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # 初始化项目

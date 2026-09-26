@@ -874,6 +874,73 @@ def check_skill_system_independence(root: Path) -> list[str]:
     return issues
 
 
+_DESC_VERSION = re.compile(r'^description:\s*["\']?v(\d+\.\d+\.\d+)\.', re.MULTILINE)
+_META_VERSION = re.compile(r'^\s+version:\s*["\']?(\d+\.\d+\.\d+)', re.MULTILINE)
+_CHANGELOG_VERSION = re.compile(r"^##\s*\[?(\d+\.\d+\.\d+)\]?", re.MULTILINE)
+
+
+def check_skill_metadata(root: Path) -> list[str]:
+    """随分发的 Skill 须有 CHANGELOG，且 metadata.version、description 版本前缀、
+    CHANGELOG 最新版本三处一致（《技能设计》2.2 CHANGELOG 必选）。
+
+    此前只靠人盘点：artifact-audit / self-check 缺 CHANGELOG、init-project 两处版本号
+    不一致，体检全绿却无人发现。私有 Skill 不随分发，由其自身维护，不在射程内。"""
+    system = root / paths.SYSTEM_DIRNAME
+    skills = system / "skills"
+    if not skills.is_dir():
+        return []
+    tracked = _tracked_files(system)
+    issues = []
+    for skill_file in sorted(skills.glob("*/SKILL.md")):
+        if tracked is not None and skill_file not in tracked:
+            continue
+        rel = skill_file.parent.relative_to(root)
+        text = skill_file.read_text(encoding="utf-8")
+        front = text.split("\n---", 1)[0] if text.startswith("---") else ""
+        meta = _META_VERSION.search(front)
+        if not meta:
+            issues.append(f"[Skill 版本缺失] {rel}/SKILL.md 未声明 metadata.version。")
+            continue
+        version = meta.group(1)
+        desc = _DESC_VERSION.search(front)
+        if desc and desc.group(1) != version:
+            issues.append(f"[Skill 版本不一致] {rel} description 写 v{desc.group(1)}，metadata.version 为 {version}。")
+        changelog = skill_file.parent / "CHANGELOG.md"
+        if not changelog.is_file():
+            issues.append(f"[Skill CHANGELOG 缺失] {rel}/CHANGELOG.md 不存在（《技能设计》2.2 必选）。")
+            continue
+        latest = _CHANGELOG_VERSION.search(changelog.read_text(encoding="utf-8"))
+        if not latest or latest.group(1) != version:
+            found = latest.group(1) if latest else "无"
+            issues.append(f"[Skill 版本不一致] {rel} CHANGELOG 最新版本为 {found}，metadata.version 为 {version}。")
+    return issues
+
+
+def check_tool_routing(root: Path) -> list[str]:
+    """每个 tools/*.py 至少被一处规则、入口、随分发 Skill、其他工具或 CI 工作流引用。
+
+    无人引用的工具是「有执行体、无路由」：Agent 不知道它存在，仍会手写它要消除的动作
+    （record_iteration / update_audit_state 曾各自闲置）。"""
+    system = root / paths.SYSTEM_DIRNAME
+    tools = system / "tools"
+    if not tools.is_dir():
+        return []
+    tracked = _tracked_files(system)
+    sources: list[Path] = [*system.glob("rules/*.md"), *system.glob("entrypoints/*.md"),
+                           *system.glob(".github/workflows/*.yml"), *tools.glob("*.py")]
+    sources += [p for p in system.glob("skills/*/**/*") if p.is_file() and p.suffix in (".md", ".py")
+                and (tracked is None or p in tracked)]
+    texts = {p: p.read_text(encoding="utf-8", errors="replace") for p in sources}
+    issues = []
+    for tool in sorted(tools.glob("*.py")):
+        if tool.stem in ("paths", "__init__"):
+            continue
+        if not any(tool.stem in text for path, text in texts.items() if path != tool):
+            issues.append(f"[工具无路由] tools/{tool.name} 未被任何规则、入口、Skill 或其他工具引用；"
+                          "在调用它的规则或 Skill 写明命令，确已无用则登记退役候选。")
+    return issues
+
+
 def check_system_tools_compile(root: Path) -> list[str]:
     """编译 .entropaxis/tools 下脚本，阻止控制面工具语法损坏。"""
     tools = root / paths.SYSTEM_DIRNAME / "tools"
@@ -1133,6 +1200,8 @@ def main() -> int:
         ("23. 交付物中文主命名检查", check_deliverable_naming, False),
         ("24. 语法税与 Token 经济性预算检查", check_syntax_tax_budget, True),
         ("25. 场景级联 Token 预算检查", check_scenario_cascade_budget, False),
+        ("26. Skill 版本与 CHANGELOG 一致性检查", check_skill_metadata, True),
+        ("27. 工具路由存在性检查", check_tool_routing, False),
     ]
 
     all_issues = []
