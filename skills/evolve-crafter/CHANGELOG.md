@@ -5,6 +5,13 @@ All notable changes to the `tool-crafter` skill will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-09-27
+
+### 变更
+- 由 `tool-crafter` 更名为 `evolve-crafter`，范围从"机制转工具"扩大到控制面规则、工具、Skill 的全部设计级增删改查。
+- 新增"读现场 → 人话问答 → 判定单确认"前置流程，按判定结果分派 Rule / Tool / Skill / 删除四个落地分支。
+- Skill 创建并入本 Skill，不再只有规则里的触发词、没有执行体。
+
 ## [1.0.0] - 2026-09-03
 
 ### 新增
