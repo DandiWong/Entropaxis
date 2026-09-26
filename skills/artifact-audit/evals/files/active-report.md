@@ -1,25 +1,48 @@
 ---
-audit_event_id: "access-design-security"
-target: "active-artifact.md"
-audit_objective: "Verify tenant isolation, session revocation, and attributable audit records"
-decision: "rejected"
-review_round: 1
-current_snapshot: "sha256:previous-snapshot"
-previous_snapshot: null
-finalized_at: null
+type: Audit
+topic: 访问设计审计
+date: 2026-09-20
+author: Reviewer
+status: active
+schema_version: 3
+reviewer_mode: session
+reviewer_ref: session
+fallback_reason: not_configured
+target_path: active-artifact.md
+target_sha256: deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef
 ---
 
-# Access design audit
+# 访问设计审计报告
 
-## Current findings
+```audit-state
+{
+  "issues": [
+    {"id": "A-001", "level": "Major", "status": "open"},
+    {"id": "A-002", "level": "Major", "status": "open"}
+  ],
+  "critical_acks": []
+}
+```
 
-| ID | Severity | Status | Evidence | Closure condition |
-|---|---|---|---|---|
-| A-001 | blocking | open | Export reads by document ID without tenant scope | Export requires authenticated tenant scope |
-| A-002 | blocking | open | Active sessions remain valid after revocation | Revocation invalidates active sessions before the next request |
+## 当前结论
 
-## Round history
+- **结论**：阻断退回
+- **审计轮次**：第 1 轮
 
-### Round 1
+## 问题说明
 
-Decision: rejected.
+### A-001
+
+- **现象与证据**：导出按文档 ID 读取，未带租户范围。
+- **整改建议与关闭条件**：导出须使用认证会话中的租户范围。
+
+### A-002
+
+- **现象与证据**：会话吊销后仍然有效。
+- **整改建议与关闭条件**：吊销后在下一次请求前失效。
+
+## 轮次记录
+
+### 第 1 轮 · 2026-09-20
+
+- **结论**：阻断退回

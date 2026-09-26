@@ -855,3 +855,28 @@ class TargetBindingTests(unittest.TestCase):
                 mock.patch.object(sys, "stderr", io.StringIO()) as err:
             self.assertEqual(cag.main(), 1)
         self.assertIn("过期", err.getvalue())
+
+    def _dir_report_text(self, sha: str) -> str:
+        return ("---\ntype: Audit\ntopic: t\ndate: 2026-09-27\nauthor: Reviewer\nstatus: active\n"
+                "schema_version: 3\nreviewer_mode: session\nreviewer_ref: x\nfallback_reason: not_configured\n"
+                f"target_path: pkg\ntarget_sha256: {sha}\n---\n\n"
+                '# 审计\n\n```audit-state\n{"issues": [{"id": "M-1", "level": "Major", "status": "open"}], '
+                '"critical_acks": []}\n```\n')
+
+    def test_directory_target_atomic_commit(self) -> None:
+        """原子写入与只读核验同一指纹口径：目录型受审对象此前在 --commit 上一律判「不存在」。"""
+        pkg = self.dir / "pkg"
+        pkg.mkdir()
+        (pkg / "a.md").write_text("a\n", encoding="utf-8")
+        sha = cag.target_fingerprint(pkg)
+        report = self.dir / "05_审计报告.md"
+        self.assertEqual(cag.check_candidate_commit(self._dir_report_text(sha), report), [])
+        (pkg / "a.md").write_text("a2\n", encoding="utf-8")
+        issues = cag.check_candidate_commit(self._dir_report_text(sha), report)
+        self.assertTrue(any("不一致" in i for i in issues), issues)
+
+    def test_fingerprint_cli(self) -> None:
+        with mock.patch.object(sys, "argv", ["check_audit_gate.py", "--fingerprint", str(self.target)]), \
+                mock.patch.object(sys, "stdout", io.StringIO()) as out:
+            self.assertEqual(cag.main(), 0)
+        self.assertEqual(out.getvalue().strip(), self._sha())

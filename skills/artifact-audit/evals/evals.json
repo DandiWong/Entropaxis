@@ -4,31 +4,31 @@
     {
       "id": 1,
       "prompt": "复审 active-artifact.md，审计目标保持不变。active-report.md 是该事件仍在进行中的唯一审计报告。不要修改输入文件；把更新后的报告保存到 outputs/active-report.md。",
-      "expected_output": "沿用同一审计事件并把报告推进到第 2 轮；以当前工件证据关闭 A-001、A-002，新增稳定 ID A-003 指出审计记录缺少 actor，结论不得为 approved。",
+      "expected_output": "沿用同一审计事件并在轮次记录追加第 2 轮；以当前工件证据把 A-001、A-002 置为 closed，新增稳定 ID A-003 指出审计记录缺少 actor，结论不得为通过。",
       "files": [
         "evals/files/active-artifact.md",
         "evals/files/active-report.md"
       ],
       "expectations": [
         "输出只包含一份更新后的审计报告，不创建 v2 或新的审计事件",
-        "review_round 更新为 2，并记录真实 SHA-256 快照而非占位值",
-        "A-001 与 A-002 保留原 ID 且标记为 closed，证据来自当前工件",
-        "新增 A-003 指出 actor ID 缺失，最终结论不是 approved"
+        "target_sha256 更新为当前工件的真实指纹，轮次记录追加第 2 轮",
+        "audit-state 中 A-001 与 A-002 保留原 ID 且为 closed，证据来自当前工件",
+        "新增 A-003 指出 actor ID 缺失，最终结论不是通过"
       ]
     },
     {
       "id": 2,
       "prompt": "approved-report.md 已终审通过并冻结。现在用同一容量门禁审计改过的 approved-artifact.md。不要改写输入报告；如需落盘，把新审计事件报告保存到 outputs/new-report.md。",
-      "expected_output": "保持已通过报告不变，为变更后的工件建立新审计事件并引用前序报告；指出 1,000 条批量上限缺乏测试证据，结论不得为 approved。",
+      "expected_output": "保持已通过报告不变，为变更后的工件建立新审计事件并引用前序报告；指出 1,000 条批量上限缺乏测试证据，结论不得为通过。",
       "files": [
         "evals/files/approved-artifact.md",
         "evals/files/approved-report.md"
       ],
       "expectations": [
-        "不改写已 approved 的输入报告",
+        "不改写已终审通过的输入报告",
         "创建新的审计事件报告并引用 approved-report.md",
-        "新报告 review_round 为 1 且包含当前工件的真实 SHA-256",
-        "识别 1,000 条上限缺乏负载证据，最终结论不是 approved"
+        "新报告轮次记录为第 1 轮，且含当前工件的真实 target_sha256",
+        "识别 1,000 条上限缺乏负载证据，最终结论不是通过"
       ]
     },
     {

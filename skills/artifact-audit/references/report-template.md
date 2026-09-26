@@ -1,61 +1,57 @@
 ---
-audit_event_id: "<stable-event-id>"
-target: "<artifact path or scope>"
-audit_objective: "<objective and acceptance gates>"
-decision: "<rejected|conditional-approval|approved>"
-review_round: 1
-current_snapshot: "sha256:<snapshot-id>"
-previous_snapshot: null
-finalized_at: null
+type: Audit
+topic: <中文主题>
+date: <YYYY-MM-DD>
+author: Reviewer
+status: active
+schema_version: 3
+reviewer_mode: <external|session>
+reviewer_ref: <承载命令原文；会话内承载写 session>
+fallback_reason: <仅 reviewer_mode: session 时填：not_configured|not_executable|launch_failed|timeout|no_valid_output>
+target_path: <受审对象相对本报告的路径，文件或目录>
+target_sha256: <check_audit_gate.py --fingerprint 的输出>
 ---
 
 # <工件名称>审计报告
 
+```audit-state
+{
+  "issues": [],
+  "critical_acks": []
+}
+```
+
 ## 当前结论
 
-- **结论**：<decision>
+- **结论**：<通过 | 附条件通过 | 阻断退回>
 - **审计轮次**：第 <N> 轮
-- **当前快照**：`<snapshot-id>`
-- **阻断问题**：<数量与 ID；没有则写“无”>
-- **终审条件**：<尚未满足的门禁；已通过则写“全部满足”>
+- **受审指纹**：`<target_sha256>`
+- **阻断问题**：<Critical 的数量与 ID；没有则写"无">
+- **终审条件**：<尚未满足的门禁；已通过则写"全部满足">
 
 ## 审计边界
 
 - **受审目标**：<路径或范围>
 - **审计目标**：<质量、安全、合规或验收门禁>
-- **不在范围**：<明确排除项；没有则写“无”>
-- **前序事件**：<前序报告链接；没有则写“无”>
+- **不在范围**：<明确排除项；没有则写"无">
+- **前序事件**：<前序报告链接；没有则写"无">
 
-## 当前快照
+## 问题说明
 
-| 路径 | SHA-256 / 可验证版本 |
-|---|---|
-| `<relative-path>` | `<fingerprint>` |
+机器状态（ID、级别、状态）只以上方 `audit-state` 为准；本节只写人读的说明，不重复状态字段。
 
-## 问题台账
+### <问题 ID>
 
-| ID | 严重度 | 状态 | 首现轮次 | 当前证据 | 风险 | 关闭条件 |
-|---|---|---|---:|---|---|---|
-| A-001 | blocking / major / minor | open / closed / pending-confirmation | 1 | `<path:line 或其他证据>` | <风险> | <可验证条件> |
+- **现象与证据**：<path:line 或其他可定位证据>
+- **根因**：<查证的原因；未查明写"原因未查明">
+- **风险**：<影响>
+- **整改建议与关闭条件**：<可验证的条件>
 
 ## 轮次记录
 
 ### 第 1 轮 · <YYYY-MM-DD>
 
-#### 受审快照
-
-- `current_snapshot`: `<snapshot-id>`
-- `previous_snapshot`: `null`
-
-#### 前序问题复核
-
-首次审计，无前序问题。
-
-#### 新增问题
-
-- <问题 ID、证据与关闭条件；没有则写“无”>
-
-#### 结论
-
-- **决定**：<decision>
-- **依据**：<对应审计门禁和问题证据>
+- **受审指纹**：`<target_sha256>`
+- **前序问题复核**：首次审计，无前序问题。
+- **新增问题**：<问题 ID；没有则写"无">
+- **结论**：<通过 | 附条件通过 | 阻断退回>，依据：<对应门禁和问题证据>

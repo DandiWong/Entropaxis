@@ -1,22 +1,31 @@
 ---
-audit_event_id: "batch-export-capacity-2026-01"
-target: "batch-export-design.md"
-audit_objective: "Verify the batch limit stays within the tested operating envelope"
-decision: "approved"
-review_round: 2
-current_snapshot: "sha256:approved-snapshot"
-previous_snapshot: "sha256:initial-snapshot"
-finalized_at: "2026-01-15T10:00:00Z"
+type: Audit
+topic: 批量导出容量审计
+date: 2026-01-15
+author: Reviewer
+status: completed
+schema_version: 3
+reviewer_mode: external
+reviewer_ref: some-cli --model x
+target_path: batch-export-design.md
+target_sha256: cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe
 ---
 
-# Batch export design audit
+# 批量导出容量审计报告
 
-## Current conclusion
+```audit-state
+{
+  "issues": [],
+  "critical_acks": []
+}
+```
 
-The 100-record limit is supported by load-test evidence. All gates passed.
+## 当前结论
 
-## Round history
+- **结论**：通过。100 条上限有负载测试证据，全部门禁满足；本报告已冻结。
 
-### Round 2
+## 轮次记录
 
-Decision: approved. This report is frozen.
+### 第 2 轮 · 2026-01-15
+
+- **结论**：通过

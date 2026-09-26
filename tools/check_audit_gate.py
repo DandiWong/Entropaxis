@@ -655,19 +655,26 @@ def check_target_binding(path: Path) -> list[str]:
     target = (path.parent / str(rel)).resolve()
     if not (target.is_file() or target.is_dir()):
         return [f"报告声明的受审对象不存在: {rel}"]
-    if target.is_file():
-        actual = hashlib.sha256(target.read_bytes()).hexdigest()
-    else:
-        root = _find_repo_root(target)
-        tracked = _git_tracked(root) if root else None
-        entries = sorted((str(p.relative_to(target)), dispatch_receipt._sha256_file(p))
-                         for p in target.rglob("*")
-                         if p.is_file() and (tracked is None or str(p.relative_to(root)) in tracked))
-        actual = hashlib.sha256(json.dumps(entries, ensure_ascii=False).encode("utf-8")).hexdigest()
+    actual = target_fingerprint(target)
     if actual != str(declared):
         return [f"受审指纹过期：报告声明 {str(declared)[:12]}…，{rel} 实际为 {actual[:12]}…；"
                 "复核结论必须绑定它实际审过的那一版，指纹不符即须重新复核。"]
     return []
+
+
+def target_fingerprint(target: Path) -> str:
+    """受审对象指纹：文件取字节 SHA-256；目录取 git 追踪文件的有序摘要。
+
+    只读核验、原子写入与 `--fingerprint` 命令共用这一份实现——此前原子写入只认文件，
+    目录型受审对象的报告在 update_audit_state.py / --commit 上永远写不进去。"""
+    if target.is_file():
+        return hashlib.sha256(target.read_bytes()).hexdigest()
+    root = _find_repo_root(target)
+    tracked = _git_tracked(root) if root else None
+    entries = sorted((str(p.relative_to(target)), dispatch_receipt._sha256_file(p))
+                     for p in target.rglob("*")
+                     if p.is_file() and (tracked is None or str(p.relative_to(root)) in tracked))
+    return hashlib.sha256(json.dumps(entries, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def _find_repo_root(target: Path) -> Path | None:
@@ -734,11 +741,11 @@ def check_candidate_commit(candidate_text: str, commit_path: Path) -> list[str]:
     workspace_root = _find_workspace_root(commit_path.parent)
     if workspace_root:
         candidates.append(workspace_root / target_path)
-    actual_file = next((p for p in candidates if p.is_file()), None)
-    if actual_file is None:
-        issues.append(f"target_path 指向的受审文件不存在：{target_path}")
+    actual_target = next((p for p in candidates if p.is_file() or p.is_dir()), None)
+    if actual_target is None:
+        issues.append(f"target_path 指向的受审对象不存在：{target_path}")
     else:
-        actual_hash = hashlib.sha256(actual_file.read_bytes()).hexdigest()
+        actual_hash = target_fingerprint(actual_target)
         if actual_hash != target_sha256:
             issues.append(
                 f"target_sha256={target_sha256!r} 与受审文件实测哈希 {actual_hash!r} 不一致；"
@@ -759,7 +766,16 @@ def main() -> int:
     parser.add_argument("path", nargs="?", help="只读模式：待校验的审计报告路径")
     parser.add_argument("--candidate", help="原子模式：候选报告路径（拟写入的关闭后状态）")
     parser.add_argument("--commit", help="原子模式：校验通过后写入的目标路径")
+    parser.add_argument("--fingerprint", metavar="TARGET", help="只输出受审对象（文件或目录）的 target_sha256")
     args = parser.parse_args()
+
+    if args.fingerprint:
+        target = Path(args.fingerprint)
+        if not (target.is_file() or target.is_dir()):
+            print(f"❌ 受审对象不存在: {target}\n👉 修复建议: 核对路径后重试。", file=sys.stderr)
+            return 2
+        print(target_fingerprint(target))
+        return 0
 
     if args.candidate or args.commit:
         if not (args.candidate and args.commit):
