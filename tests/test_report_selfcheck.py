@@ -30,7 +30,7 @@ class AxiomCoverageDriftTests(unittest.TestCase):
     def test_coverage_table_matches_meta_rule_axioms(self):
         """AXIOM_COVERAGE 的条目必须与 00_元规则.md 的九条公理逐条对齐（防真源漂移）。"""
         text = (SYSTEM_ROOT / "rules" / "00_元规则.md").read_text(encoding="utf-8")
-        axioms = re.findall(r"^(\d+)\.\s+\*\*([^(*]+?)\s*\(", text, re.MULTILINE)
+        axioms = re.findall(r"^(\d+)\.\s+\*\*([^*]+?)\*\*", text, re.MULTILINE)
         self.assertEqual(len(axioms), 9, "元规则应恰好九条公理")
         expected = {f"{num}. {name.strip()}" for num, name in axioms}
         self.assertEqual(set(rs.AXIOM_COVERAGE), expected,
