@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 工作区根入口与系统配置初始化工具 (Bootstrap)
-用于一键同步工作区根目录的 AGENTS.md / CLAUDE.md 入口文件，自动检测宿主机安装的应用程序，
+用于一键同步工作区根目录的 AGENTS.md / CLAUDE.md 入口文件，把 .entropaxis/skills 挂进 Agent 的 Skill 发现目录，自动检测宿主机安装的应用程序，
 生成/维护各类文件格式的默认打开器关联配置 (.entropaxis/data/templates/file-opener.json)，并自适应引导环境。
 """
 import os
@@ -170,6 +170,50 @@ def sync_entrypoints(verbose: bool = True) -> bool:
             success = False
 
     return success
+
+# Claude Code 与 Codex 的项目级 Skill 发现目录（相对工作区根）
+SKILL_LINK_DIRS = (".claude/skills", ".agents/skills")
+
+
+def link_skills(verbose: bool = True, *, system_dir: Path | None = None) -> bool:
+    """把 .entropaxis/skills/<name> 以相对软链接挂进各 Agent 的项目级 Skill 目录。
+
+    Skill 靠自身 description 触发的前提是 Agent 能发现它；不挂进发现目录，私有 Skill
+    只能靠控制面路由被找到。用软链接而非复制：Skill 是目录，复制件会与真源漂移。
+    同名真实目录或指向别处的链接一律不动（可能是用户另装的版本）；指向本控制面
+    却已失效的链接（Skill 已退役或改名）顺带清掉。
+    """
+    system_dir = Path(system_dir) if system_dir is not None else paths.SYSTEM_DIR
+    skills = system_dir / "skills"
+    ws_root = system_dir.parent
+    names = sorted(p.parent.name for p in skills.glob("*/SKILL.md"))
+    marker = f"{system_dir.name}/skills/"
+    ok = True
+    for rel in SKILL_LINK_DIRS:
+        dest_dir = ws_root / rel
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for link in dest_dir.iterdir():
+            if link.is_symlink() and not link.exists() and marker in os.readlink(link):
+                link.unlink()
+                if verbose:
+                    print(f"🧹 已清理失效 Skill 链接: {rel}/{link.name}")
+        for name in names:
+            link = dest_dir / name
+            target = os.path.relpath(skills / name, dest_dir)
+            if link.is_symlink() or link.exists():
+                if verbose and not (link.is_symlink() and os.readlink(link) == target):
+                    print(f"ℹ️ {rel}/{name} 已被其他来源占用，保留不动")
+                continue
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError as exc:  # Windows 未开开发者模式时无权建软链接
+                if verbose:
+                    print(f"⚠️ 无法创建 Skill 链接 {rel}/{name}: {exc}", file=sys.stderr)
+                ok = False
+    if verbose:
+        print(f"✅ Skill 发现目录就绪: {len(names)} 个 Skill → {'、'.join(SKILL_LINK_DIRS)}")
+    return ok
+
 
 def detect_host_apps() -> set[str]:
     """检测宿主机已安装的应用程序"""
@@ -404,6 +448,7 @@ if __name__ == "__main__":
     print_legacy_layout_hint()
 
     if sync_entrypoints(verbose=verbose):
+        link_skills(verbose=verbose)
         init_file_opener(verbose=verbose, force_rescan=force_rescan_opener)
         render_instance_configs(verbose=verbose)
         stamp_new_instances(verbose=verbose)

@@ -9,7 +9,7 @@ SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from tools.bootstrap import sync_entrypoints, detect_host_apps, init_file_opener
+from tools.bootstrap import sync_entrypoints, detect_host_apps, init_file_opener, link_skills
 
 # ponytail: sync_entrypoints() 的路径由自身 __file__ 派生，无法用 monkeypatch 隔离到临时目录；
 # 直接对真实工作区跑，并用 finally 恢复，覆盖幂等性与漂移自愈两条核心路径。
@@ -34,6 +34,26 @@ class BootstrapSyncTests(TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), source.read_text(encoding="utf-8"))
         finally:
             target.write_text(original, encoding="utf-8")
+
+
+class LinkSkillsTests(TestCase):
+    def test_links_skills_keeps_foreign_and_prunes_dangling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            system = Path(tmp) / ".entropaxis"
+            for name in ("alpha", "beta"):
+                (system / "skills" / name).mkdir(parents=True)
+                (system / "skills" / name / "SKILL.md").write_text("x", encoding="utf-8")
+            claude = Path(tmp) / ".claude" / "skills"
+            (claude / "beta").mkdir(parents=True)  # 用户另装的同名 Skill
+            (claude / "gone").symlink_to("../../.entropaxis/skills/gone")  # 已退役 Skill 的残链
+
+            self.assertTrue(link_skills(verbose=False, system_dir=system))
+            self.assertTrue(link_skills(verbose=False, system_dir=system))  # 幂等
+
+            self.assertTrue((claude / "alpha" / "SKILL.md").is_file())
+            self.assertTrue((Path(tmp) / ".agents" / "skills" / "beta" / "SKILL.md").is_file())
+            self.assertFalse((claude / "beta").is_symlink())
+            self.assertFalse((claude / "gone").is_symlink())
 
 
 

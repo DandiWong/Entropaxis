@@ -74,7 +74,7 @@
    ```bash
    python3 .entropaxis/tools/bootstrap.py
    ```
-   该工具会自动将 `.entropaxis/entrypoints/` 下的 `AGENTS.md` 与 `CLAUDE.md` 物理同步至工作区根目录，建立全局统一的规则控制面（纯文件复制，杜绝云同步网盘跨平台软链冲突）。
+   该工具会自动将 `.entropaxis/entrypoints/` 下的 `AGENTS.md` 与 `CLAUDE.md` 物理同步至工作区根目录，建立全局统一的规则控制面（纯文件复制，杜绝云同步网盘跨平台软链冲突）；并把 `.entropaxis/skills/` 以软链接挂进根目录 `.claude/skills/` 与 `.agents/skills/`，供 Agent 按 Skill 描述自动发现。
 2. **规则与上下文纪律**  
    - 严格遵循根 `AGENTS.md` 常驻层控制面与 `.entropaxis/rules/` 架构规范；
    - 坚持**单一真源（Single Source of Truth）**、**上下文瘦身**与 **YAGNI 原则**，禁止跨层级复制规则或创建冗余文件；
