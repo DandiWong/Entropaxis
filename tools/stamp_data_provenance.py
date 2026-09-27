@@ -49,9 +49,9 @@ KNOWN: dict[str, dict[str, str]] = {
         "managed_by": "bootstrap.py render_instance_configs（仅缺失时渲染）+ setup_agents.py --set-role + 人工",
         "policy": "merge-only",
     },
-    "registry.md": {
-        "source": ".entropaxis/templates/instance/registry.template.md",
-        "managed_by": "init_project.py 立项时追加映射行 + 人工维护排除规则与备注",
+    "registry.yaml": {
+        "source": ".entropaxis/templates/instance/registry.template.yaml",
+        "managed_by": "init_project.py register_project 立项时追加项目 + 人工维护别名、排除规则与备注",
         "policy": "merge-only",
     },
     "tips.md": {

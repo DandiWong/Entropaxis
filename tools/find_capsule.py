@@ -22,9 +22,10 @@ import sys
 from pathlib import Path
 
 try:
-    from . import paths
+    from . import paths, project_registry
 except ImportError:
     import paths
+    import project_registry
 
 CAPSULE_RE = re.compile(r"^\d{8}_")
 
@@ -103,32 +104,9 @@ def search_machine(query: str, scope_root: Path, timeout: int) -> tuple[list[str
 
 
 def load_registry(root: Path) -> list[dict]:
-    """读项目映射表，取「主目录」与「口语别名」两列用于范围收敛与排序加权。
-
-    层级不从主目录路径推断——`父项目` 列才是真源，子项目可嵌套也可平铺。
-    """
-    registry = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.md"
-    if not registry.is_file():
-        return []
-    projects = []
-    table, _, _ = registry.read_text(encoding="utf-8").partition("## 排除规则")
-    for line in table.splitlines():
-        line = line.strip()
-        if not line.startswith("|") or line.startswith("| 项目 ID") or line.startswith("|-"):
-            continue
-        cols = [c.strip() for c in line.split("|")[1:-1]]
-        if len(cols) < 5:
-            continue
-        dirs = re.findall(r"`([^`]+)`", cols[2])
-        if not dirs or "待填写" in cols[0]:
-            continue
-        projects.append({
-            "id": cols[0],
-            "dir": dirs[0].rstrip("/"),
-            "parent": cols[3],
-            "aliases": [a.strip() for a in cols[4].split(",") if a.strip()],
-        })
-    return projects
+    """取项目主目录、父项目与口语别名，用于范围收敛与排序加权。"""
+    return [{"id": p["id"], "dir": p["path"], "parent": p["parent"], "aliases": p["aliases"]}
+            for p in project_registry.load_projects(root)]
 
 
 def resolve_scope(query: str, projects: list[dict]) -> dict | None:

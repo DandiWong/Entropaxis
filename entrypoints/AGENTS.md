@@ -42,6 +42,6 @@
 - Tool 准入判据与接口契约：`.entropaxis/rules/工具设计.md`
 - Skill 设计、元数据与分发包：`.entropaxis/rules/技能设计.md`
 - Spec、任务状态与外部看板：`.entropaxis/rules/看板联动.md`
-- 项目注册表：`.entropaxis/data/templates/registry.md`；角色承载配置：`.entropaxis/data/templates/roles.yaml`
+- 项目注册表：`.entropaxis/data/templates/registry.yaml`；角色承载配置：`.entropaxis/data/templates/roles.yaml`
 
 进入具体项目后，先读最近的 `AGENTS.md`，再按其中路由读取 README、Spec 或操作文档。仅在任务涉及外部看板、联网、发布或特定工具时加载对应规则或 Skill。

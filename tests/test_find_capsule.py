@@ -10,20 +10,12 @@ sys.path.insert(0, str(SYSTEM_ROOT / "tools"))
 import find_capsule as FC  # noqa: E402
 
 REGISTRY = """\
-# 工作区项目注册表
-
-## 项目映射表
-
-| 项目 ID | 名称 | 主目录 | 父项目 | 口语别名 | 外部看板映射 (Key-Value) | 备注 |
-|---|---|---|---|---|---|---|
-| （待填写） | （项目全称） | （主目录路径） | | | 未关联 | |
-| alpha | 甲项目 | `A项目/` | | 甲, Alpha | 未关联 | |
-| alpha-sub | 甲子项目 | `A项目/子线/` | alpha | 子线 | 未关联 | |
-| beta | 乙项目 | `B项目/` | | 乙 | 未关联 | |
-
-## 排除规则
-
-- `Archive/`
+exclude: [Archive/]
+projects:
+  - {id: alpha, name: 甲项目, path: A项目/, aliases: [甲, Alpha]}
+  - {id: alpha-sub, name: 甲子项目, path: A项目/子线/, parent: alpha, aliases: [子线]}
+  - {id: beta, name: 乙项目, path: B项目/, aliases: [乙]}
+  - {name: 缺主键的残项}
 """
 
 
@@ -33,11 +25,11 @@ class RegistryParsingTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         registry = self.root / ".entropaxis" / "data" / "templates"
         registry.mkdir(parents=True)
-        (registry / "registry.md").write_text(REGISTRY, encoding="utf-8")
+        (registry / "registry.yaml").write_text(REGISTRY, encoding="utf-8")
         self.addCleanup(self.tmp.cleanup)
 
     def test_placeholder_row_is_skipped(self):
-        """占位行不能被当成真项目，否则空表工作区会解析出一个假项目。"""
+        """缺 id/path 的残项不能被当成真项目。"""
         ids = [p["id"] for p in FC.load_registry(self.root)]
         self.assertEqual(ids, ["alpha", "alpha-sub", "beta"])
 

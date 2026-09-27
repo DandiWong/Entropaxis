@@ -453,7 +453,7 @@ if __name__ == "__main__":
         render_instance_configs(verbose=verbose)
         stamp_new_instances(verbose=verbose)
         print("🎉 工作区初始化与自愈完成（入口已同步，实例配置就绪；角色默认内置 Subagent 兜底）。")
-        print("💡 进阶自定义：说「自定义角色」绑定多模型（roles.yaml） / 「配置打开方式」 / registry.md 登记别名 / workspace-config.yaml 组织口径")
+        print("💡 进阶自定义：说「自定义角色」绑定多模型（roles.yaml） / 「配置打开方式」 / registry.yaml 登记别名 / workspace-config.yaml 组织口径")
         if sys.platform == "win32" and verbose:
             print_windows_hints()
     else:

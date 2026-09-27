@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """按自然语言或别名精准解析项目目录与代码真源，降低大模型定位时的上下文 Token 开销。
 
-纯标准库实现，零外部依赖。
+注册表读取经 project_registry（PyYAML）。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
 try:
-    from . import paths
+    from . import paths, project_registry
 except ImportError:
     import paths
+    import project_registry
 
 
 class ResolveError(Exception):
@@ -23,64 +23,23 @@ class ResolveError(Exception):
 
 
 def load_registry_projects(workspace_root: Path | None = None) -> list[dict]:
-    """读取工作区注册表，返回结构化项目列表。"""
+    """读取工作区注册表，返回结构化项目列表（code_source 取首个代码真源，相对工作区根）。"""
     root = workspace_root or paths.WORKSPACE_ROOT
-    registry_file = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.md"
-    if not registry_file.is_file():
-        # 回退检查模板
-        registry_file = root / paths.SYSTEM_DIRNAME / "templates" / "instance" / "registry.template.md"
-        if not registry_file.is_file():
-            return []
-
-    content = registry_file.read_text(encoding="utf-8")
-    table_content, _, _ = content.partition("## 排除规则")
-
-    projects: list[dict] = []
-    for line in table_content.splitlines():
-        line = line.strip()
-        if not line.startswith("|") or line.startswith("| 项目 ID") or line.startswith("|-"):
-            continue
-        cols = [c.strip() for c in line.split("|")[1:-1]]
-        if len(cols) < 3:
-            continue
-
-        proj_id = cols[0]
-        if not proj_id or "待填写" in proj_id or proj_id.startswith("（"):
-            continue
-
-        name = cols[1] if len(cols) > 1 else ""
-        raw_dir = cols[2] if len(cols) > 2 else ""
-        dir_matches = re.findall(r"`([^`]+)`", raw_dir)
-        dir_str = (dir_matches[0] if dir_matches else raw_dir).strip().rstrip("/")
-
-        parent = cols[3] if len(cols) > 3 else ""
-        aliases_str = cols[4] if len(cols) > 4 else ""
-        aliases = [a.strip() for a in aliases_str.split(",") if a.strip()]
-        board_mapping = cols[5] if len(cols) > 5 else ""
-        notes = cols[6] if len(cols) > 6 else ""
-
-        # 从备注中提取代码真源（如果有）
-        code_source = ""
-        code_match = re.search(r"代码(?:与实施)?真源\s*`?([^`\s,，；;]+)`?", notes)
-        if code_match:
-            code_source = code_match.group(1).strip().rstrip("/")
-
-        abs_dir = (root / dir_str).resolve() if dir_str else root
-        abs_code_source = (abs_dir / code_source).resolve() if (dir_str and code_source) else None
-
+    projects = []
+    for p in project_registry.load_projects(root):
+        code = p["code"][0] if p["code"] else ""
         projects.append({
-            "id": proj_id,
-            "name": name,
-            "dir": dir_str,
-            "abs_dir": str(abs_dir),
-            "parent": parent,
-            "aliases": aliases,
-            "board_mapping": board_mapping,
-            "notes": notes,
-            "code_source": code_source,
-            "abs_code_source": str(abs_code_source) if abs_code_source else "",
+            "id": p["id"],
+            "name": p["name"],
+            "dir": p["path"],
+            "abs_dir": str((root / p["path"]).resolve()),
+            "parent": p["parent"],
+            "aliases": p["aliases"],
+            "boards": p["boards"],
+            "notes": p["note"],
+            "code_source": code,
+            "abs_code_source": str((root / code).resolve()) if code else "",
         })
-
     return projects
 
 
@@ -165,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
 
     matched = resolve_project(args.query, ws_root)
     if not matched:
-        print(f"❌ 错误原因：未找到与 '{args.query}' 匹配的项目。\n👉 修复建议：检查 .entropaxis/data/templates/registry.md 确认项目名称或别名，或运行 `--list` 查看有效列表。", file=sys.stderr)
+        print(f"❌ 错误原因：未找到与 '{args.query}' 匹配的项目。\n👉 修复建议：检查 .entropaxis/data/templates/registry.yaml 确认项目名称或别名，或运行 `--list` 查看有效列表。", file=sys.stderr)
         return 2
 
     if args.json:

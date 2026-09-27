@@ -18,9 +18,11 @@ from pathlib import Path
 
 try:
     from . import paths
+    from . import project_registry
     from . import stamp_data_provenance as provenance
 except ImportError:
     import paths
+    import project_registry
     import stamp_data_provenance as provenance
 
 HERE = Path(__file__).resolve().parent
@@ -367,7 +369,16 @@ def check_schema_conformance(root: Path) -> list[str]:
     finally:
         if str(tools) in sys.path:
             sys.path.remove(str(tools))
-    return [f"[违反 schema] {e}" for e in vs.check_audit_report_schema_selftest()]
+    issues = [f"[违反 schema] {e}" for e in vs.check_audit_report_schema_selftest()]
+    registry = project_registry.registry_path(root)
+    if registry.is_file():
+        import yaml  # noqa: PLC0415
+        try:
+            data = yaml.safe_load(registry.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            return issues + [f"[违反 schema] registry.yaml 无法解析: {exc}"]
+        issues += [f"[违反 schema] registry.yaml {e}" for e in vs.validate(data, vs.load_schema("registry"))]
+    return issues
 
 
 def check_data_source_mapping(root: Path) -> list[str]:
@@ -450,7 +461,7 @@ def check_data_provenance(root: Path) -> list[str]:
 
 def _is_nested_git_repo_path(path: Path, root: Path) -> bool:
     """path 是否位于工作区根之外、自带独立 .git 的上游/第三方目录内（含 .entropaxis/ 自身）。
-    与 registry.md「自带 .git 且非工作区成员的上游仓库不纳入注册表」的排除口径一致，
+    与注册表「自带 .git 且非工作区成员的上游仓库不纳入注册表」的排除口径一致，
     防止把有独立代码/内容契约的嵌套仓库误判为待规范化的工作区项目薄壳。"""
     current = path.parent
     while True:
@@ -966,32 +977,15 @@ def check_system_tools_compile(root: Path) -> list[str]:
                 f"[工具语法错误] {tool.relative_to(root)}:{error.lineno}: {error.msg}"
             )
     return issues
-def _registered_top_dirs(registry: Path) -> tuple[set[str], set[str]]:
-    """解析注册表，返回 (项目映射表登记的顶层目录, 排除规则声明的顶层目录)。
+def _registered_top_dirs(root: Path) -> tuple[set[str], set[str]]:
+    """返回 (项目映射登记的顶层目录, 排除规则声明的顶层目录)。
 
-    两者分开返回而非合并：**映射表是否为空**是"这个工作区有没有开始登记项目"的判定信号，
+    两者分开返回而非合并：**映射是否为空**是"这个工作区有没有开始登记项目"的判定信号，
     合并进排除规则后就分不出来了——而排除规则在模板里天然非空（`repo/`、`Archive/` 等）。
     """
-    table_tops: set[str] = set()
-    exclude_tops: set[str] = set()
-    if not registry.exists():
-        return table_tops, exclude_tops
-    table_part, _, exclude_part = registry.read_text(encoding="utf-8").partition("## 排除规则")
-    for line in table_part.splitlines():
-        line = line.strip()
-        if not line.startswith("|") or line.startswith("| 项目 ID") or line.startswith("|---"):
-            continue
-        cols = [c.strip() for c in line.split("|")[1:-1]]
-        if len(cols) >= 3:
-            for d in re.findall(r"`([^`]+)`", cols[2]):
-                d = d.strip()
-                if d and "+" not in d:
-                    table_tops.add(d.rstrip("/").split("/")[0])
-    for token in re.findall(r"`([^`]+)`", exclude_part):
-        token = token.strip().lstrip("*/").rstrip("/")
-        if token:
-            exclude_tops.add(token.split("/")[0])
-    return table_tops, exclude_tops
+    table_tops = {p["path"].split("/")[0] for p in project_registry.load_projects(root)}
+    exclude_tops = {e.strip().lstrip("*/").rstrip("/").split("/")[0] for e in project_registry.load_excludes(root)}
+    return table_tops, exclude_tops - {""}
 
 
 def check_registry_population(root: Path) -> list[str]:
@@ -1001,10 +995,9 @@ def check_registry_population(root: Path) -> list[str]:
     第 7 项的反向校验在那一刻必然全量命中——首次体检直接红屏，这不是缺陷而是初始态。
     此处以建议项把同一事实说清楚，登记任一项目后第 7 项自动接管为阻断校验。
     """
-    registry = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.md"
-    if not registry.exists():
+    if not project_registry.registry_path(root).exists():
         return []
-    table_tops, exclude_tops = _registered_top_dirs(registry)
+    table_tops, exclude_tops = _registered_top_dirs(root)
     if table_tops:
         return []
     pending = [
@@ -1016,7 +1009,7 @@ def check_registry_population(root: Path) -> list[str]:
     return [
         f"[注册表待登记] 项目映射表尚无任何项目，{len(pending)} 个根目录待归属："
         f"{'、'.join(pending)}。用 `python3 .entropaxis/tools/init_project.py <项目名>` 立项，"
-        "或把非项目目录写进注册表「排除规则」；登记任一项目后第 7 项转为阻断校验。"
+        "或把非项目目录写进注册表 exclude；登记任一项目后第 7 项转为阻断校验。"
     ]
 
 
@@ -1096,30 +1089,16 @@ def check_routing_integrity(root: Path) -> list[str]:
             if not (root / clean_ref).exists():
                 issues.append(f"[根路由断链] 根 AGENTS.md 引用的规则文件 {ref} 不存在。")
 
-    # 2. 检查 .entropaxis/data/templates/registry.md 中的每个项目主目录物理存在
-    registry = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.md"
-    if registry.exists():
-        for line in registry.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line.startswith("|") or line.startswith("| 项目 ID") or line.startswith("|---"):
-                continue
-            cols = [c.strip() for c in line.split("|")[1:-1]]
-            if len(cols) >= 3:
-                dir_cell = cols[2]
-                dirs = re.findall(r"`([^`]+)`", dir_cell)
-                for d in dirs:
-                    d = d.strip()
-                    if not d or "+" in d:
-                        continue
-                    proj_dir = root / d.rstrip("/")
-                    if not proj_dir.is_dir():
-                        issues.append(f"[注册表断链] .entropaxis/data/templates/registry.md 注册的项目目录 {d} 物理不存在。")
+    # 2. 注册表中的每个项目主目录物理存在
+    for proj in project_registry.load_projects(root):
+        if not (root / proj["path"]).is_dir():
+            issues.append(f"[注册表断链] .entropaxis/data/templates/registry.yaml 注册的项目目录 {proj['path']}/ 物理不存在。")
 
     # 2b. 反向校验：工作区根级目录须能在注册表主目录或排除规则中找到归属，
     # 否则新目录会游离于白名单之外而不被察觉（正向校验只查"注册的目录是否存在"，不查"存在的目录是否注册"）。
     # 注册表尚未登记任何项目时本项不阻断：收件方的工作区在初始化前就已经有自己的目录，
     # 拿注册表空表去判他"目录未注册"等于开箱即红。该初始态由第 15c 项以建议项报出。
-    table_tops, exclude_tops = _registered_top_dirs(registry)
+    table_tops, exclude_tops = _registered_top_dirs(root)
     if table_tops:
         known_tops = table_tops | exclude_tops
         for child in sorted(root.iterdir()):
@@ -1128,7 +1107,7 @@ def check_routing_integrity(root: Path) -> list[str]:
             if child.name in known_tops:
                 continue
             issues.append(
-                f"[根目录未注册] {child.name}/ 既不在 .entropaxis/data/templates/registry.md 的项目映射表，也不在其排除规则中，"
+                f"[根目录未注册] {child.name}/ 既不在 .entropaxis/data/templates/registry.yaml 的 projects，也不在其 exclude 中，"
                 "需人工登记项目归属或补充排除规则（不得由 Agent 自行判断归属）。"
             )
 

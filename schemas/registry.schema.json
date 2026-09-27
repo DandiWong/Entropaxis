@@ -1,0 +1,29 @@
+{
+  "$comment": "工作区项目注册表。物理宿主：data/templates/registry.yaml（merge-only；种子 templates/instance/registry.template.yaml）。读写统一经 tools/project_registry.py；init_project.py 立项时向 projects 末尾追加，故 projects 须是文件最后一个顶层键。",
+  "title": "registry",
+  "target": "data/templates/registry.yaml",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "_meta": { "type": "object", "required": ["source", "managed_by", "policy"] },
+    "exclude": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "projects": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "required": ["id", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string" },
+          "path": { "type": "string", "minLength": 1 },
+          "parent": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "boards": { "type": "object" },
+          "code": { "type": "array", "items": { "type": "string" } },
+          "note": { "type": "string" }
+        }
+      }
+    }
+  }
+}

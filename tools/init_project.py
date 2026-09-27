@@ -10,9 +10,10 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from . import paths
+    from . import paths, project_registry
 except ImportError:
     import paths
+    import project_registry
 
 
 class ProjectInitError(Exception):
@@ -187,41 +188,22 @@ def register_project(
     rel_dir: str | None = None,
     parent: str = "",
 ) -> bool:
-    """把新项目追加进 `.entropaxis/data/templates/registry.md` 映射表，返回是否发生写入。
+    """把新项目追加进 `.entropaxis/data/templates/registry.yaml` 的 projects，返回是否发生写入。
 
-    注册表正文声明本工具所属 Skill 是它的唯一写入者，但此前无人真的写——注册表因此在
-    新工作区里永远是空表，而它是《项目组织》的项目归属唯一映射基准，也是体检第 7 项
-    反向校验的依据。缺这一步，新机器上装好系统后项目索引永远建不起来。
-
-    写入遵守 `data/` 写入规约：只追加一行，已登记同名项目即跳过，不重写既有内容；
-    注册表缺失（尚未 bootstrap）时静默跳过，不阻断立项本身。
+    注册表是《项目组织》的项目归属唯一映射基准，也是体检第 7 项反向校验的依据；
+    立项不登记，新工作区的项目索引永远建不起来。
+    只追加，同主目录已登记即跳过；注册表缺失（尚未 bootstrap）时静默跳过，不阻断立项。
     """
-    registry = workspace / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.md"
-    if not registry.is_file():
-        return False
-    try:
-        text = registry.read_text(encoding="utf-8")
-    except OSError:
-        return False
     rel_dir = (rel_dir or name).strip("/")
-    if f"`{rel_dir}/`" in text:
+    if any(p["path"] == rel_dir for p in project_registry.load_projects(workspace)):
         return False
-
-    board = dashboard_project_id.strip() or "未关联"
-    mapping = "未关联" if board == "未关联" else f"main={board}"
-    row = f"| {name} | {name} | `{rel_dir}/` | {parent} | | {mapping} | |\n"
-    # 锚到「项目 ID」表头下方的分隔行：文件里可能不止一张表，按表头定位而非取首个分隔行。
-    # 占位行（（待填写））留在原处，新项目追加在它前面——不动人工内容，也不依赖占位行是否还在。
-    lines = text.splitlines(keepends=True)
-    header = next((i for i, ln in enumerate(lines) if ln.lstrip().startswith("| 项目 ID")), None)
-    if header is None or header + 1 >= len(lines) or not lines[header + 1].lstrip().startswith("|-"):
-        return False
-    lines.insert(header + 2, row)
-    try:
-        registry.write_text("".join(lines), encoding="utf-8")
-    except OSError:
-        return False
-    return True
+    entry = {"id": name, "name": name, "path": f"{rel_dir}/"}
+    if parent:
+        entry["parent"] = parent
+    board = dashboard_project_id.strip()
+    if board and board != "未关联":
+        entry["boards"] = {"main": board}
+    return project_registry.append_project(workspace, entry)
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -1,9 +1,9 @@
 ---
 name: init-project
-description: "v1.2.0. 通过简短访谈安全初始化时间线驱动的通用业务/综合项目（4 域 + 2 契约 + RawInput + Archive）；需要代码工程时，改在 03_工程研发/<app>/ 以独立软件应用脚手架初始化 PRODUCT、tasks、src、test 与 docs。用户要求新建、初始化或 init 项目/应用工作区时使用；拒绝覆盖已有目录。"
+description: "v1.2.1. 通过简短访谈安全初始化时间线驱动的通用业务/综合项目（4 域 + 2 契约 + RawInput + Archive）；需要代码工程时，改在 03_工程研发/<app>/ 以独立软件应用脚手架初始化 PRODUCT、tasks、src、test 与 docs。用户要求新建、初始化或 init 项目/应用工作区时使用；拒绝覆盖已有目录。"
 metadata:
   scope: control-plane
-  version: "1.2.0"
+  version: "1.2.1"
 ---
 
 # 初始化项目
@@ -45,7 +45,7 @@ python3 tools/init_project.py "<项目名>" \
   --dashboard-project-id "<主看板返回或确认的项目ID>"
 ```
 
-该命令创建标准的通用项目分层结构（`RawInput/`、`01_项目管理/`、`02_产品设计/`、`03_工程研发/`、`04_运营增长/`、`Archive/` 以及 `README.md`、`01_项目管理/DECISIONS.md`、`AGENTS.md`、`CLAUDE.md`），并把该项目**自动追加**进 `.entropaxis/data/templates/registry.md` 映射表（append-only，重复立项不产生第二行）——**不要再手工补写这一行**。
+该命令创建标准的通用项目分层结构（`RawInput/`、`01_项目管理/`、`02_产品设计/`、`03_工程研发/`、`04_运营增长/`、`Archive/` 以及 `README.md`、`01_项目管理/DECISIONS.md`、`AGENTS.md`、`CLAUDE.md`），并把该项目**自动追加**进 `.entropaxis/data/templates/registry.yaml` 的 `projects`（append-only，重复立项不产生第二项）——**不要再手工补写**；别名、代码真源等由人工在该项下补充。
 
 当项目需要在 `03_工程研发/<app>/` 下初始化独立软件工程代码仓库时，调用软件工程脚手架：
 

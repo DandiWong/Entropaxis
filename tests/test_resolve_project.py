@@ -12,20 +12,16 @@ sys.path.insert(0, str(SYSTEM_ROOT / "tools"))
 import resolve_project as RP  # noqa: E402
 
 SAMPLE_REGISTRY = """\
-# 工作区项目注册表
-
-## 项目映射表
-
-| 项目 ID | 名称 | 主目录 | 父项目 | 口语别名 | 外部看板映射 (Key-Value) | 备注 |
-|---|---|---|---|---|---|---|
-| （待填写） | （项目全称） | （主目录路径） | | | 未关联 | |
-| medalkaid | MedAlkaid | `04MedAIkaid/` | | MedAlkaid, 奥科智研 | 未关联 | 大项目 |
-| medalkaid-paper | 文章发表 | `04MedAIkaid/05文章发表/` | medalkaid | PaperPro, 文章发表 | 未关联 | 代码真源 `03_工程研发/PaperPro/` |
-| strategy | 战略发展 | `05战略发展/` | | 战略汇报, 年中规划 | 未关联 | |
-
-## 排除规则
-
-- `Archive/`
+exclude: [Archive/]
+projects:
+  - {id: medalkaid, name: MedAlkaid, path: 04MedAIkaid/, aliases: [MedAlkaid, 奥科智研], note: 大项目}
+  - id: medalkaid-paper
+    name: 文章发表
+    path: 04MedAIkaid/05文章发表/
+    parent: medalkaid
+    aliases: [PaperPro, 文章发表]
+    code: [04MedAIkaid/05文章发表/03_工程研发/PaperPro/]
+  - {id: strategy, name: 战略发展, path: 05战略发展/, aliases: [战略汇报, 年中规划]}
 """
 
 
@@ -35,7 +31,7 @@ class ResolveProjectTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         reg_dir = self.root / ".entropaxis" / "data" / "templates"
         reg_dir.mkdir(parents=True)
-        (reg_dir / "registry.md").write_text(SAMPLE_REGISTRY, encoding="utf-8")
+        (reg_dir / "registry.yaml").write_text(SAMPLE_REGISTRY, encoding="utf-8")
         self.addCleanup(self.tmp.cleanup)
 
     def test_load_registry_projects(self):
@@ -48,7 +44,7 @@ class ResolveProjectTests(unittest.TestCase):
         self.assertIsNotNone(res)
         self.assertEqual(res["id"], "medalkaid-paper")
         self.assertEqual(res["dir"], "04MedAIkaid/05文章发表")
-        self.assertEqual(res["code_source"], "03_工程研发/PaperPro")
+        self.assertEqual(res["code_source"], "04MedAIkaid/05文章发表/03_工程研发/PaperPro")
 
     def test_resolve_by_chinese_name_and_alias(self):
         res1 = RP.resolve_project("文章发表", self.root)
@@ -71,7 +67,7 @@ class ResolveProjectTests(unittest.TestCase):
         text = RP.format_project_text(res)
         self.assertIn("[medalkaid-paper]", text)
         self.assertIn("04MedAIkaid/05文章发表/", text)
-        self.assertIn("code: 03_工程研发/PaperPro", text)
+        self.assertIn("code: 04MedAIkaid/05文章发表/03_工程研发/PaperPro", text)
 
     def test_cli_invocation_json(self):
         buf = io.StringIO()

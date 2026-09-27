@@ -1,5 +1,9 @@
 # Changelog - init-project Skill
 
+## [1.2.1] - 2026-09-27
+### Changed
+- 立项登记目标由 `registry.md` 表格行改为 `registry.yaml` 的 `projects` 列表项。
+
 ## [1.2.0] - 2026-09-26
 ### Changed
 - 补记：此前版本号未随改动登记（description 已写 v1.2.0、metadata 停在 1.1.0），以下据 git 历史归纳。

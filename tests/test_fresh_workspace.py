@@ -12,6 +12,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 from tools import paths
 from tools.bootstrap import render_instance_configs
 from tools.init_project import register_project
@@ -21,24 +23,19 @@ from tools.lint_workspace import (
     check_routing_integrity,
 )
 
-_REGISTRY = """# 工作区项目注册表
-
-## 项目映射表
-
-| 项目 ID | 名称 | 主目录 | 外部看板映射 (Key-Value) | 备注 |
-|---|---|---|---|---|
-| （待填写） | （项目全称） | （主目录路径） | main=<ID> | |
-
-## 排除规则
-
-- `repo/`、`Archive/`、`node_modules/`
+_REGISTRY = """exclude:
+  - repo/
+  - Archive/
+  - node_modules/
+# 注释须在追加后原样保留
+projects:
 """
 
 
 def _mk_workspace(root: Path, *dirs: str) -> Path:
     for d in dirs:
         (root / d).mkdir(parents=True, exist_ok=True)
-    registry = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.md"
+    registry = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.yaml"
     registry.parent.mkdir(parents=True, exist_ok=True)
     registry.write_text(_REGISTRY, encoding="utf-8")
     return registry
@@ -81,11 +78,24 @@ class FreshWorkspaceTests(unittest.TestCase):
             self.assertTrue(register_project(root, "proj-a", "proj_77"))
             self.assertFalse(register_project(root, "proj-a", "proj_77"))
             text = registry.read_text(encoding="utf-8")
-            self.assertEqual(text.count("`proj-a/`"), 1)
-            self.assertIn("main=proj_77", text)
-            # 占位行与排除规则原样保留
-            self.assertIn("（待填写）", text)
-            self.assertIn("## 排除规则", text)
+            self.assertEqual(text.count("proj-a/"), 1)
+            self.assertIn("main: proj_77", text)
+            # 注释与排除规则原样保留
+            self.assertIn("# 注释须在追加后原样保留", text)
+            self.assertIn("- node_modules/", text)
+            self.assertTrue(register_project(root, "proj-b", parent="proj-a"))
+            projects = yaml.safe_load(registry.read_text(encoding="utf-8"))["projects"]
+            self.assertEqual([p["id"] for p in projects], ["proj-a", "proj-b"])
+            self.assertEqual(projects[1]["parent"], "proj-a")
+
+    def test_register_project_refuses_when_projects_not_last(self) -> None:
+        """projects 不在文件末尾时追加会落进别的键，必须放弃写入而不是写坏注册表。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            registry = _mk_workspace(root, "proj-a")
+            registry.write_text("projects:\nexclude:\n  - repo/\n", encoding="utf-8")
+            self.assertFalse(register_project(root, "proj-a"))
+            self.assertEqual(registry.read_text(encoding="utf-8"), "projects:\nexclude:\n  - repo/\n")
 
     def test_register_project_without_registry_does_not_raise(self) -> None:
         """注册表尚未 bootstrap 时立项不得失败——脚手架不依赖注册表存在。"""

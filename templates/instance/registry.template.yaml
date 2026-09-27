@@ -1,0 +1,23 @@
+_meta:
+  source: .entropaxis/templates/instance/registry.template.yaml
+  managed_by: init_project.py register_project 立项时追加项目 + 人工维护别名、排除规则与备注
+  policy: merge-only
+  schema: .entropaxis/schemas/registry.schema.json
+  note: 口语简称按本表解析，不因表达差异创建新项目。读写统一经 tools/project_registry.py。
+
+# 不纳入注册表的根级目录（体检白名单校验同步排除）。
+# 另：自带 .git 且非工作区成员的上游仓库由体检按目录结构自动排除，无需列出。
+exclude:
+  - repo/
+  - "**/repoes/"
+  - Archive/
+  - node_modules/
+  - output/
+
+# 字段：id、path（相对工作区根）必填；name 缺省同 id；
+# parent 填父项目 id，缺省为顶层——层级只由它表达，不由 path 推断（子项目可嵌套也可平铺）；
+# aliases 登记用户惯用的简称/代号/产品名，不得散落到 tips.md 等别处（避免项目归属出现第二份真源）；
+# boards 为外部看板映射，如 {main: proj_1, dev: iss_8f2, ext: space_qa}，键由看板 Skill 解释；
+# code 为代码真源目录（相对工作区根）；note 为备注。
+# init_project.py 立项时向本列表末尾追加，projects 须保持为文件最后一个顶层键。
+projects:

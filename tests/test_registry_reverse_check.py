@@ -3,29 +3,19 @@ import unittest
 from pathlib import Path
 
 from tools import paths
-from tools.lint_workspace import check_routing_integrity
+from tools.lint_workspace import check_routing_integrity, check_schema_conformance
 
 _REGISTRY = """\
-# 工作区项目注册表
-
-## 项目映射表
-
-| 项目 ID | 名称 | 主目录 | 外部看板映射 (Key-Value) | 口语关键词 |
-|---|---|---|---|---|
-| `demo` | 演示项目 | `04Demo/` | main=demo | 演示 |
-
-## 排除规则
-
-以下目录不纳入注册表：
-- `repo/`、`Archive/`、`node_modules/`
-- 共享资料层：`00_知识库/`
+exclude: [repo/, Archive/, node_modules/, 00_知识库/]
+projects:
+  - {id: demo, name: 演示项目, path: 04Demo/, aliases: [演示], boards: {main: demo}}
 """
 
 
 def _mk_root(td: str) -> Path:
     root = Path(td)
     (root / paths.SYSTEM_DIRNAME / "data" / "templates").mkdir(parents=True, exist_ok=True)
-    (root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.md").write_text(_REGISTRY, encoding="utf-8")
+    (root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.yaml").write_text(_REGISTRY, encoding="utf-8")
     return root
 
 
@@ -45,6 +35,15 @@ class RegistryReverseCheckTests(unittest.TestCase):
             (root / "游离项目").mkdir()
             issues = check_routing_integrity(root)
             self.assertTrue(any("游离项目" in i and "根目录未注册" in i for i in issues))
+
+    def test_malformed_registry_violates_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = _mk_root(td)
+            (root / paths.SYSTEM_DIRNAME / "tools").symlink_to(Path(paths.__file__).resolve().parent)
+            (root / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.yaml").write_text(
+                "projects:\n  - {id: demo, dir: 04Demo/}\n", encoding="utf-8")
+            issues = check_schema_conformance(root)
+            self.assertTrue(any("registry.yaml" in i and "path" in i for i in issues), issues)
 
 
 if __name__ == "__main__":
