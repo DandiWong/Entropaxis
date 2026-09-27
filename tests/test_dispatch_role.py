@@ -6,7 +6,6 @@
   - manifest 校验（mode 单向收紧、五态无 waived、指纹、CAS 跨字段语义）
   - CAS 并发（互斥、revision 必增、过期锁恢复、journal 追加）
   - run 全链（成功/六类失败/指纹失配回拒）
-  - migrate_config 保守迁移（拒迁含引号、幂等不覆盖、dry-run 不写盘）
   - 三样本解析确定性（capsule / workers.yaml / 裸目录）
   - 与 schemas/roles_manifest.schema.json 的样本一致性（jsonschema 可用时）
 """
@@ -127,7 +126,7 @@ class DispatchRoleTestBase(TestCase):
         self.ok = _mkexe(self.scripts, "ok.sh", f'#!/bin/sh\ncat "{self.ok_body}" > "$1"\n')
         self.fail = _mkexe(self.scripts, "fail.sh", FAIL_SH)
         self.slow = _mkexe(self.scripts, "slow.sh", SLOW_SH)
-        self.config = self.ws / "workspace-config.md"
+        self.config = self.ws / "roles.yaml"
         self._old_active = dr.ACTIVE_CONFIG
         dr.ACTIVE_CONFIG = self.config
         # 轨迹重定向到临时目录：测试跑一次就往生产轨迹里灌几十条噪声，
@@ -148,8 +147,7 @@ class DispatchRoleTestBase(TestCase):
             block["default_dispatch_mode"] = mode
         if grants is not None:
             block["dispatch_authorizations"] = grants
-        text = "# test config\n\n```yaml\n" + yaml.safe_dump(block, allow_unicode=True, sort_keys=False) + "```\n"
-        self.config.write_text(text, encoding="utf-8")
+        self.config.write_text(yaml.safe_dump(block, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     def write_workers(self, role: str = "Reviewer", profile: str = "test-ok", target_sha: str | None = None) -> Path:
         target = self.ws / "01.md"
@@ -318,6 +316,27 @@ class CASTests(DispatchRoleTestBase):
         self.assertTrue(s.acquire("b"))  # 过期 → 归档锁目录后接管
         self.assertTrue(s.stale_lock_report())
 
+    def test_concurrent_stale_takeover_yields_to_winner(self) -> None:
+        """两进程同判过期：A 在 B 判定后、挪锁前完成接管，B 不得挪走 A 的新锁。"""
+        w = self.write_workers()
+        a, b = dr.ManifestStore(w), dr.ManifestStore(w)
+        self.assertTrue(a.acquire("x"))
+        (a.lock_dir / "owner.json").write_text(json.dumps(
+            {"owner": "x", "lease_until": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()}), encoding="utf-8")
+        real_rename = os.rename
+        fired = []
+
+        def rename_after_a_wins(src, dst):
+            if not fired:
+                fired.append(1)
+                self.assertTrue(a.acquire("A"))  # A 抢先完成整套接管
+            return real_rename(src, dst)
+
+        with mock.patch.object(dr.os, "rename", side_effect=rename_after_a_wins):
+            self.assertFalse(b.acquire("B"))
+        owner = json.loads((a.lock_dir / "owner.json").read_text(encoding="utf-8"))["owner"]
+        self.assertEqual(owner, "A")
+
     def test_cas_requires_revision_bump(self) -> None:
         w = self.write_workers()
         s = dr.ManifestStore(w)
@@ -404,10 +423,8 @@ class RunFlowTests(DispatchRoleTestBase):
         rc = self._run("Reviewer", "p-unknown", {"p-other": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 5}})
         self.assertEqual(rc, dr.EXIT_BLOCKED)
 
-    def test_subagent_auto_via_table(self) -> None:
-        self.config.write_text(
-            "## 角色模态外置 CLI 与模型声明\n\n| 角色模态 | 职责 | 承载 CLI | 启动命令 |\n|---|---|---|---|\n"
-            "| Builder | 实施 | subagent | 内置 Subagent 机制 (auto) |\n", encoding="utf-8")
+    def test_subagent_auto_via_roles(self) -> None:
+        self.config.write_text("roles:\n  Builder:\n    profile: null\n", encoding="utf-8")
         self.write_workers(role="Builder", profile="p-none")
         rc = dr.run_assignment(self.ws, "r1", prompt="x", ack=None, owner="t")
         self.assertEqual(rc, dr.EXIT_LOCAL)
@@ -484,59 +501,6 @@ class DeliverableValidityTests(DispatchRoleTestBase):
         empty.write_text("x", encoding="utf-8")
         self.assertTrue(dr.deliverable_valid(empty))
         self.assertFalse(dr.deliverable_valid(self.ws / "missing.md"))
-
-
-class MigrateConfigTests(DispatchRoleTestBase):
-    """保守迁移（R3-01 B 收缩 + C-05 幂等）。"""
-
-    CFG_HEAD = (
-        "## 角色模态外置 CLI 与模型声明\n\n"
-        "| 角色模态 | 职责定位 | 承载 CLI | 启动命令 |\n|---|---|---|---|\n"
-        "| Reviewer | 审计 | omp | `omp --model openai-codex/gpt-5.6-terra` |\n"
-        "| Builder | 实施 | omp / claude | `omp --model zhipu-coding-plan/glm-5.3 \\|\\| claude --model sonnet-5` |\n"
-        "| Designer | 设计 | claude | `claude --model sonnet-5 -p \"带引号提示\"` |\n"
-        "| Researcher | 调研 | subagent | 内置 Subagent 机制 (auto) |\n"
-    )
-
-    def test_dry_run_writes_nothing(self) -> None:
-        self.config.write_text(self.CFG_HEAD, encoding="utf-8")
-        rc = dr.migrate_config(self.config, apply=False)
-        self.assertEqual(rc, dr.EXIT_OK)
-        self.assertNotIn("command_profiles", self.config.read_text(encoding="utf-8"))
-
-    def test_apply_generates_profiles_with_prompt(self) -> None:
-        self.config.write_text(self.CFG_HEAD, encoding="utf-8")
-        dr.migrate_config(self.config, apply=True)
-        cfg = dr.load_dispatch_config(self.config)
-        self.assertEqual(cfg["default_dispatch_mode"], "strict")
-        profs = cfg["command_profiles"]
-        self.assertIn("-p", profs["reviewer-primary"]["argv"])
-        self.assertIn("{PROMPT}", profs["reviewer-primary"]["argv"])
-        self.assertEqual(profs["builder-primary"]["fallback_profile"], "builder-fallback")
-
-    def test_quoted_candidate_refused(self) -> None:
-        self.config.write_text(self.CFG_HEAD, encoding="utf-8")
-        dr.migrate_config(self.config, apply=True)
-        cfg = dr.load_dispatch_config(self.config)
-        self.assertNotIn("designer-primary", cfg["command_profiles"])  # 含引号 → 拒迁
-
-    def test_subagent_rows_skipped(self) -> None:
-        self.config.write_text(self.CFG_HEAD, encoding="utf-8")
-        dr.migrate_config(self.config, apply=True)
-        cfg = dr.load_dispatch_config(self.config)
-        self.assertNotIn("researcher-primary", cfg["command_profiles"])
-
-    def test_idempotent_no_overwrite(self) -> None:
-        self.config.write_text(self.CFG_HEAD, encoding="utf-8")
-        dr.migrate_config(self.config, apply=True)
-        first = dr.load_dispatch_config(self.config)["command_profiles"]["reviewer-primary"]["argv"]
-        # 用户手工改了 timeout，重跑迁移不得覆盖
-        text = self.config.read_text(encoding="utf-8").replace("timeout_s: 900", "timeout_s: 600", 1)
-        self.config.write_text(text, encoding="utf-8")
-        dr.migrate_config(self.config, apply=True)
-        cfg = dr.load_dispatch_config(self.config)
-        self.assertEqual(cfg["command_profiles"]["reviewer-primary"]["argv"], first)
-        self.assertEqual(cfg["command_profiles"]["reviewer-primary"]["timeout_s"], 600)
 
 
 class RealWorkspaceConfigTests(TestCase):

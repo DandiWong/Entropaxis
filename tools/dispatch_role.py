@@ -53,9 +53,6 @@ except ImportError:
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 ROLES_CONFIG = SYSTEM_ROOT / "data" / "templates" / "roles.yaml"
-# 旧布局：调度参数以 ```yaml 块寄居在 workspace-config.md。仅作只读兼容（未迁移的工作区）。
-LEGACY_WS_CONFIG = SYSTEM_ROOT / "data" / "templates" / "workspace-config.md"
-WS_CONFIG = ROLES_CONFIG
 ACTIVE_CONFIG: Path | None = None  # 测试注入点；生产环境留空用 ROLES_CONFIG
 SCHEMA_DIR = SYSTEM_ROOT / "schemas"
 
@@ -68,7 +65,6 @@ _FAILURE_PRIORITY = {"UNCONFIGURED": 0, "SUBAGENT_AUTO": 1, "NO_VALID_OUTPUT": 2
 SHELL_METACHARS = set(';&|`$><\n')
 PROMPT_PLACEHOLDER = "{PROMPT}"
 LEASE_SECONDS = 600
-KNOWN_EXEC_BASENAMES = {"omp", "claude", "codex"}  # 迁移器可安全补 -p {PROMPT} 的可执行族
 
 EXIT_OK, EXIT_BLOCKED, EXIT_LOCAL, EXIT_USAGE = 0, 2, 3, 4
 
@@ -110,26 +106,15 @@ def _receipt_module():
 
 # ---------------------------------------------------------------- 第 3 级配置
 
-_DISPATCH_BLOCK_RE = re.compile(r"```yaml\n(.*?command_profiles:.*?)```", re.DOTALL)
-
-
 def load_dispatch_config(config_path: Path | None = None) -> dict[str, Any]:
-    """读第 3 级配置：roles.yaml 整文件（契约 schemas/roles_config.schema.json）；
-    `.md` 路径按旧布局提取 ```yaml 块只读兼容。roles.yaml 缺失时回落旧布局。"""
+    """读第 3 级配置：roles.yaml 整文件（契约 schemas/roles_config.schema.json）。"""
     if config_path is None:
-        config_path = ACTIVE_CONFIG or (ROLES_CONFIG if ROLES_CONFIG.exists() or not LEGACY_WS_CONFIG.exists() else LEGACY_WS_CONFIG)
+        config_path = ACTIVE_CONFIG or ROLES_CONFIG
     empty = {"default_dispatch_mode": None, "roles": {}, "command_profiles": {}, "dispatch_authorizations": [],
              "path": str(config_path), "present": False}
     if not config_path.exists():
         return empty
-    text = config_path.read_text(encoding="utf-8")
-    if config_path.suffix in (".yaml", ".yml"):
-        data = yaml.safe_load(text) or {}
-    else:
-        m = _DISPATCH_BLOCK_RE.search(text)
-        if not m:
-            return empty
-        data = yaml.safe_load(m.group(1)) or {}
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     return {
         "default_dispatch_mode": data.get("default_dispatch_mode"),
         "roles": data.get("roles") or {},
@@ -285,6 +270,10 @@ class ManifestStore:
             self.lock_dir.mkdir()
         except FileExistsError:
             try:
+                seen_ino = self.lock_dir.stat().st_ino
+            except OSError:
+                return False  # 对方刚释放，本轮让出由调用方重试
+            try:
                 meta = json.loads((self.lock_dir / "owner.json").read_text(encoding="utf-8"))
                 lease = datetime.fromisoformat(meta["lease_until"])
                 if lease.tzinfo is None:
@@ -301,8 +290,22 @@ class ManifestStore:
                     return False
             # 过期锁恢复：归档锁目录（永不静默删除），档案自身即最后一致态
             stale = self.archive.parent / f".{self.archive.name}.lock.stale-{time.time_ns()}"
-            os.rename(self.lock_dir, stale)
-            self.lock_dir.mkdir()
+            try:
+                os.rename(self.lock_dir, stale)
+            except OSError:
+                return False  # 另一进程已先一步接管
+            if stale.stat().st_ino != seen_ino:
+                # 判过期到挪走之间，另一进程已接管并新建了锁：挪走的是活锁，原样还回。
+                # ponytail: 还回时若又被第三方抢建则放弃还回，三方同时接管才会触发
+                try:
+                    os.rename(stale, self.lock_dir)
+                except OSError:
+                    pass
+                return False
+            try:
+                self.lock_dir.mkdir()
+            except FileExistsError:
+                return False
         (self.lock_dir / "owner.json").write_text(
             json.dumps({"owner": owner, "lease_until": (datetime.now(timezone.utc) + timedelta(seconds=lease_s)).isoformat()}, ensure_ascii=False),
             encoding="utf-8",
@@ -365,7 +368,7 @@ def resolve_profile_chain(profile_name: str, config: dict[str, Any]) -> list[dic
 
 def _tier3_default_chain(role: str, config: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     """第 3 级默认解析：roles.<角色>.profile 显式声明优先（null 即内置承载）；
-    未声明时按约定名 `<角色>-primary`；旧布局再回落角色表（setup_agents.parse_role_table）。"""
+    未声明时按约定名 `<角色>-primary`。"""
     profiles = config.get("command_profiles") or {}
     declared = config.get("roles") or {}
     if role in declared:
@@ -376,22 +379,7 @@ def _tier3_default_chain(role: str, config: dict[str, Any]) -> tuple[str, list[d
     canon = f"{role.lower()}-primary"
     if canon in profiles:
         return canon, resolve_profile_chain(canon, config)
-    if not str(config.get("path", "")).endswith(".md"):
-        return "UNCONFIGURED", []
-    try:
-        sys.path.insert(0, str(SYSTEM_ROOT / "tools"))
-        from setup_agents import parse_role_table  # noqa: PLC0415
-        table = parse_role_table(Path(config["path"]).read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 - 表缺失按未配置处理
-        return "UNCONFIGURED", []
-    cmd = (table.get(role) or {}).get("cmd", "")
-    if any(k in cmd for k in ("subagent", "auto", "内置")):
-        return "SUBAGENT_AUTO", []
-    tokens = cmd.split()
-    if not tokens:
-        return "UNCONFIGURED", []
-    prof = {"name": f"{role.lower()}-table", "argv": tokens, "timeout_s": 900}
-    return "TABLE", [prof]
+    return "UNCONFIGURED", []
 
 
 def build_argv(profile: dict[str, Any], prompt: str) -> list[str] | None:
@@ -1256,99 +1244,8 @@ def cmd_resolve(cwd: Path) -> int:
     return EXIT_OK
 
 
-# ---------------------------------------------------------------- 配置迁移（§3.4/§3.5）
-
-def _tokenize_candidate(candidate: str) -> tuple[list[str], bool]:
-    """保守分词：含引号/转义/不可判定字符 → (…)拒迁（人工仲裁 R3-01 B 收缩）。"""
-    if any(ch in candidate for ch in "\"'\\") or not candidate.strip():
-        return [], False
-    return candidate.split(), True
-
-
-def migrate_config(config_path: Path = LEGACY_WS_CONFIG, apply: bool = False) -> int:
-    """旧布局（workspace-config.md 角色表）幂等字段级迁移：仅缺失写入不覆盖；
-    角色表自由命令 → 结构化 profiles（保守判定）。新布局直接维护 roles.yaml，不经本函数。"""
-    if not config_path.exists():
-        print(json.dumps({"error": f"配置不存在: {config_path}"}, ensure_ascii=False))
-        return EXIT_USAGE
-    config = load_dispatch_config(config_path)
-    text = config_path.read_text(encoding="utf-8")
-    sys.path.insert(0, str(SYSTEM_ROOT / "tools"))
-    from setup_agents import parse_role_table  # noqa: PLC0415
-    table = parse_role_table(text)
-
-    actions: list[str] = []
-    refusals: list[dict[str, str]] = []
-    new_profiles: dict[str, Any] = {}
-    for role, info in table.items():
-        cmd = info.get("cmd", "")
-        if any(k in cmd for k in ("subagent", "auto", "内置")):
-            actions.append(f"{role}: 表声明内置 → 不生成 profile（SUBAGENT_AUTO）")
-            continue
-        candidates = [c.strip() for c in cmd.split("||") if c.strip()]
-        names = [f"{role.lower()}-primary"] + ([f"{role.lower()}-fallback"] if len(candidates) > 1 else [])
-        migrated_any = False
-        for cand, pname in zip(candidates, names):
-            if pname in (config.get("command_profiles") or {}):
-                actions.append(f"{role}/{pname}: 已存在 → 不覆盖")
-                migrated_any = True
-                continue
-            tokens, ok = _tokenize_candidate(cand)
-            if not ok or not tokens or Path(tokens[0]).name not in KNOWN_EXEC_BASENAMES:
-                refusals.append({"role": role, "candidate": cand,
-                                 "reason": "含引号/转义或可执行族未知 → needs-manual-conversion（绝不静默改写 argv）"})
-                continue
-            if "-p" not in tokens and "--print" not in tokens and "--prompt" not in tokens:
-                tokens = tokens + ["-p", PROMPT_PLACEHOLDER]
-            new_profiles[pname] = {"argv": tokens, "timeout_s": 900,
-                                   "note": f"migrated-from: {role} 表行；append: -p {{PROMPT}}"}
-            actions.append(f"{role}/{pname}: ← `{' '.join(tokens)}`")
-            migrated_any = True
-        if len(candidates) > 1 and migrated_any and f"{role.lower()}-fallback" in new_profiles:
-            new_profiles[f"{role.lower()}-primary"]["fallback_profile"] = f"{role.lower()}-fallback"
-
-    merged_profiles = {**(config.get("command_profiles") or {}), **new_profiles}
-    keys_needed: list[str] = []
-    if not config["present"]:
-        keys_needed = ["整块新增调度参数 yaml 块"]
-    else:
-        if config.get("default_dispatch_mode") is None:
-            keys_needed.append("default_dispatch_mode: strict")
-        if not config.get("command_profiles"):
-            keys_needed.append(f"command_profiles（{len(new_profiles)} 个）")
-        if config.get("dispatch_authorizations") is None and "dispatch_authorizations" not in text:
-            keys_needed.append("dispatch_authorizations: []")
-
-    print(json.dumps({"config": str(config_path), "actions": actions, "refusals": refusals,
-                      "missing_keys": keys_needed, "new_profiles": new_profiles,
-                      "mode": "apply" if apply else "dry-run（--apply 写入）"}, ensure_ascii=False, indent=1))
-    if not apply:
-        return EXIT_OK
-    block = {
-        "default_dispatch_mode": config.get("default_dispatch_mode") or "strict",
-        "command_profiles": merged_profiles,
-        "dispatch_authorizations": config.get("dispatch_authorizations") or [],
-    }
-    yaml_block = "```yaml\n" + yaml.safe_dump(block, allow_unicode=True, sort_keys=False) + "```\n"
-    m = _DISPATCH_BLOCK_RE.search(text)
-    if m:
-        text = text[: m.start()] + yaml_block + text[m.end():]
-    else:
-        text = (text.rstrip() + "\n\n## 角色调度参数（三级解析第 3 级）\n\n"
-                "> 契约见 `schemas/command_profile.schema.json` 与 `rules/角色协作.md`；由 `setup_agents.py --migrate-command-profiles` 迁移生成，亦可手工维护。\n\n" + yaml_block)
-    fd, tmp = tempfile.mkstemp(dir=config_path.parent, prefix=f".{config_path.name}.tmp-")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.replace(tmp, config_path)
-    print(f"✅ 已原子写入 {config_path}")
-    return EXIT_OK
-
-
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--migrate-config", action="store_true", help="第 3 级配置字段级迁移（默认 dry-run，--apply 写入；幂等不覆盖）")
-    p.add_argument("--apply", action="store_true", help="配合 --migrate-config 实际写入")
-    p.add_argument("--config", type=Path, default=LEGACY_WS_CONFIG, help="--migrate-config 的旧布局 workspace-config.md 路径")
     sub = p.add_subparsers(dest="cmd")
     pr = sub.add_parser("resolve", help="解析三级链，打印生效指派")
     pr.add_argument("--cwd", type=Path, default=Path.cwd())
@@ -1370,8 +1267,6 @@ def main(argv: list[str] | None = None) -> int:
     pv.add_argument("--manifest", type=Path, required=True, help="capsule.yaml 或 workers.yaml")
     args = p.parse_args(argv)
 
-    if args.migrate_config:
-        return migrate_config(args.config, apply=args.apply)
     if args.cmd == "resolve":
         return cmd_resolve(args.cwd)
     if args.cmd == "trace":

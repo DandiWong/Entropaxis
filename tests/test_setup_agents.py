@@ -16,20 +16,11 @@ from tools.setup_agents import (
     command_to_argvs,
     detect_installed_agents,
     load_config,
-    parse_role_table,
     role_view,
     save_config,
     set_role,
     verify_roles,
 )
-
-LEGACY_TABLE = """## 审计角色外置 CLI 声明
-
-| 角色 | 承载 CLI | 启动命令 |
-|---|---|---|
-| Reviewer（审计/红队） | omp | `omp --model openai-codex/gpt-5.6-terra` |
-"""
-
 
 class RolesYamlTests(TestCase):
     """roles.yaml 是角色承载唯一真源：命令以结构化 argv 存 command_profiles，角色只引用 profile。"""
@@ -116,10 +107,6 @@ class RolesYamlTests(TestCase):
         self.assertEqual(reps["Builder"], "external_missing")
         self.assertEqual(reps["Maintainer"], "profile_missing")
         self.assertEqual(reps["Designer"], "subagent_default")
-
-    def test_legacy_table_still_readable(self) -> None:
-        roles = parse_role_table(LEGACY_TABLE)
-        self.assertEqual(roles["Reviewer"]["cli"], "omp")
 
 
 class Tier3RolesResolutionTests(TestCase):

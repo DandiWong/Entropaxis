@@ -239,51 +239,6 @@ def detect_installed_agents() -> list[dict[str, Any]]:
     return results
 
 
-def parse_role_table(content: str) -> dict[str, dict[str, str]]:
-    """旧布局只读兼容：从 workspace-config.md 解析角色 Markdown 表（新布局见 roles.yaml）。
-
-    返回结构: { "Reviewer": {"duty": "...", "cli": "...", "cmd": "..."}, ... }
-    """
-    roles: dict[str, dict[str, str]] = {}
-    in_role_section = False
-    for line in content.splitlines():
-        stripped = line.strip()
-        if "## 角色模态外置 CLI 与模型声明" in line or "## 审计角色外置 CLI 声明" in line:
-            in_role_section = True
-            continue
-        if in_role_section and stripped.startswith("## "):
-            break
-        if not in_role_section or not stripped.startswith("|") or not stripped.endswith("|"):
-            continue
-
-        raw_cols = re.split(r"(?<!\\)\|", stripped)[1:-1]
-        cols = [c.strip().replace(r"\|", "|") for c in raw_cols]
-        if not cols or cols[0] in ("角色", "角色模态") or set(cols[0]) <= set("-: "):
-            continue
-
-        role_raw = cols[0]
-        role_key = role_raw.split("（")[0].split("(")[0].strip()
-
-        if len(cols) >= 4:
-            duty, cli, cmd = cols[1], cols[2], cols[3]
-        elif len(cols) == 3:
-            duty = STANDARD_ROLES.get(role_key, "业务协作")
-            cli, cmd = cols[1], cols[2]
-        elif len(cols) == 2:
-            duty = STANDARD_ROLES.get(role_key, "业务协作")
-            cli, cmd = cols[1], "内置 Subagent 机制 (auto)"
-        else:
-            continue
-
-        roles[role_key] = {
-            "duty": duty,
-            "cli": cli,
-            "cmd": cmd.strip("`"),
-        }
-
-    return roles
-
-
 class ConfigError(ValueError):
     """命令无法安全转成结构化 argv（缺占位符 / 含 shell 元字符 / 角色名非法）。"""
 
