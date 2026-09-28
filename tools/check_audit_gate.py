@@ -636,6 +636,11 @@ def _carrier_consistency_issues(text: str) -> list[str]:
         return []
     fm = vs.parse_front_matter(f"---\n{fm_text}\n---\n") or {}
     mode, carrier = fm.get("reviewer_mode"), fm.get("carrier")
+    # v4 是新契约，没有"历史报告无 carrier"的豁免：自称外置却无盖章即不构成独立性证据
+    # （Tech-136 r10 实测：调度超时未盖章的报告凭自述关闭了 Critical 仍过门禁）。
+    if mode == "external" and not carrier and fm.get("schema_version") == 4:
+        return ["reviewer_mode=external 但缺 carrier/receipt_id；v4 报告的外置承载须由调度器盖章"
+                "（调度超时或未经 dispatch_role 的报告不得凭自述取得外置特权）。"]
     if not mode or not carrier:
         return []  # 缺任一字段不在本检查射程内（历史报告无 carrier，空态即初始态）
     actually_external = carrier != "session-local"
