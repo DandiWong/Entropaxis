@@ -7,7 +7,9 @@
     "front_matter",
     "issue_format",
     "level_enum",
-    "status_enum"
+    "status_enum",
+    "gate_enum",
+    "evidence_enum"
   ],
   "additionalProperties": false,
   "properties": {
@@ -51,11 +53,20 @@
           ]
         },
         "schema_version": {
-          "$comment": "新旧判别的唯一依据。2=v2 行内标注契约（散文解析）；3=v3 audit-state 围栏契约（JSON 单一真源）。此前用 minimum:2 声明，实际却只在恰好等于 2 时触发 conditional_required 的必填字段（R6-C2）；改用 enum 显式枚举在用版本，未来新增版本时同步扩展 enum 与 conditional_required，不再允许'通过范围检查但未接线必填规则'的中间态。",
+          "$comment": "新旧判别的唯一依据。2=v2 行内标注契约（散文解析）；3=v3 audit-state 围栏契约（JSON 单一真源）。此前用 minimum:2 声明，实际却只在恰好等于 2 时触发 conditional_required 的必填字段（R6-C2）；改用 enum 显式枚举在用版本，未来新增版本时同步扩展 enum 与 conditional_required，不再允许'通过范围检查但未接线必填规则'的中间态。 4=v3 围栏契约 + audit_phase（plan|impl）与 open 问题准入字段 gate/basis/evidence/repro（判据由 check_audit_gate._v4_admission_issues 强制，真源 rules/角色协作.md「方案审修协同闭环」）。",
           "type": "integer",
           "enum": [
             2,
-            3
+            3,
+            4
+          ]
+        },
+        "audit_phase": {
+          "$comment": "schema_version 4 必填：本轮是方案轻审（plan）还是实施主审（impl）；只前移不回退。",
+          "type": "string",
+          "enum": [
+            "plan",
+            "impl"
           ]
         },
         "reviewer_mode": {
@@ -123,6 +134,19 @@
         },
         {
           "when": {
+            "schema_version": 4
+          },
+          "require": [
+            "reviewer_mode",
+            "reviewer_ref",
+            "target_path",
+            "target_sha256",
+            "audit_phase"
+          ],
+          "message": "schema_version 4 起另须声明 audit_phase（plan|impl）"
+        },
+        {
+          "when": {
             "reviewer_mode": "session"
           },
           "require": [
@@ -154,7 +178,7 @@
       }
     },
     "sidecar_format": {
-      "$comment": "schema_version 3 的机器状态唯一真源：报告正文内恰好一个 ```audit-state``` 围栏，内为合法 JSON（结构如下）。散文问题清单仅为人类叙事，不再被解析器读取——连续 5 轮外置复核证明散文解析的格式变体攻击面无界（第 12 轮用户裁定重构）。issues 的 level/status 取值仍以顶层 level_enum/status_enum 为唯一真源，由 check_audit_gate.py 在结构校验后交叉核对，避免两份枚举漂移。",
+      "$comment": "schema_version 3 的机器状态唯一真源：报告正文内恰好一个 ```audit-state``` 围栏，内为合法 JSON（结构如下）。散文问题清单仅为人类叙事，不再被解析器读取——连续 5 轮外置复核证明散文解析的格式变体攻击面无界（第 12 轮用户裁定重构）。issues 的 level/status 取值仍以顶层 level_enum/status_enum 为唯一真源，由 check_audit_gate.py 在结构校验后交叉核对，避免两份枚举漂移。 v4 起 open 问题另带 gate/basis/evidence（实施主审的阻断级另带 repro），取值域为顶层 gate_enum/evidence_enum；items.required 不变以保 v3 零回归，v4 必填由门禁代码强制。",
       "fence": "audit-state",
       "type": "object",
       "required": [
@@ -183,6 +207,20 @@
               },
               "status": {
                 "type": "string"
+              },
+              "gate": {
+                "type": "string"
+              },
+              "basis": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evidence": {
+                "type": "string"
+              },
+              "repro": {
+                "type": "string",
+                "minLength": 1
               }
             }
           }
@@ -233,6 +271,20 @@
       "items": {
         "type": "string"
       }
+    },
+    "gate_enum": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence_enum": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
     }
   },
   "level_enum": [
@@ -243,7 +295,19 @@
   "status_enum": [
     "open",
     "closed",
-    "waived_by_user"
+    "waived_by_user",
+    "withdrawn"
+  ],
+  "gate_enum": [
+    "plan",
+    "impl",
+    "release",
+    "none"
+  ],
+  "evidence_enum": [
+    "measured",
+    "traced",
+    "inferred"
   ],
   "instance": {
     "$comment": "本 schema 描述的规范实例，同时作为 validate_schema.py 的自检样例。",
@@ -275,6 +339,14 @@
           "id": "M-1",
           "level": "Major",
           "status": "waived_by_user"
+        },
+        {
+          "id": "M-2",
+          "level": "Major",
+          "status": "open",
+          "gate": "impl",
+          "basis": "AC-2",
+          "evidence": "traced"
         }
       ],
       "critical_acks": [
@@ -294,7 +366,19 @@
     "status_enum": [
       "open",
       "closed",
-      "waived_by_user"
+      "waived_by_user",
+      "withdrawn"
+    ],
+    "gate_enum": [
+      "plan",
+      "impl",
+      "release",
+      "none"
+    ],
+    "evidence_enum": [
+      "measured",
+      "traced",
+      "inferred"
     ]
   }
 }

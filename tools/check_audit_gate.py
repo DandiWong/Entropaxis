@@ -11,6 +11,9 @@
   原子校验并提交（拟写入的关闭后状态一次性校验+落盘，closed 与 waived_by_user 均须过此关）：
     python3 .entropaxis/tools/check_audit_gate.py --candidate <候选报告路径> --commit <目标路径>
 
+schema_version 4 = v3 围栏契约 + audit_phase 与 open 问题准入字段（gate/basis/evidence/repro），
+判据见 _v4_admission_issues。
+
 字段契约见 .entropaxis/schemas/audit_report.schema.json。schema_version 缺失
 按旧 independence 契约只读解析；**只要 Front Matter 出现 schema_version 键**（无论是否
 能解析为合法整数）即视为声明使用新契约，全量校验该契约——不会因为版本号写错就静默
@@ -45,7 +48,18 @@ FRONT_MATTER_PATTERN = re.compile(r"^[\s\u00ad\u200b-\u200f\u202a-\u202e\u2060\u
 # pattern/enum 从未被本文件读取，等于两份定义各自维护，只会继续分裂）。
 _AUDIT_SCHEMA = vs.load_schema("audit_report")
 LEVEL_ENUM = tuple(_AUDIT_SCHEMA["level_enum"])
-V2_STATUS_ENUM = tuple(_AUDIT_SCHEMA["status_enum"])
+STATUS_ENUM = tuple(_AUDIT_SCHEMA["status_enum"])
+# v2 散文契约冻结在引入 withdrawn 之前的三值，不因 schema 扩枚举而悄悄放宽。
+V2_STATUS_ENUM = tuple(s for s in STATUS_ENUM if s != "withdrawn")
+GATE_ENUM = tuple(_AUDIT_SCHEMA["gate_enum"])
+EVIDENCE_ENUM = tuple(_AUDIT_SCHEMA["evidence_enum"])
+# 围栏契约的在用版本；v4 与 v3 共用解析与状态校验，只多一层问题准入。
+FENCE_VERSIONS = (3, 4)
+# release/none 不参与排序：上线前提由 Maintainer 验收核对，既有缺陷另立事项，均不阻断审计门禁。
+GATE_ORDER = {"plan": 0, "impl": 1}
+BLOCKING_LEVELS = ("Critical", "Major")
+# 须外置复核才能落下的 Critical 终态：withdrawn（撤销误报/重复）与 closed 同等，否则撤销即旁路。
+CRITICAL_EXTERNAL_STATUSES = ("closed", "withdrawn")
 
 # 候选问题区块：按"边界行"切分正文，边界行 = 标题行 / --- 分隔线 / 空行（包括只有
 # 空白的行）。第 7 轮把边界从"级别:"本身改成了标题，第 8 轮外置复核又实测抓到：
@@ -114,8 +128,8 @@ def parse_front_matter(text: str) -> dict:
     return vs.parse_front_matter(text) or {}
 
 def is_v3(text: str) -> bool:
-    """schema_version 恰为 3：机器状态走 audit-state 围栏契约。"""
-    return parse_front_matter(text).get("schema_version") == 3
+    """schema_version 属 FENCE_VERSIONS（3/4）：机器状态走 audit-state 围栏契约。"""
+    return parse_front_matter(text).get("schema_version") in FENCE_VERSIONS
 
 
 def is_v2(text: str) -> bool:
@@ -128,7 +142,7 @@ def is_v2(text: str) -> bool:
     致使整份 v2 报告被错误地当成旧契约放行（第 5 轮外置复核实测抓到的 fail-open）。
     """
     fm = parse_front_matter(text)
-    return "schema_version" in fm and fm.get("schema_version") != 3
+    return "schema_version" in fm and fm.get("schema_version") not in FENCE_VERSIONS
 
 
 def extract_independence(text: str) -> str | None:
@@ -532,12 +546,12 @@ def check_report_v3(text: str) -> list[str]:
             seen_ids[issue_id] = seen_ids.get(issue_id, 0) + 1
         if level is not None and level not in LEVEL_ENUM:
             issues.append(f"[{issue_id}] level={level!r} 不在枚举 {LEVEL_ENUM} 内。")
-        if status is not None and status not in V2_STATUS_ENUM:
-            issues.append(f"[{issue_id}] status={status!r} 不在枚举 {V2_STATUS_ENUM} 内。")
-        if level == "Critical" and status == "closed" and reviewer_mode != "external":
+        if status is not None and status not in STATUS_ENUM:
+            issues.append(f"[{issue_id}] status={status!r} 不在枚举 {STATUS_ENUM} 内。")
+        if level == "Critical" and status in CRITICAL_EXTERNAL_STATUSES and reviewer_mode != "external":
             issues.append(
-                f"[{issue_id}] status=closed 但 reviewer_mode={reviewer_mode!r}；"
-                "会话内承载不可将 Critical 置为 closed，必须由外置 reviewer 复核。"
+                f"[{issue_id}] status={status} 但 reviewer_mode={reviewer_mode!r}；"
+                f"会话内承载不可将 Critical 置为 {status}，必须由外置 reviewer 复核。"
             )
     for dup_id, count in seen_ids.items():
         if count > 1:
@@ -565,7 +579,48 @@ def check_report_v3(text: str) -> list[str]:
                 issues.append(
                     f"[{item.get('id')}] critical_ack.target_sha256 与报告 target_sha256 不一致，复核对象已变化。"
                 )
+    if fm.get("schema_version") == 4:
+        issues += _v4_admission_issues(fm, raw_issues)
     return issues
+
+
+def blocking_ids(issues: list, phase: str) -> list[str]:
+    """本阶段阻断：open 的 Critical/Major，gate 为 plan/impl 且不晚于 phase。
+    真源：rules/角色协作.md「方案审修协同闭环」第 4 条。"""
+    limit = GATE_ORDER[phase]
+    return [i.get("id") for i in issues
+            if isinstance(i, dict) and i.get("status") == "open"
+            and i.get("level") in BLOCKING_LEVELS
+            and i.get("gate") in GATE_ORDER and GATE_ORDER[i["gate"]] <= limit]
+
+
+def _v4_admission_issues(fm: dict, raw_issues: list) -> list[str]:
+    """schema_version 4 问题准入：open 问题须有 gate/basis/evidence；推断不得定阻断级；
+    实施主审的阻断级须可复现；completed 须无残留阻断。只约束 open 条目——已关闭的
+    历史条目不必补字段（升级 v4 时零迁移负担）。"""
+    out: list[str] = []
+    phase = fm.get("audit_phase")
+    for item in raw_issues:
+        if not isinstance(item, dict) or item.get("status") != "open":
+            continue
+        iid, level, ev, gate = item.get("id"), item.get("level"), item.get("evidence"), item.get("gate")
+        if gate not in GATE_ENUM:
+            out.append(f"[{iid}] gate={gate!r} 不在枚举 {GATE_ENUM} 内。")
+        if not str(item.get("basis") or "").strip():
+            out.append(f"[{iid}] 缺 basis：须引用 G-/NG-/AC- 编号或项目硬约束。")
+        if ev not in EVIDENCE_ENUM:
+            out.append(f"[{iid}] evidence={ev!r} 不在枚举 {EVIDENCE_ENUM} 内。")
+        elif ev == "inferred" and level in BLOCKING_LEVELS:
+            out.append(f"[{iid}] evidence=inferred 只能定 Minor；定 {level} 须实测（measured）"
+                       "或给出可核对的调用链（traced）。")
+        if (phase == "impl" and level in BLOCKING_LEVELS and gate in GATE_ORDER
+                and not str(item.get("repro") or "").strip()):
+            out.append(f"[{iid}] 实施主审的 open {level} 须附 repro（失败测试或复现命令）。")
+    if fm.get("status") == "completed":
+        left = blocking_ids(raw_issues, "impl")
+        if left:
+            out.append(f"status=completed 但仍有阻断问题 {left}；冻结前须全部 closed / withdrawn / waived_by_user。")
+    return out
 
 
 def _carrier_consistency_issues(text: str) -> list[str]:
@@ -629,7 +684,7 @@ def check_report(text: str, receipt_check: bool = True) -> list[str]:
     # 同样会把含围栏的报告路由进无视机器状态的旧分支（第 12 轮第七批实测，
     # 只读路径可绕过；原子接口虽拒但官方只读路径必须同样关死）。
     if not is_v3(text) and _FENCE_INTENT.search(_canonical(text)):
-        return dup + ["报告包含 audit-state 围栏（或其变体）但 schema_version 不是 3；不得借版本字段缺失/篡改或围栏标签变体降级到旧契约无视机器状态。"]
+        return dup + ["报告包含 audit-state 围栏（或其变体）但 schema_version 不是 3/4；不得借版本字段缺失/篡改或围栏标签变体降级到旧契约无视机器状态。"]
     if is_v3(text):
         return dup + check_report_v3(text)
     canonical = _canonical(text)
@@ -679,7 +734,7 @@ def _find_workspace_root(start: Path) -> Path | None:
     return None
 
 
-def check_candidate_commit(candidate_text: str, commit_path: Path) -> list[str]:
+def check_candidate_commit(candidate_text: str, commit_path: Path, receipt_check: bool = True) -> list[str]:
     """--candidate/--commit 原子接口的额外校验：target_sha256 与目标受审文件实测哈希一致。
 
     先跑 check_report()（含完整 Front Matter 校验），字段本身缺失/非法已在那一步拦截；
@@ -693,8 +748,8 @@ def check_candidate_commit(candidate_text: str, commit_path: Path) -> list[str]:
     只是不能再经这个"拟写入关闭状态"的原子入口。
     """
     if not (is_v2(candidate_text) or is_v3(candidate_text)):
-        return ["--candidate/--commit 原子接口只接受 schema_version 2/3 的候选；legacy 格式不得用于写入新的关闭/豁免状态。"]
-    issues = check_report(candidate_text)
+        return ["--candidate/--commit 原子接口只接受 schema_version 2/3/4 的候选；legacy 格式不得用于写入新的关闭/豁免状态。"]
+    issues = check_report(candidate_text, receipt_check)
     fm = parse_front_matter(candidate_text)
     target_path, target_sha256 = fm.get("target_path"), fm.get("target_sha256")
     if not target_path or not target_sha256:
@@ -752,7 +807,7 @@ def main() -> int:
         violations = check_candidate_commit(candidate_text, commit_path)
         if violations:
             for v in violations:
-                print(f"[Critical违规关闭] {candidate_path}: {v}", file=sys.stderr)
+                print(f"[审计门禁] {candidate_path}: {v}", file=sys.stderr)
             print(f"❌ 校验未通过，未写入 {commit_path}。", file=sys.stderr)
             return 1
         atomic_write(commit_path, candidate_text)
@@ -770,7 +825,7 @@ def main() -> int:
     issues = check_report_file(path)  # 走 path 感知入口：CLI 与调度器共用同一判据（复核 C-02）
     if issues:
         for issue in issues:
-            print(f"[Critical违规关闭] {path}: {issue}", file=sys.stderr)
+            print(f"[审计门禁] {path}: {issue}", file=sys.stderr)
         return 1
     print(f"✅ {path} 未发现会话内降级下的 Critical 违规关闭。")
     return 0

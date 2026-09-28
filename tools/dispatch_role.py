@@ -1091,8 +1091,10 @@ def _bind_prompt(prompt: str, role: str, deliverable: Path | None, target: Path 
                      f"真实存在的文件路径（相对 {base}，会被逐一核验，写不存在的文件即判不合规）：\n" + FENCE_TEMPLATE)
     elif fence:
         parts.append(f"[状态围栏] 交付物中必须恰好包含一个 ```{fence}``` 围栏，内为合法 JSON "
-                     '（如 {"issues": [{"id": "C-1", "level": "Critical", "status": "open"}], "critical_acks": []}）；'
-                     "散文清单不被解析器读取。")
+                     '（如 {"issues": [{"id": "C-1", "level": "Critical", "status": "open", "gate": "plan", '
+                     '"basis": "AC-1", "evidence": "traced"}], "critical_acks": []}）；'
+                     "散文清单不被解析器读取。新报告 Front Matter 用 schema_version: 4 并声明 audit_phase（plan|impl），"
+                     "open 问题须带 gate/basis/evidence，evidence=inferred 只能定 Minor，实施主审的 Critical/Major 另带 repro。")
     if ROLE_CRITERIA.get(role, {}).get("schema"):
         parts.append("[结构判据] 交付物须通过 validate_schema.py：Front Matter 字段合规，且正文含本类型"
                      "要求的章节（调研四段式并标注带链接的一手信源；方案含边界与替代方案对比；报告含"

@@ -17,6 +17,11 @@
      那一份就是绕过独立复核的后门。
   2. **原子写入**：tempfile 同目录组装 + os.replace，中途失败不留半截文件。
   3. **围栏解析复用**：正则与重复键拒绝都直接用 check_audit_gate 的实现，不另起一套解析。
+  4. **改动即失去盖章**：调度回执绑定的是含围栏的正文，改任何字段都会与回执失配。
+     写入前不查回执（与 dispatch_role 签发前的判据同语义），写入时一并删去 receipt_id：
+     报告若自称外置承载，完整核验即报"未携带 receipt_id"而阻断，须由下一轮真实
+     Reviewer 调度重新盖章才恢复有效——会话改动（含越权关闭 Critical）只会以
+     "报告失效"的形式暴露，不会挂着旧回执冒充外置结论。
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import re
 import tempfile
 from pathlib import Path
 
@@ -73,7 +79,20 @@ def dump_state(text: str, state: dict) -> str:
     return new_text
 
 
-def add_issue(state: dict, issue_id: str, level: str, status: str = "open") -> dict:
+# v4 问题准入字段：有 {field}_enum 的走枚举，其余只要求非空；是否必填由门禁判定，本工具不复制判据。
+V4_FIELDS = ("gate", "basis", "evidence", "repro")
+_RECEIPT_LINE = re.compile(r"^receipt_id:.*\n", re.MULTILINE)
+
+
+def _check_value(field: str, value: str) -> None:
+    schema = cag.vs.load_schema("audit_report")
+    if f"{field}_enum" in schema:
+        _reject_unknown(field, value, schema[f"{field}_enum"])
+    elif not value.strip():
+        raise AuditStateError(f"❌ {field} 不能为空。\n👉 修复建议: 写明取值后重试。")
+
+
+def add_issue(state: dict, issue_id: str, level: str, status: str = "open", **extra: str | None) -> dict:
     issues = state.setdefault("issues", [])
     if any(i.get("id") == issue_id for i in issues):
         raise AuditStateError(
@@ -82,19 +101,23 @@ def add_issue(state: dict, issue_id: str, level: str, status: str = "open") -> d
         )
     _reject_unknown("level", level, cag.vs.load_schema("audit_report")["level_enum"])
     _reject_unknown("status", status, cag.vs.load_schema("audit_report")["status_enum"])
-    issues.append({"id": issue_id, "level": level, "status": status})
+    item = {"id": issue_id, "level": level, "status": status}
+    for field in V4_FIELDS:
+        if extra.get(field) is not None:
+            _check_value(field, extra[field])
+            item[field] = extra[field]
+    issues.append(item)
     state.setdefault("critical_acks", [])
     return state
 
 
 def set_field(state: dict, issue_id: str, field: str, value: str) -> dict:
-    if field not in ("level", "status"):
+    if field not in ("level", "status") + V4_FIELDS:
         raise AuditStateError(
-            f"❌ 不支持的字段 {field!r}（仅 level / status 可改）。\n"
+            f"❌ 不支持的字段 {field!r}（仅 level / status / {' / '.join(V4_FIELDS)} 可改）。\n"
             "👉 修复建议: critical_acks 属用户风险接受记录，须人工确认后单独维护，不由本工具代写。"
         )
-    schema = cag.vs.load_schema("audit_report")
-    _reject_unknown(field, value, schema[f"{field}_enum"])
+    _check_value(field, value)
     for issue in state.get("issues", []):
         if issue.get("id") == issue_id:
             issue[field] = value
@@ -113,19 +136,43 @@ def _reject_unknown(field: str, value: str, allowed: list[str]) -> None:
         )
 
 
-def commit(path: Path, new_text: str) -> None:
-    """经 check_audit_gate 放行后才原子落盘——门禁策略只有那一份实现。"""
-    violations = cag.check_candidate_commit(new_text, path)
+def _strip_receipt(text: str) -> tuple[str, bool]:
+    """删去 Front Matter 的 receipt_id 行（与 dispatch_role.stamp_carrier 的 "" 删除语义一致）。"""
+    fm = cag.FRONT_MATTER_PATTERN.search(text)
+    if not fm:
+        return text, False
+    block, n = _RECEIPT_LINE.subn("", fm.group(1) + "\n")
+    return text[:fm.start(1)] + block.rstrip("\n") + text[fm.end(1):], n > 0
+
+
+def commit(path: Path, new_text: str) -> bool:
+    """经 check_audit_gate 放行后才原子落盘——门禁策略只有那一份实现。
+
+    返回是否删去了回执（设计不变量 4）。"""
+    violations = cag.check_candidate_commit(new_text, path, receipt_check=False)
     if violations:
         raise AuditStateError(
             "❌ 候选状态未通过审计门禁，未写入:\n  - " + "\n  - ".join(violations) + "\n"
-            "👉 修复建议: Critical 的 closed / 任何 waived_by_user 都必须先具备结构完整且指纹匹配的 "
-            "critical_ack，并由外置 Reviewer 复核；本工具不提供绕过路径。"
+            "👉 修复建议: 按上列逐条补齐——v4 的 open 问题须带 gate/basis/evidence（--gate/--basis/--evidence）；"
+            "Critical 的 closed/withdrawn 须外置 Reviewer 复核，waived_by_user 须有指纹匹配的 critical_ack；"
+            "本工具不提供绕过路径。"
         )
+    new_text, unsigned = _strip_receipt(new_text)
     with tempfile.TemporaryDirectory(dir=path.parent) as tmp:
         tmp_path = Path(tmp) / path.name
         tmp_path.write_text(new_text, encoding="utf-8")
         tmp_path.replace(path)
+    return unsigned
+
+
+def blocking_summary(issues: list, phase: str) -> str:
+    """供 Manager 判断放行与熔断的一行汇总；阻断判据只调用 check_audit_gate.blocking_ids。"""
+    blocking = cag.blocking_ids(issues, phase)
+    open_items = [i for i in issues if i.get("status") == "open"]
+    count = lambda g: sum(1 for i in open_items if i.get("gate") == g)  # noqa: E731
+    later = count("impl") if phase == "plan" else 0
+    return (f"本阶段（{phase}）阻断 {len(blocking)}（{', '.join(blocking) or '无'}）｜待实施 {later}"
+            f"｜上线前提 {count('release')}｜另立事项 {count('none')}")
 
 
 def main() -> int:
@@ -136,6 +183,9 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="只读列出现有问题条目")
     parser.add_argument("--add-issue", metavar="ID:LEVEL", help="登记新问题，如 C-2:Critical")
     parser.add_argument("--status", default="open", help="配合 --add-issue 的初始状态，默认 open")
+    for field, hint in (("gate", "plan|impl|release|none"), ("basis", "引用 G-/NG-/AC- 或项目硬约束"),
+                        ("evidence", "measured|traced|inferred"), ("repro", "失败测试或复现命令")):
+        parser.add_argument(f"--{field}", help=f"配合 --add-issue（v4）：{hint}")
     parser.add_argument("--set", nargs=2, metavar=("ID", "FIELD=VALUE"),
                         help="更新既有问题字段，如 --set C-2 status=closed")
     parser.add_argument("--json", action="store_true", help="以结构化 JSON 输出")
@@ -157,8 +207,11 @@ def main() -> int:
                 print(json.dumps(state, ensure_ascii=False, indent=2))
             else:
                 for i in issues:
-                    print(f"{i['id']}\t{i['level']}\t{i['status']}")
+                    print(f"{i['id']}\t{i['level']}\t{i['status']}\t{i.get('gate', '-')}\t{i.get('evidence', '-')}")
                 print(f"# {len(issues)} 条，其中 open {sum(1 for i in issues if i['status'] == 'open')} 条")
+                phase = cag.parse_front_matter(text).get("audit_phase")
+                if phase in cag.GATE_ORDER:
+                    print("# " + blocking_summary(issues, phase))
             return 0
 
         if args.add_issue:
@@ -168,7 +221,8 @@ def main() -> int:
                     "❌ --add-issue 格式应为 ID:LEVEL（如 C-2:Critical）。\n"
                     "👉 修复建议: 补上冒号与级别后重试。"
                 )
-            state = add_issue(state, issue_id.strip(), level.strip(), args.status.strip())
+            state = add_issue(state, issue_id.strip(), level.strip(), args.status.strip(),
+                              **{f: getattr(args, f) for f in V4_FIELDS})
         if args.set:
             issue_id, assignment = args.set
             field, _, value = assignment.partition("=")
@@ -179,12 +233,16 @@ def main() -> int:
                 )
             state = set_field(state, issue_id.strip(), field.strip(), value.strip())
 
-        commit(path, dump_state(text, state))
+        unsigned = commit(path, dump_state(text, state))
+        if unsigned and not args.json:
+            print("⚠️ 状态已推进，已删去 receipt_id：报告回到待复核态，下一轮 Reviewer 复核后重新盖章才恢复有效。",
+                  file=sys.stderr)
         counts = {}
         for i in state.get("issues", []):
             counts[i["status"]] = counts.get(i["status"], 0) + 1
         summary = " ".join(f"{k}={v}" for k, v in sorted(counts.items()))
-        print(json.dumps({"ok": True, "report": str(path), "counts": counts}, ensure_ascii=False)
+        print(json.dumps({"ok": True, "report": str(path), "counts": counts, "receipt_cleared": unsigned},
+                         ensure_ascii=False)
               if args.json else f"✅ 已更新 {path.name}: {summary}")
         return 0
     except AuditStateError as err:

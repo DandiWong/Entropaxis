@@ -7,6 +7,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools import update_audit_state as uas
 
@@ -144,6 +145,97 @@ class UpdateAuditStateTests(unittest.TestCase):
         )
         with self.assertRaises(uas.AuditStateError):
             uas.load_state(text)
+
+
+class UpdateAuditStateV4AndReceiptTests(unittest.TestCase):
+    """v4 字段写入，以及已盖章报告的状态推进（写入即清回执、报告回到待复核态）。"""
+
+    def _fixture(self, tmp: Path, version: int = 3, mode: str = "external") -> Path:
+        target = tmp / "01_方案.md"
+        target.write_text("方案正文\n", encoding="utf-8")
+        sha = hashlib.sha256(target.read_bytes()).hexdigest()
+        extra = ""
+        if version == 4:
+            extra = "audit_phase: plan\n"
+        if mode == "session":
+            extra += "fallback_reason: not_configured\n"
+        text = REPORT_TEMPLATE.format(mode=mode, target=target.name, sha=sha, extra=extra)
+        text = text.replace("schema_version: 3", f"schema_version: {version}")
+        if version == 4:
+            text = text.replace('"status": "open"}', '"status": "open", "gate": "impl", "basis": "AC-1", '
+                                                       '"evidence": "traced"}')
+        report = tmp / "05_审计报告.md"
+        report.write_text(text, encoding="utf-8")
+        return report
+
+    def _sign(self, report: Path, tmp: Path):
+        """模拟调度器盖章：签发 Reviewer 回执并写入 carrier/receipt_id。"""
+        from tools import check_audit_gate as cag, dispatch_receipt as rc
+        patches = [mock.patch.object(rc, "RECEIPT_DIR", tmp / "receipts"),
+                   mock.patch.object(rc, "load_key", return_value=b"k")]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        rec = rc.issue("Reviewer", "0" * 64, report, tmp / "01_方案.md", "reviewer-primary")
+        text = report.read_text(encoding="utf-8").replace(
+            "---\n\n## 问题清单", f"carrier: reviewer-primary\nreceipt_id: {rec['receipt_id']}\n---\n\n## 问题清单", 1)
+        report.write_text(text, encoding="utf-8")
+        self.assertEqual(cag.check_report_file(report), [])
+        return cag
+
+    def _set(self, report: Path, issue_id: str, field: str, value: str) -> bool:
+        text = report.read_text(encoding="utf-8")
+        return uas.commit(report, uas.dump_state(text, uas.set_field(uas.load_state(text), issue_id, field, value)))
+
+    def test_signed_report_advances_and_loses_receipt(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            report = self._fixture(tmp)
+            cag = self._sign(report, tmp)
+            self.assertTrue(self._set(report, "M-1", "status", "closed"))
+            self.assertNotIn("receipt_id:", report.read_text(encoding="utf-8"))
+            self.assertTrue(any("receipt_id" in i for i in cag.check_report_file(report)))
+
+    def test_signed_report_critical_close_is_exposed_not_laundered(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            report = self._fixture(tmp)
+            cag = self._sign(report, tmp)
+            self.assertTrue(self._set(report, "C-1", "status", "closed"))
+            self.assertTrue(cag.check_report_file(report))  # 失效，须下一轮 Reviewer 重盖章
+
+    def test_session_report_still_cannot_close_critical(self):
+        with tempfile.TemporaryDirectory() as td:
+            report = self._fixture(Path(td), mode="session")
+            with self.assertRaises(uas.AuditStateError):
+                self._set(report, "C-1", "status", "closed")
+
+    def test_v4_add_issue_writes_fields_and_gate_enforces(self):
+        with tempfile.TemporaryDirectory() as td:
+            report = self._fixture(Path(td), version=4)
+            text = report.read_text(encoding="utf-8")
+            state = uas.add_issue(uas.load_state(text), "M-2", "Major", gate="plan", basis="AC-1",
+                                  evidence="measured")
+            uas.commit(report, uas.dump_state(text, state))
+            self.assertEqual(uas.load_state(report.read_text(encoding="utf-8"))["issues"][-1]["evidence"], "measured")
+            text = report.read_text(encoding="utf-8")
+            state = uas.add_issue(uas.load_state(text), "M-3", "Major", gate="plan", basis="AC-1")
+            with self.assertRaises(uas.AuditStateError):  # 缺 evidence 由门禁拒绝
+                uas.commit(report, uas.dump_state(text, state))
+
+    def test_v4_field_enums_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = uas.load_state(self._fixture(Path(td), version=4).read_text(encoding="utf-8"))
+            with self.assertRaises(uas.AuditStateError):
+                uas.set_field(state, "C-1", "gate", "later")
+            with self.assertRaises(uas.AuditStateError):
+                uas.set_field(state, "C-1", "evidence", "guess")
+
+    def test_blocking_summary_matches_gate(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = uas.load_state(self._fixture(Path(td), version=4).read_text(encoding="utf-8"))
+            self.assertIn("阻断 0（无）｜待实施 2", uas.blocking_summary(state["issues"], "plan"))
+            self.assertIn("阻断 2（C-1, M-1）", uas.blocking_summary(state["issues"], "impl"))
 
 
 if __name__ == "__main__":

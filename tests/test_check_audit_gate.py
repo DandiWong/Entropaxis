@@ -880,3 +880,83 @@ class TargetBindingTests(unittest.TestCase):
                 mock.patch.object(sys, "stdout", io.StringIO()) as out:
             self.assertEqual(cag.main(), 0)
         self.assertEqual(out.getvalue().strip(), self._sha())
+
+
+class CheckAuditGateV4Tests(unittest.TestCase):
+    """schema_version 4：v3 围栏 + audit_phase 与 open 问题准入（gate/basis/evidence/repro）。"""
+
+    OK_IMPL = {"id": "C-1", "level": "Critical", "status": "open", "gate": "impl",
+               "basis": "AC-1", "evidence": "traced"}
+
+    def _v4(self, issues, phase="plan", mode="external", status="active", fm_extra=""):
+        fm = ("---\ntype: Audit\ntopic: t\ndate: 2026-09-28\nauthor: Reviewer\nstatus: " + status + "\n"
+              "schema_version: 4\nreviewer_mode: " + mode + "\n"
+              "reviewer_ref: " + ("some-cli --model x" if mode == "external" else "session") + "\n"
+              "target_path: 02_方案.md\ntarget_sha256: " + SHA_A + "\n"
+              + (f"audit_phase: {phase}\n" if phase else "")
+              + ("fallback_reason: not_configured\n" if mode == "session" else "") + fm_extra)
+        state = {"issues": issues, "critical_acks": []}
+        return fm + "---\n\n```audit-state\n" + json.dumps(state, ensure_ascii=False) + "\n```\n"
+
+    def _issue(self, **kw):
+        return {**self.OK_IMPL, **kw}
+
+    def test_valid_plan_report_with_deferred_and_spinoff_passes(self) -> None:
+        issues = [self._issue(), self._issue(id="M-1", level="Major", gate="none"),
+                  self._issue(id="M-2", level="Major", gate="release")]
+        self.assertEqual(check_report(self._v4(issues)), [])
+
+    def test_missing_audit_phase_blocked(self) -> None:
+        self.assertTrue(any("audit_phase" in i for i in check_report(self._v4([self._issue()], phase=None))))
+
+    def test_open_issue_missing_fields_blocked(self) -> None:
+        for field in ("gate", "basis", "evidence"):
+            item = self._issue()
+            del item[field]
+            with self.subTest(field=field):
+                self.assertTrue(any(field in i for i in check_report(self._v4([item])) ))
+
+    def test_enum_violations_blocked(self) -> None:
+        out = check_report(self._v4([self._issue(gate="later", evidence="guess")]))
+        self.assertTrue(any("gate='later'" in i for i in out))
+        self.assertTrue(any("evidence='guess'" in i for i in out))
+
+    def test_inferred_capped_at_minor_for_open_only(self) -> None:
+        self.assertTrue(any("只能定 Minor" in i for i in
+                            check_report(self._v4([self._issue(level="Major", evidence="inferred")]))))
+        self.assertEqual(check_report(self._v4([self._issue(level="Minor", evidence="inferred")])), [])
+        closed = {"id": "M-9", "level": "Major", "status": "closed"}  # 历史条目免补字段
+        self.assertEqual(check_report(self._v4([closed])), [])
+
+    def test_impl_phase_blocking_requires_repro(self) -> None:
+        self.assertTrue(any("repro" in i for i in check_report(self._v4([self._issue()], phase="impl"))))
+        self.assertEqual(check_report(self._v4([self._issue(repro="pytest t::x")], phase="impl")), [])
+        for gate in ("release", "none"):
+            with self.subTest(gate=gate):
+                self.assertEqual(check_report(self._v4([self._issue(gate=gate)], phase="impl")), [])
+
+    def test_completed_requires_no_blocking(self) -> None:
+        major = self._issue(id="M-1", level="Major", gate="impl")
+        self.assertTrue(any("status=completed" in i for i in check_report(self._v4([major], status="completed"))))
+        rest = [self._issue(id="M-2", level="Major", gate="release"),
+                self._issue(id="m-1", level="Minor", gate="impl"), self._issue(id="M-3", level="Major", gate="none")]
+        self.assertEqual(check_report(self._v4(rest, status="completed")), [])
+
+    def test_session_cannot_withdraw_critical_v3_and_v4(self) -> None:
+        withdrawn = [{"id": "C-1", "level": "Critical", "status": "withdrawn"}]
+        self.assertTrue(any("置为 withdrawn" in i for i in check_report(self._v4(withdrawn, mode="session"))))
+        v3 = self._v4(withdrawn, mode="session").replace("schema_version: 4", "schema_version: 3")
+        self.assertTrue(any("置为 withdrawn" in i for i in check_report(v3)))
+
+    def test_version_routing(self) -> None:
+        text = self._v4([self._issue()])
+        self.assertFalse(cag.is_v2(text))
+        self.assertTrue(cag.is_v3(text))
+        v5 = text.replace("schema_version: 4", "schema_version: 5")
+        self.assertTrue(check_report(v5))
+
+    def test_blocking_ids_respects_phase_order(self) -> None:
+        items = [self._issue(id="P", gate="plan"), self._issue(id="I"), self._issue(id="R", gate="release"),
+                 self._issue(id="N", gate="none"), self._issue(id="m", level="Minor", gate="plan")]
+        self.assertEqual(cag.blocking_ids(items, "plan"), ["P"])
+        self.assertEqual(cag.blocking_ids(items, "impl"), ["P", "I"])
