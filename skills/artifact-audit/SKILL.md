@@ -70,7 +70,7 @@ python3 .entropaxis/tools/check_audit_gate.py --fingerprint <受审文件或目�
 - **附条件通过**：本阶段无阻断，但仍有 `open` 的 Minor，或待实施、上线前提、另立事项；
 - **通过**：无任何 `open` 问题（或指定 Critical 记 `waived_by_user`）。
 
-不得用"基本通过""应该没问题"等模糊措辞替代结论。方案轻审通过后，下一轮把 `audit_phase` 改为 `impl`、`target_path` 改指改动目录，沿用同一报告；实施主审通过（无阻断）后把 Front Matter `status` 改为 `completed` 并冻结，门禁会拒绝残留阻断的冻结。
+不得用"基本通过""应该没问题"等模糊措辞替代结论。方案轻审通过后，下一轮把 `audit_phase` 改为 `impl`、`target_path` 改指胶囊内的实施 diff 文件（见《治理指令》「审计」第 2 条），沿用同一报告；实施主审通过（无阻断）后把 Front Matter `status` 改为 `completed` 并冻结，门禁会拒绝残留阻断的冻结。
 
 ### 5. 维护报告
 
