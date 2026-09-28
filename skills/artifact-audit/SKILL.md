@@ -3,12 +3,12 @@ name: artifact-audit
 description: "对可迭代工件执行可追溯审计，并在连续复审中维护同一份审计报告，逐轮核验旧问题、发现新问题，直到终审通过后冻结。用户要求审计、评审、复审、重新检查某份方案/文档/代码工件，提到既有审计报告，或要求记录问题闭环时应使用；一次性口头点评也先用本 Skill 判断是否需要落盘。"
 metadata:
   scope: control-plane
-  version: "2.0.0"
+  version: "2.1.0"
 ---
 
 # Artifact Audit
 
-把审计视为一个有边界的事件，而不是每次修改都生成一份新报告。触发、产物位置与关闭门禁的规则真源见 [`../../rules/治理指令.md`](../../rules/治理指令.md)「审计」；Reviewer 承载与问题终态见 [`../../rules/角色协作.md`](../../rules/角色协作.md)；报告字段契约见 [`../../schemas/audit_report.schema.json`](../../schemas/audit_report.schema.json)（`schema_version: 3`）；落盘命名与打开遵循 [`../../rules/文件交付.md`](../../rules/文件交付.md)。
+把审计视为一个有边界的事件，而不是每次修改都生成一份新报告。触发、产物位置与关闭门禁的规则真源见 [`../../rules/治理指令.md`](../../rules/治理指令.md)「审计」；Reviewer 承载与问题终态见 [`../../rules/角色协作.md`](../../rules/角色协作.md)；报告字段契约见 [`../../schemas/audit_report.schema.json`](../../schemas/audit_report.schema.json)（新报告用 `schema_version: 4`）；落盘命名与打开遵循 [`../../rules/文件交付.md`](../../rules/文件交付.md)。
 
 ## 输入
 
@@ -20,6 +20,8 @@ metadata:
 - 输出方式：仅会话反馈，或维护磁盘报告。
 
 只有用户明确要求落档、生成报告或继续维护既有报告时才写文件。否则完成一次性审计并在会话中返回结论，不创建报告。
+
+外置审计的任务书用 [`references/reviewer-brief.md`](references/reviewer-brief.md)（审什么、不审什么、问题准入、复核范围），由 Manager 填占位符，不临场自拟。
 
 ## 工作流
 
@@ -49,13 +51,14 @@ python3 .entropaxis/tools/check_audit_gate.py --fingerprint <受审文件或目�
 
 - 问题 ID 跨轮次稳定；新问题顺序递增，禁止因排序变化重编号。
 - 只有当前工件中的可定位证据证明修复完成时才标记 `closed`；承诺、计划或报告文字本身不算关闭证据。
-- 级别只用 `Critical` / `Major` / `Minor`，状态只用 `open` / `closed` / `waived_by_user`（取值域真源为 schema 的 `level_enum` / `status_enum`）。
+- 级别只用 `Critical` / `Major` / `Minor`，状态只用 `open` / `closed` / `withdrawn` / `waived_by_user`（取值域真源为 schema 的 `*_enum`）。`withdrawn` 用于误报、重复（正文写"重复于 X"）或前提已删除。
+- v4 报告的每条 open 问题带 `gate` / `basis` / `evidence`，实施主审的阻断级另带 `repro`，准入要求见任务书。
 - 状态只记在 `audit-state` 围栏里，用工具字段级修改，不手改 JSON：
   ```bash
-  python3 .entropaxis/tools/update_audit_state.py <报告> --add-issue M-1:Major
+  python3 .entropaxis/tools/update_audit_state.py <报告> --add-issue M-1:Major --gate plan --basis AC-1 --evidence traced
   python3 .entropaxis/tools/update_audit_state.py <报告> --set M-1 status=closed
   ```
-  工具写入前自动过 `check_audit_gate.py`；Critical 转 `closed` 须外置 Reviewer，`waived_by_user` 须有用户确认的 `critical_ack`，工具不提供绕过路径。
+  工具写入前自动过 `check_audit_gate.py`；Critical 转 `closed` 须外置 Reviewer，`waived_by_user` 须有用户确认的 `critical_ack`，工具不提供绕过路径。已盖章报告经工具改动后会删去 `receipt_id`，须下一轮外置 Reviewer 复核重新盖章才恢复有效。
 - 正文"问题说明"为每个开放问题写现象与证据、根因、风险、整改建议与关闭条件。
 - 区分事实与推断；证据不足时保持 `open` 并在说明中写明待确认，不把推断写成事实。
 
@@ -63,11 +66,11 @@ python3 .entropaxis/tools/check_audit_gate.py --fingerprint <受审文件或目�
 
 结论只使用以下值：
 
-- **阻断退回**：存在 `open` 的 Critical；
-- **附条件通过**：无 `open` 的 Critical，但仍有 `open` 的 Major/Minor 或待确认项；
-- **通过**：全部问题 `closed`（或指定 Critical 记 `waived_by_user`），审计门禁全部满足。
+- **阻断退回**：本阶段存在阻断问题（`update_audit_state.py --list` 末行，v3 报告按 `open` 的 Critical 判）；
+- **附条件通过**：本阶段无阻断，但仍有 `open` 的 Minor，或待实施、上线前提、另立事项；
+- **通过**：无任何 `open` 问题（或指定 Critical 记 `waived_by_user`）。
 
-不得用"基本通过""应该没问题"等模糊措辞替代结论。通过后把 Front Matter `status` 改为 `completed` 并冻结报告。
+不得用"基本通过""应该没问题"等模糊措辞替代结论。方案轻审通过后，下一轮把 `audit_phase` 改为 `impl`、`target_path` 改指改动目录，沿用同一报告；实施主审通过（无阻断）后把 Front Matter `status` 改为 `completed` 并冻结，门禁会拒绝残留阻断的冻结。
 
 ### 5. 维护报告
 
@@ -79,6 +82,15 @@ python3 .entropaxis/tools/check_audit_gate.py --fingerprint <受审文件或目�
 4. 只在更正客观错误时修改历史，并显式记录更正原因；
 5. 收尾前运行 `python3 .entropaxis/tools/check_audit_gate.py <报告>`，退出码须为 0；
 6. 终审通过后不再改写该报告。
+
+### 6. 多报告合并（Manager）
+
+首轮多家并审时：
+
+1. 按根因去重：保留最早的 ID，其余记 `withdrawn` 并在正文写"重复于 X"。
+2. 按任务书「每条问题的准入」逐条复核 `basis` / `evidence` / `gate`：不达标的降级或改 gate，写明原因；`gate: none` 的归类交用户确认。
+3. 输出一份主报告交作者；用 `update_audit_state.py --list` 记录本轮阻断数，供熔断比较。
+4. 运行 `check_audit_gate.py <主报告>`，直到只剩回执类提示。
 
 ## 输出
 

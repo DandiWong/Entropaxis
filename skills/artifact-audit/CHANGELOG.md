@@ -5,6 +5,16 @@ All notable changes to the `artifact-audit` skill will be documented in this fil
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-09-28
+
+### 新增
+- `references/reviewer-brief.md`：外置 Reviewer 固定任务书（审/不审清单、问题准入、复核范围）。
+- 「多报告合并（Manager）」步骤。
+
+### 变更
+- 报告模板升到 `schema_version: 4`：`audit_phase`、open 问题带 `gate` / `basis` / `evidence`（实施主审阻断级带 `repro`）；状态新增 `withdrawn`。
+- 结论按本阶段阻断判定；方案轻审转实施主审沿用同一报告，实施主审通过后冻结。
+
 ## [2.0.0] - 2026-09-27
 
 ### 变更
