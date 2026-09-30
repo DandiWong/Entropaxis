@@ -30,7 +30,7 @@
 
 - 新建/生成/导出交付文件、查找定位文件、对外发布与审批：`.entropaxis/rules/文件交付.md`（打开闭环第 4 节，发布第 5 节）
 - 项目边界、注册表、事务胶囊与决策底册：`.entropaxis/rules/项目组织.md`
-- 代码开发、调试、测试，新迭代/开分支/发版：`.entropaxis/rules/软件工程.md`
+- 代码开发、调试、测试，新迭代/开分支/收尾分支/发版：`.entropaxis/rules/软件工程.md`
 - 改动 `.entropaxis/`：`.entropaxis/rules/01_根系统治理.md`；设计新规则/工具/Skill 另读 `.entropaxis/rules/系统演进准则.md`；布局见 `.entropaxis/rules/控制面布局.md`
 - 调研→方案→原型→实施→审计→验收→汇报的角色调度与审修闭环：`.entropaxis/rules/角色协作.md`
 - 自然语言指令解析与追问边界：`.entropaxis/rules/指令解析.md`
