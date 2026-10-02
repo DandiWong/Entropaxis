@@ -79,6 +79,10 @@ SYSTEM_TEMPLATE_VARIABLES = {
     "应用名",
     "产品定位与核心价值",
     "用户与使用场景",
+    "单元测试命令",
+    "集成测试命令",
+    "全量测试命令",
+    "效果验证命令",
 }
 
 def check_resident_budget(root: Path) -> list[str]:
@@ -110,6 +114,25 @@ def check_resident_budget(root: Path) -> list[str]:
         except Exception:
             pass
     return issues
+
+def check_project_entry_placeholders(root: Path) -> list[str]:
+    """项目入口仍留脚手架待填项时报建议项（空态即初始态：未填不是缺陷，但要让人知道还差哪几处）。"""
+    issues = []
+    root_agents = root / "AGENTS.md"
+    for p in root.glob("**/AGENTS.md"):
+        if p == root_agents or not _is_first_party(p, root):
+            continue
+        try:
+            lines = p.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            continue
+        pending = [i for i, line in enumerate(lines, 1) if "待补充" in line or "探测候选" in line]
+        if pending:
+            issues.append(
+                f"[入口待填] {p.relative_to(root)} 第 {', '.join(map(str, pending))} 行仍是待补充或探测候选，确认后改成项目实际内容。"
+            )
+    return issues
+
 
 def check_current_state_bloat(root: Path) -> list[str]:
     """检查各项目 DECISIONS.md 或 _契约/当前状态.md 是否堆积历史。"""
@@ -1194,6 +1217,7 @@ def main() -> int:
         ("25. 场景级联 Token 预算检查", check_scenario_cascade_budget, False),
         ("26. Skill 版本与 CHANGELOG 一致性检查", check_skill_metadata, True),
         ("27. 工具路由存在性检查", check_tool_routing, False),
+        ("28. 项目入口待填项检查", check_project_entry_placeholders, False),
     ]
 
     all_issues = []

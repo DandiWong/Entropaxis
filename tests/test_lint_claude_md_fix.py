@@ -74,3 +74,25 @@ class ClaudeMdAutoFixTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProjectEntryPlaceholderTests(unittest.TestCase):
+    def test_reports_pending_lines_and_skips_nested_git_repo(self) -> None:
+        from tools.lint_workspace import check_project_entry_placeholders
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "AGENTS.md").write_text("待补充\n", encoding="utf-8")  # 根入口不查
+            proj = root / "biz"
+            proj.mkdir()
+            (proj / "AGENTS.md").write_text("# biz\n- 测试：待补充\n", encoding="utf-8")
+            repo = root / "biz" / "app"
+            (repo / ".git").mkdir(parents=True)
+            (repo / "AGENTS.md").write_text("待补充\n", encoding="utf-8")
+
+            issues = check_project_entry_placeholders(root)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("biz/AGENTS.md 第 2 行", issues[0])
+
+            (proj / "AGENTS.md").write_text("# biz\n- 测试：pytest\n", encoding="utf-8")
+            self.assertEqual(check_project_entry_placeholders(root), [])

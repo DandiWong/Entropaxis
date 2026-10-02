@@ -1,5 +1,12 @@
 # Changelog - init-project Skill
 
+## [1.3.0] - 2026-10-02
+### Added
+- `init_app.py --entry-only`：已有代码仓库只补 AGENTS.md / CLAUDE.md，已存在的跳过。
+- 分层测试命令按仓库文件给出探测候选；新仓库生成 `.gitignore` 并 `git init`（不提交）；`--parent` 登记上级项目时间线。
+### Fixed
+- 目标不在工作区内时，根入口路径不再写死猜测值，改为可见待填标记。
+
 ## [1.2.1] - 2026-09-27
 ### Changed
 - 立项登记目标由 `registry.md` 表格行改为 `registry.yaml` 的 `projects` 列表项。
