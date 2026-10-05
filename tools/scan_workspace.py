@@ -1,25 +1,13 @@
 #!/usr/bin/env python3
-"""自动扫描工作区根目录下的既有目录，识别项目、工程与知识库，并注册到 Entropaxis 配置中。
-
-分类标准：
-1. 知识库 / 共享资料 (shared_dirs):
-   - 含有大量 pdf、文献、图谱设计、报告、课程素材、数据集，或目录名显式包含 asset/kb/knowledge/资料/知识库/文献。
-   - 注册到 workspace-config.yaml 的 shared_dirs，并加入 registry.yaml 的 exclude 避免误报为未注册业务项目。
-2. 排除目录 (exclude):
-   - 工具安装包、归档、第三方依赖或临时目录（如 Archive, node_modules, repo 等）。
-3. 业务项目与工程 (project & code):
-   - 含有代码工程特征（.git, Cargo.toml, pyproject.toml, package.json, *.xcodeproj, project.yml 等）。
-   - 含有文档/管理规范（AGENTS.md, README.md, docs/, spec.md, DESIGN.md 等）。
-   - 项目注册到 registry.yaml 的 projects 中；其内部工程或子模块识别为 code 属性。
-"""
-
+"""发现目录职责与归属候选；默认只读，显式选择后增量登记。"""
 from __future__ import annotations
 
 import argparse
-import os
+import fnmatch
+import hashlib
+import json
 import re
 import sys
-import tempfile
 from pathlib import Path
 
 try:
@@ -28,277 +16,246 @@ except ImportError:
     import paths
     import project_registry
 
-KB_KEYWORDS = ("asset", "assets", "kb", "knowledge", "资料", "知识库", "文献", "标准", "图谱", "档案")
-EXCLUDE_KEYWORDS = ("archive", "install", "installer", "setup", "node_modules", "output", "repo", "temp")
-CODE_INDICATORS = (
-    ".git",
-    "Cargo.toml",
-    "pyproject.toml",
-    "package.json",
-    "go.mod",
-    "pom.xml",
-    "build.gradle",
-    "project.yml",
-    "requirements.txt",
-    "CMakeLists.txt",
-    "Makefile",
-)
+CODE_INDICATORS = ("Cargo.toml", "pyproject.toml", "package.json", "go.mod", "pom.xml",
+                   "build.gradle", "project.yml", "requirements.txt", "CMakeLists.txt", "Makefile")
+SKIP_DIRS = {"node_modules", "vendor", "dist", "build", "target", "__pycache__", "archive", "output"}
+KB_KEYWORDS = ("asset", "kb", "knowledge", "资料", "知识库", "文献", "标准", "图谱", "档案")
+PROJECT_MARKERS = ("01_项目管理", "02_业务运营", "03_工程研发", "DECISIONS.md", "PRODUCT.md")
 
 
-def _yaml():
-    return project_registry._yaml()
+def _config(root: Path) -> dict:
+    file = project_registry.registry_path(root).with_name("workspace-config.yaml")
+    if not file.exists():
+        return {}
+    data = project_registry._yaml().safe_load(file.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("workspace-config.yaml 必须为映射")
+    return data
 
 
-def is_code_repo(path: Path) -> bool:
-    """判断目录是否为代码工程或包含工程构建文件。"""
-    if not path.is_dir():
-        return False
-    for ind in CODE_INDICATORS:
-        if (path / ind).exists():
+def _excluded(relative: str, patterns: list[str]) -> bool:
+    parts = relative.strip("/").split("/")
+    prefixes = ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+    for pattern in patterns:
+        pattern = pattern.rstrip("/")
+        variants = [pattern, pattern[3:]] if pattern.startswith("**/") else [pattern]
+        if any(fnmatch.fnmatchcase(p, v) for p in prefixes for v in variants):
             return True
-    if any(path.glob("*.xcodeproj")) or any(path.glob("*.xcworkspace")):
-        return True
     return False
 
 
-def discover_sub_code(project_dir: Path) -> list[str]:
-    """发现项目内的代码工程真源目录（相对项目根目录）。"""
-    code_dirs: list[str] = []
-    # 1. 检查项目根自身是否就是代码工程
-    if is_code_repo(project_dir):
-        code_dirs.append(project_dir.name)
+def is_code_repo(path: Path) -> bool:
+    return path.is_dir() and not path.is_symlink() and (
+        any((path / name).is_file() for name in CODE_INDICATORS)
+        or any(path.glob("*.xcodeproj")) or any(path.glob("*.xcworkspace")))
 
-    # 2. 检查常见工程子目录（如 03_工程研发/*, apps/*, packages/*, impl-* 等）
-    for sub in sorted(project_dir.iterdir()):
-        if not sub.is_dir() or sub.name.startswith("."):
-            continue
-        if sub.name in ("03_工程研发", "apps", "packages", "source", "src", "site-ledger-admin", "site-ledger-app", "site-ledger-server") or sub.name.startswith("impl-"):
-            if is_code_repo(sub):
-                code_dirs.append(f"{project_dir.name}/{sub.name}")
-            else:
-                # 检查下一层
-                for sub_child in sorted(sub.iterdir()):
-                    if sub_child.is_dir() and not sub_child.name.startswith(".") and is_code_repo(sub_child):
-                        code_dirs.append(f"{project_dir.name}/{sub.name}/{sub_child.name}")
 
-    # 去重并保持顺序
-    seen = set()
-    result = []
-    for c in code_dirs:
-        if c not in seen:
-            seen.add(c)
-            result.append(c)
-    return result
+def discover_sub_code(project_dir: Path, *, root: Path | None = None,
+                      excludes: list[str] | None = None) -> list[str]:
+    """最多三层；工程内仅进入通用工程容器，跳过依赖、产物和软链接。"""
+    root = root or project_dir.parent
+    excludes = excludes or []
+    found = []
+    containers = {"apps", "packages", "03_工程研发", "source", "src"}
+    def walk(directory, depth):
+        relative = directory.relative_to(root).as_posix()
+        if directory.is_symlink() or _excluded(relative, excludes):
+            return
+        code = is_code_repo(directory)
+        if code:
+            found.append(relative)
+        if depth >= 3:
+            return
+        for child in sorted(directory.iterdir()):
+            if not child.is_dir() or child.is_symlink() or child.name.startswith(".") or child.name.lower() in SKIP_DIRS:
+                continue
+            if code and child.name not in containers and not child.name.startswith("impl-"):
+                continue
+            walk(child, depth + 1)
+    walk(project_dir, 0)
+    return found
 
 
 def is_knowledge_base(path: Path) -> tuple[bool, str]:
-    """判断是否为知识库/共享资料目录，返回 (is_kb, reason)。"""
-    lower_name = path.name.lower()
-    if any(k in lower_name for k in KB_KEYWORDS):
-        return True, f"目录名包含知识库关键词 '{path.name}'"
-
-    # 检查内容构成：如大量 pdf/doc/文献/图谱
-    pdf_count = len(list(path.glob("*.pdf"))) + len(list(path.glob("*/*.pdf")))
-    doc_count = len(list(path.glob("*.doc*"))) + len(list(path.glob("*/*.doc*")))
-    if pdf_count >= 3 or (pdf_count + doc_count) >= 3:
-        return True, f"包含大量文献文档（{pdf_count} 个 PDF / {doc_count} 个 DOC）"
-
+    hint = any(k in path.name.lower() for k in KB_KEYWORDS)
+    if hint and (path / "index.md").is_file():
+        return True, "知识目录名称与 index.md 索引；共享作用域需确认"
     return False, ""
 
 
 def should_exclude(path: Path) -> tuple[bool, str]:
-    """判断是否应直接加入 exclude（如安装包、临时工具、归档等）。"""
-    lower_name = path.name.lower()
-    if any(k in lower_name for k in EXCLUDE_KEYWORDS):
-        return True, f"符合忽略/归档特征 '{path.name}'"
-
-    # 包含安装包文件（.zip, .msi, .exe, .dmg）且非代码工程
-    has_installers = any(path.glob("*.msi")) or any(path.glob("*.exe")) or any(path.glob("*.dmg"))
-    if has_installers and not (path / ".git").exists() and not (path / "Cargo.toml").exists():
-        return True, "包含系统安装包/分发文件"
-
+    # 精确目录名，不用子串匹配，避免 reporting/template 等误判。
+    if path.name.lower() in SKIP_DIRS:
+        return True, "依赖、构建产物或归档目录名称；排除需确认"
     return False, ""
 
 
+def _project(path: Path, root: Path, used_ids: set[str], excludes: list[str], evidence: list[str]) -> dict:
+    relative = path.relative_to(root).as_posix()
+    base = re.sub(r"[^a-z0-9_-]+", "-", path.name.lower()).strip("-") or "project"
+    project_id = base
+    if base == "project" or base in used_ids:
+        project_id = base + "-" + hashlib.sha256(relative.encode()).hexdigest()[:8]
+    if project_id in used_ids:
+        raise ValueError(f"项目 ID 冲突: {relative}")
+    used_ids.add(project_id)
+    knowledge = [p.relative_to(root).as_posix() for p in sorted(path.iterdir())
+                 if p.is_dir() and not p.is_symlink()
+                 and ("知识库" in p.name or is_knowledge_base(p)[0])
+                 and not _excluded(p.relative_to(root).as_posix(), excludes)]
+    return {"id": project_id, "name": path.name, "path": relative,
+            "aliases": [path.name], "code": discover_sub_code(path, root=root, excludes=excludes),
+            "knowledge": knowledge, "evidence": evidence}
+
+
 def scan_workspace(root: Path) -> dict[str, list[dict]]:
-    """扫描工作区，输出分类结构：projects, shared_kbs, excludes。"""
-    projects: list[dict] = []
-    shared_kbs: list[dict] = []
-    excludes: list[dict] = []
-
-    # 已经存在的 exclude 与 projects
-    existing_projects = {p["path"] for p in project_registry.load_projects(root)}
-    existing_excludes = set(project_registry.load_excludes(root))
-
+    root = root.resolve()
+    if not root.is_dir():
+        raise ValueError(f"工作区目录不存在: {root}")
+    projects = project_registry.load_projects(root)
+    excludes = project_registry.load_excludes(root)
+    shared = {s["dir"].rstrip("/") for s in _config(root).get("shared_dirs") or []}
+    known_paths = {p["path"] for p in projects}
+    used_ids = {p["id"] for p in projects}
+    result = {key: [] for key in ("projects", "shared_kbs", "excludes", "updates", "pending")}
+    for p in projects:
+        directory = root / p["path"]
+        if directory.is_symlink() or not directory.resolve().is_relative_to(root):
+            result["pending"].append({"path": p["path"], "reason": "已登记项目为软链接或越过工作区边界"})
+            continue
+        if p["path"] in shared or _excluded(p["path"], excludes):
+            result["pending"].append({"path": p["path"], "reason": "项目登记与共享/排除声明冲突"})
+            continue
+        if directory.is_dir():
+            child_boundaries = [other["path"] for other in projects if other["path"].startswith(p["path"] + "/")]
+            new_code = [c for c in discover_sub_code(directory, root=root, excludes=excludes + child_boundaries) if c not in p["code"]]
+            if new_code:
+                result["updates"].append({"id": p["id"], "path": p["path"], "code": new_code,
+                                           "evidence": ["已登记项目内发现新增构建入口"]})
     for item in sorted(root.iterdir()):
-        if not item.is_dir():
+        if item.name.startswith(".") or not item.is_dir():
             continue
         name = item.name
-        if name.startswith(".") or name == paths.SYSTEM_DIRNAME:
+        if item.is_symlink():
+            result["pending"].append({"path": name, "reason": "软链接不扫描，须人工确认边界"})
             continue
-
-        item_path_str = f"{name}/"
-        rel_path = name
-
-        # 检查是否已有配置
-        if rel_path in existing_projects or name in existing_projects:
+        if name in known_paths or name in shared or _excluded(name, excludes):
             continue
-
-        # 1. 检查是否为排除目录
-        ex, reason = should_exclude(item)
-        if ex:
-            excludes.append({"name": name, "path": item_path_str, "reason": reason})
+        # 已登记嵌套项目的上层容器不重复登记。
+        if any(p.startswith(name + "/") for p in known_paths | shared):
             continue
-
-        # 2. 检查是否为知识库/共享资料目录
-        kb, kb_reason = is_knowledge_base(item)
-        if kb:
-            shared_kbs.append({"name": name, "dir": item_path_str, "purpose": kb_reason})
+        excluded, exclusion_reason = should_exclude(item)
+        if excluded:
+            result["excludes"].append({"name": name, "path": name + "/", "reason": exclusion_reason})
             continue
-
-        # 3. 检查是否为项目/工程
-        code_subdirs = discover_sub_code(item)
-        project_id = re.sub(r"[^a-zA-Z0-9_\-]+", "-", name.lower()).strip("-")
-        projects.append({
-            "id": project_id or name,
-            "name": name,
-            "path": rel_path,
-            "code": code_subdirs if code_subdirs else ([rel_path] if is_code_repo(item) else []),
-            "aliases": [name],
-            "note": "自动扫描登记",
-        })
-
-    return {
-        "projects": projects,
-        "shared_kbs": shared_kbs,
-        "excludes": excludes,
-    }
+        code = discover_sub_code(item, root=root, excludes=excludes)
+        project_markers = [m for m in PROJECT_MARKERS if (item / m).exists()]
+        kb, reason = is_knowledge_base(item)
+        if kb and (code or project_markers):
+            result["pending"].append({"path": name, "reason": "项目/工程与知识索引证据并存，需确认主职责"})
+        elif code or project_markers:
+            evidence = (["构建入口: " + ", ".join(code)] if code else []) + project_markers
+            result["projects"].append(_project(item, root, used_ids, excludes, evidence))
+        elif kb:
+            result["shared_kbs"].append({"name": name, "dir": name + "/", "purpose": reason})
+        else:
+            hint = "名称提示资料目录；作用域需确认" if any(k in name.lower() for k in KB_KEYWORDS) else "缺少明确项目、工程或知识索引证据"
+            result["pending"].append({"path": name, "reason": hint})
+    return result
 
 
-def register_scanned(root: Path, scanned: dict[str, list[dict]], apply: bool = True) -> bool:
-    """将扫描结果写入 registry.yaml 与 workspace-config.yaml。"""
+def register_scanned(root: Path, scanned: dict[str, list[dict]], apply: bool = False) -> bool:
     if not apply:
         return False
+    entries = []
+    for p in scanned.get("projects", []):
+        entry = {k: p[k] for k in ("id", "name", "aliases")}
+        entry["path"] = p["path"].rstrip("/") + "/"
+        if p.get("code"):
+            entry["code"] = p["code"]
+        entry["note"] = "扫描候选经显式选择登记"
+        entries.append(entry)
+    shared = [{"dir": k["dir"], "purpose": k["purpose"]} for k in scanned.get("shared_kbs", [])]
+    excludes = [e["path"] for e in scanned.get("excludes", [])] + [s["dir"] for s in shared]
+    return project_registry.merge_scanned(root, entries, excludes, shared, scanned.get("updates", []))
 
-    yaml = _yaml()
-    reg_file = project_registry.registry_path(root)
-    ws_config_file = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "workspace-config.yaml"
 
-    # 1. 更新 workspace-config.yaml 中的 shared_dirs
-    if scanned.get("shared_kbs") and ws_config_file.is_file():
-        try:
-            ws_data = yaml.safe_load(ws_config_file.read_text(encoding="utf-8")) or {}
-            current_shared = ws_data.get("shared_dirs") or []
-            existing_dirs = {s.get("dir") for s in current_shared if isinstance(s, dict)}
-            added_shared = False
-            for kb in scanned["shared_kbs"]:
-                if kb["dir"] not in existing_dirs:
-                    current_shared.append({"dir": kb["dir"], "purpose": kb["purpose"]})
-                    added_shared = True
-            if added_shared:
-                ws_data["shared_dirs"] = current_shared
-                ws_text = yaml.safe_dump(ws_data, allow_unicode=True, sort_keys=False)
-                ws_config_file.write_text(ws_text, encoding="utf-8")
-        except Exception as e:
-            print(f"⚠️ 更新 workspace-config.yaml 失败: {e}", file=sys.stderr)
-
-    # 2. 更新 registry.yaml 的 exclude 与 projects
-    if reg_file.is_file():
-        try:
-            reg_text = reg_file.read_text(encoding="utf-8")
-            reg_data = yaml.safe_load(reg_text) or {}
-
-            # exclude: 合并扫描到的 excludes 以及 shared_kbs（shared_dirs 必须同时在 exclude 排除以防体检阻断）
-            cur_excludes = list(reg_data.get("exclude") or [])
-            cur_ex_set = set(cur_excludes)
-            new_excludes = []
-            for ex in scanned.get("excludes", []):
-                p = ex["path"]
-                if p not in cur_ex_set and p.rstrip("/") not in cur_ex_set:
-                    new_excludes.append(p)
-                    cur_ex_set.add(p)
-            for kb in scanned.get("shared_kbs", []):
-                p = kb["dir"]
-                if p not in cur_ex_set and p.rstrip("/") not in cur_ex_set:
-                    new_excludes.append(p)
-                    cur_ex_set.add(p)
-
-            if new_excludes:
-                reg_data["exclude"] = cur_excludes + new_excludes
-
-            # projects: 逐项追加
-            existing_proj_ids = {p.get("id") for p in (reg_data.get("projects") or []) if isinstance(p, dict)}
-            cur_projects = list(reg_data.get("projects") or [])
-            for proj in scanned.get("projects", []):
-                if proj["id"] not in existing_proj_ids:
-                    # 保证结构合规
-                    clean_entry = {
-                        "id": proj["id"],
-                        "name": proj["name"],
-                        "path": f"{proj['path']}/",
-                        "aliases": proj.get("aliases", []),
-                    }
-                    if proj.get("code"):
-                        clean_entry["code"] = proj["code"]
-                    if proj.get("note"):
-                        clean_entry["note"] = proj["note"]
-                    cur_projects.append(clean_entry)
-                    existing_proj_ids.add(proj["id"])
-
-            reg_data["projects"] = cur_projects
-
-            # 重新写入 registry.yaml
-            new_reg_text = yaml.safe_dump(reg_data, allow_unicode=True, sort_keys=False)
-            reg_file.write_text(new_reg_text, encoding="utf-8")
-            return True
-        except Exception as e:
-            print(f"⚠️ 更新 registry.yaml 失败: {e}", file=sys.stderr)
-            return False
-
-    return True
+def _select(root, scanned, selected, kind):
+    plan = {k: [] for k in scanned}
+    registered = {p["path"] for p in project_registry.load_projects(root)}
+    shared = {s["dir"].rstrip("/") for s in _config(root).get("shared_dirs") or []}
+    excludes = project_registry.load_excludes(root)
+    ids = {p["id"] for p in project_registry.load_projects(root)}
+    for path in dict.fromkeys(selected):
+        path = path.rstrip("/")
+        directory = root / path
+        if not path or Path(path).is_absolute() or ".." in Path(path).parts or directory.is_symlink() or not directory.resolve().is_relative_to(root) or not directory.is_dir():
+            raise ValueError(f"所选目录无效或越界: {path}")
+        matches = [(k, item) for k, items in scanned.items() for item in items
+                   if item.get("path", item.get("dir", "")).rstrip("/") == path]
+        if any(k == "pending" and (path in registered or directory.is_symlink()) for k, _ in matches):
+            raise ValueError(f"声明冲突须先人工修正: {path}")
+        if not matches:
+            if path in registered or path in shared or _excluded(path, excludes):
+                continue  # 已生效的选择保持幂等；不改判人工声明。
+            raise ValueError(f"目录不在候选中: {path}")
+        if kind:
+            if path in registered or path in shared or _excluded(path, excludes):
+                raise ValueError(f"已有声明不能通过扫描改判: {path}")
+            if kind == "project":
+                plan["projects"].append(_project(directory, root, ids, excludes, ["人工指定项目职责"]))
+            elif kind == "shared":
+                plan["shared_kbs"].append({"dir": path + "/", "purpose": "人工确认跨项目共享资料"})
+            else:
+                plan["excludes"].append({"path": path + "/"})
+        else:
+            for k, item in matches:
+                if k == "pending":
+                    raise ValueError(f"目录职责待确认，请用 --kind 指定: {path}")
+                plan[k].append(item)
+    return plan
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="自动扫描工作区并注册项目、工程与知识库")
-    parser.add_argument("--root", type=Path, default=paths.WORKSPACE_ROOT, help="工作区根目录")
-    parser.add_argument("--dry-run", action="store_true", help="仅显示扫描结果，不写入配置文件")
-    parser.add_argument("--json", action="store_true", help="以 JSON 格式输出扫描结果")
-
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=paths.WORKSPACE_ROOT)
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--apply", action="store_true", help="登记明确选择的候选")
+    action.add_argument("--dry-run", action="store_true", help="只读预览（默认）")
+    parser.add_argument("--select", action="append", default=[], help="确认的工作区相对目录，可重复")
+    parser.add_argument("--kind", choices=("project", "shared", "exclude"), help="人工指定单个目录职责")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--offset", type=int, default=0)
     args = parser.parse_args(argv)
-    root = args.root.resolve()
-
-    scanned = scan_workspace(root)
-
-    if args.json:
-        import json
-        print(json.dumps(scanned, ensure_ascii=False, indent=2))
-        return 0
-
-    print(f"🔍 工作区扫描完成: {root}")
-    print(f"📦 发现项目/工程 ({len(scanned['projects'])} 个):")
-    for p in scanned["projects"]:
-        code_str = f" [代码: {', '.join(p['code'])}]" if p.get("code") else ""
-        print(f"  • {p['name']} ({p['id']}){code_str}")
-
-    print(f"📚 发现知识库/共享资料 ({len(scanned['shared_kbs'])} 个):")
-    for k in scanned["shared_kbs"]:
-        print(f"  • {k['dir']} - {k['purpose']}")
-
-    print(f"🚫 发现排除/归档目录 ({len(scanned['excludes'])} 个):")
-    for e in scanned["excludes"]:
-        print(f"  • {e['path']} - {e['reason']}")
-
-    if not args.dry_run:
-        registered = register_scanned(root, scanned, apply=True)
-        if registered:
-            print("✅ 扫描结果已自动写入 registry.yaml 与 workspace-config.yaml。")
+    try:
+        if args.limit < 1 or args.offset < 0:
+            raise ValueError("limit 须为正数，offset 须非负")
+        if args.apply and not args.select:
+            raise ValueError("--apply 必须配合 --select 明确选择目录")
+        if args.kind and len(args.select) != 1:
+            raise ValueError("--kind 必须配合一个 --select")
+        root = args.root.resolve()
+        scanned = scan_workspace(root)
+        plan = _select(root, scanned, args.select, args.kind) if args.select else scanned
+        if args.apply:
+            register_scanned(root, plan, apply=True)
+        counts = {k: len(v) for k, v in plan.items()}
+        page = {k: v[args.offset:args.offset + args.limit] for k, v in plan.items()}
+        if args.json:
+            print(json.dumps({"applied": args.apply, "counts": counts, "offset": args.offset,
+                              "limit": args.limit, "candidates": page}, ensure_ascii=False))
         else:
-            print("❌ 写入配置失败。")
-            return 1
-    else:
-        print("ℹ️ Dry-run 模式：未修改配置文件。")
-
-    return 0
+            print("status=" + ("applied" if args.apply else "preview") + " " + " ".join(f"{k}={v}" for k, v in counts.items()))
+            for key, items in page.items():
+                for item in items:
+                    print(f"{key}: {item.get('path', item.get('dir'))} | {item.get('reason', item.get('purpose', ', '.join(item.get('evidence', []))))}")
+            if any(v > args.offset + args.limit for v in counts.values()):
+                print(f"next_offset={args.offset + args.limit}")
+        return 0
+    except (OSError, ValueError, KeyError, TypeError, project_registry._yaml().YAMLError) as exc:
+        print(f"❌ 扫描或登记失败: {exc}\n👉 检查路径、配置及选择；先运行 --dry-run --json 预览。", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

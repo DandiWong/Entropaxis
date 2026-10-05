@@ -75,6 +75,12 @@
    python3 .entropaxis/tools/bootstrap.py
    ```
    该工具会自动将 `.entropaxis/entrypoints/` 下的 `AGENTS.md` 与 `CLAUDE.md` 物理同步至工作区根目录，建立全局统一的规则控制面（纯文件复制，杜绝云同步网盘跨平台软链冲突）；并把 `.entropaxis/skills/` 以软链接挂进根目录 `.claude/skills/` 与 `.agents/skills/`，供 Agent 按 Skill 描述自动发现。
+   初始化默认只展示目录候选，不改写已有项目与共享资料登记；`--no-scan` 可跳过扫描。候选、人工选择与生效配置保持区分：
+   ```bash
+   python3 .entropaxis/tools/scan_workspace.py --json
+   python3 .entropaxis/tools/scan_workspace.py --apply --select <工作区相对目录>
+   ```
+   `--select` 可重复；待确认目录须单独用 `--kind project|shared|exclude` 指定职责。已登记项目的新增工程也须选择确认，已有排除、共享和项目声明优先。扫描最多三层，不进入软链接、依赖及构建产物；名称和文件数量不决定业务归属。输出默认每类最多 20 项，用 `--limit` / `--offset` 分页；`--json` 只改变输出格式，写入仍须 `--apply`。
 2. **规则与上下文纪律**  
    - 严格遵循根 `AGENTS.md` 常驻层控制面与 `.entropaxis/rules/` 架构规范；
    - 坚持**单一真源（Single Source of Truth）**、**上下文瘦身**与 **YAGNI 原则**，禁止跨层级复制规则或创建冗余文件；

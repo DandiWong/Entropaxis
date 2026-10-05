@@ -439,7 +439,7 @@ def print_legacy_layout_hint() -> None:
 if __name__ == "__main__":
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
     force_rescan_opener = "--force-rescan-opener" in sys.argv
-    auto_scan_register = "--no-scan" not in sys.argv
+    scan_enabled = "--no-scan" not in sys.argv
 
     if verbose:
         print("🚀 开始初始化/自愈工作区配置...")
@@ -451,13 +451,16 @@ if __name__ == "__main__":
         init_file_opener(verbose=verbose, force_rescan=force_rescan_opener)
         render_instance_configs(verbose=verbose)
         stamp_new_instances(verbose=verbose)
-        if auto_scan_register:
-            ws_root = paths.WORKSPACE_ROOT
-            scanned = scan_workspace.scan_workspace(ws_root)
-            if scanned["projects"] or scanned["shared_kbs"] or scanned["excludes"]:
-                scan_workspace.register_scanned(ws_root, scanned, apply=True)
-                if verbose:
-                    print(f"✨ 自动扫描并注册: {len(scanned['projects'])} 个项目, {len(scanned['shared_kbs'])} 个知识库/共享资料, {len(scanned['excludes'])} 个排除目录")
+        if scan_enabled:
+            try:
+                scanned = scan_workspace.scan_workspace(paths.WORKSPACE_ROOT)
+            except Exception as exc:
+                print(f"❌ 目录扫描失败: {exc}\n👉 检查注册表及共享目录配置；可用 --no-scan 跳过候选扫描。", file=sys.stderr)
+                sys.exit(1)
+            counts = {key: len(items) for key, items in scanned.items()}
+            if any(counts.values()):
+                print("目录候选（未登记）: " + " ".join(f"{key}={n}" for key, n in counts.items())
+                      + "；用 scan_workspace.py --json 查看，确认后 --apply --select <相对目录> 登记。")
         print("🎉 工作区初始化与自愈完成（入口已同步，实例配置就绪；角色默认内置 Subagent 兜底）。")
         print("💡 进阶自定义：说「自定义角色」绑定多模型（roles.yaml） / 「配置打开方式」 / registry.yaml 登记别名 / workspace-config.yaml 组织口径")
         if sys.platform == "win32" and verbose:
