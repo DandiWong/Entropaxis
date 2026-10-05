@@ -99,11 +99,11 @@ KNOWN_AGENTS: list[AgentInfo] = [
         presets={
             "Architecture": "omp --model openai-codex/gpt-5.6-terra",
             "Reviewer": "omp --model openai-codex/gpt-5.6-terra",
-            "Researcher": "omp --model google-antigravity/gemini-3.8-flash || omp --model minimax-coding-cn/MiniMax-M3",
+            "Researcher": "omp --model google-antigravity/gemini-3.8-flash || omp --model minimax-code-cn/MiniMax-M3",
             "Builder": "omp --model zhipu-coding-plan/glm-5.3 || claude --model sonnet-5",
             "Designer": "claude --model sonnet-5",
             "Maintainer": "claude --model opus-5",
-            "Reporter": "omp --model google-antigravity/gemini-3.8-flash || omp --model minimax-coding-cn/MiniMax-M3",
+            "Reporter": "omp --model google-antigravity/gemini-3.8-flash || omp --model minimax-code-cn/MiniMax-M3",
         },
     ),
     AgentInfo(
