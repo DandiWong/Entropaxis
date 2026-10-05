@@ -11,13 +11,11 @@ import shutil
 from pathlib import Path
 
 try:
-    from . import paths
+    from . import paths, scan_workspace
 except ImportError:
-    # runpy.run_path()（install_windows.py 冻结后调用它的方式）不会把脚本自身目录
-    # 加进 sys.path，跟直接 `python3 bootstrap.py` 的行为不同，这里补上避免
-    # ModuleNotFoundError: No module named 'paths'。
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import paths
+    import scan_workspace
 
 def render_instance_configs(
     verbose: bool = True,
@@ -441,6 +439,7 @@ def print_legacy_layout_hint() -> None:
 if __name__ == "__main__":
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
     force_rescan_opener = "--force-rescan-opener" in sys.argv
+    auto_scan_register = "--no-scan" not in sys.argv
 
     if verbose:
         print("🚀 开始初始化/自愈工作区配置...")
@@ -452,6 +451,13 @@ if __name__ == "__main__":
         init_file_opener(verbose=verbose, force_rescan=force_rescan_opener)
         render_instance_configs(verbose=verbose)
         stamp_new_instances(verbose=verbose)
+        if auto_scan_register:
+            ws_root = paths.WORKSPACE_ROOT
+            scanned = scan_workspace.scan_workspace(ws_root)
+            if scanned["projects"] or scanned["shared_kbs"] or scanned["excludes"]:
+                scan_workspace.register_scanned(ws_root, scanned, apply=True)
+                if verbose:
+                    print(f"✨ 自动扫描并注册: {len(scanned['projects'])} 个项目, {len(scanned['shared_kbs'])} 个知识库/共享资料, {len(scanned['excludes'])} 个排除目录")
         print("🎉 工作区初始化与自愈完成（入口已同步，实例配置就绪；角色默认内置 Subagent 兜底）。")
         print("💡 进阶自定义：说「自定义角色」绑定多模型（roles.yaml） / 「配置打开方式」 / registry.yaml 登记别名 / workspace-config.yaml 组织口径")
         if sys.platform == "win32" and verbose:
