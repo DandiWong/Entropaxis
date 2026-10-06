@@ -47,10 +47,11 @@ except ImportError:  # pragma: no cover - 环境缺 PyYAML 时给出可行动错
     raise
 
 try:
-    from . import paths
+    from . import paths, update_capsule
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import paths  # type: ignore
+    import update_capsule  # type: ignore
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 ROLES_CONFIG = SYSTEM_ROOT / "data" / "templates" / "roles.yaml"
@@ -759,6 +760,9 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
                    "failure_code": code or None, "stdout_tail": (proc.stdout or "")[-600:],
                    "stderr_tail": (proc.stderr or "")[-600:]})
             if ok:
+                if role == "Reviewer" and produces_file:
+                    # 新一轮审计结论可能让方案过审：推进所在胶囊的 lifecycle
+                    update_capsule.sync_for(deliverable)
                 attempts.append({"profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
                                  "ended_at": ended, "exit_code": 0, "report_sha256": _sha256_path(deliverable)})
                 return "", attempts, True

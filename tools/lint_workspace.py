@@ -1036,6 +1036,39 @@ def check_registry_population(root: Path) -> list[str]:
     ]
 
 
+def check_capsule_lifecycle(root: Path) -> list[str]:
+    """胶囊 lifecycle 落后于证据、价值回收到期或归档截止已过时报建议项。推导逻辑只在 update_capsule.py。"""
+    tool = root / paths.SYSTEM_DIRNAME / "tools" / "update_capsule.py"
+    if not tool.is_file():
+        return []
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("_lint_update_capsule", tool)
+        uc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(uc)
+    except Exception:  # noqa: BLE001 - 工具读不到时降级跳过，不阻断体检
+        return []
+    today = datetime.now().date().isoformat()
+    issues = []
+    for manifest in sorted(root.glob("**/capsule.yaml")):
+        if not _is_first_party(manifest, root):
+            continue
+        cap, text = manifest.parent, manifest.read_text(encoding="utf-8", errors="replace")
+        rel = cap.relative_to(root)
+        current = uc._read_key(text, "lifecycle") or "draft"
+        if current in uc.ORDER and uc.derive(cap, current) != current:
+            issues.append(f"[胶囊状态落后] {rel} 记为 {current}，证据显示应为 {uc.derive(cap, current)}；"
+                          f"执行 python3 .entropaxis/tools/update_capsule.py {rel}")
+        if current == "delivered":
+            closure, review = uc._read_key(text, "closure_deadline"), uc._read_key(text, "review_due_at")
+            if closure and today >= closure:
+                issues.append(f"[归档截止已过] {rel} closure_deadline={closure}；在 07_验收报告.md 回填数据回收或未度量兜底说明后同步。")
+            elif review and today >= review:
+                issues.append(f"[价值回收到期] {rel} review_due_at={review}；回收业务数据并回填 07_验收报告.md。")
+    return issues
+
+
 def check_declared_writers(root: Path) -> list[str]:
     """核验实例文件声明的「写入者」真实存在且真的写它（《01_根系统治理》SOP 第 2 步）。
 
@@ -1331,6 +1364,7 @@ def main() -> int:
         ("27. 工具路由存在性检查", check_tool_routing, False),
         ("28. 项目入口待填项检查", check_project_entry_placeholders, False),
         ("29. 工作区存量卫生检查", check_workspace_hygiene, False),
+        ("30. 胶囊生命周期同步检查", check_capsule_lifecycle, False),
     ]
 
     all_issues = []

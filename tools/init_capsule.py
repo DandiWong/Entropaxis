@@ -97,8 +97,9 @@ topic: {topic_q}
 mode: {mode}
 created_at: {date}
 # draft | active | delivered | archived | archived-unmeasured
+# 由 tools/update_capsule.py 按证据推进（只进不退），勿手改
 lifecycle: draft
-# 工程交付日：代码合入主干且全量测试通过后回填；以下两个日期随之派生
+# 工程交付日：代码合入主干且全量测试通过后由 update_capsule.py --delivered 写入；以下两个日期随之派生
 delivered_at: null        # 交付日
 review_due_at: null       # delivered_at + 30 天：首次价值回收提醒
 closure_deadline: null    # delivered_at + 60 天：正常归档或未度量归档的硬截止

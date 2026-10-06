@@ -35,9 +35,11 @@ from pathlib import Path
 
 try:
     from . import check_audit_gate as cag
+    from . import update_capsule
 except ImportError:  # 直接 python3 tools/update_audit_state.py 调用时
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import check_audit_gate as cag
+    import update_capsule
 
 
 class AuditStateError(Exception):
@@ -162,6 +164,8 @@ def commit(path: Path, new_text: str) -> bool:
         tmp_path = Path(tmp) / path.name
         tmp_path.write_text(new_text, encoding="utf-8")
         tmp_path.replace(path)
+    # 问题关闭可能让方案过审：顺带推进所在胶囊的 lifecycle（不在胶囊内则无动作）
+    update_capsule.sync_for(path)
     return unsigned
 
 
