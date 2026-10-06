@@ -13,12 +13,19 @@ if str(SYSTEM_ROOT) not in sys.path:
 from tools import dispatch_role as dr
 from tools.setup_agents import (
     ConfigError,
+    HARD_GATED_ROLES,
     command_to_argvs,
     detect_installed_agents,
+    list_roles,
     load_config,
+    patch_model_in_argv,
+    remove_role,
     role_view,
     save_config,
+    set_duty,
+    set_model,
     set_role,
+    set_timeout,
     verify_roles,
 )
 
@@ -146,3 +153,171 @@ class DetectAgentsTests(TestCase):
         self.assertEqual(detected["omp"]["path"], "/usr/local/bin/omp")
         self.assertEqual(detected["omp"]["version"], "omp version 1.0.0")
         self.assertFalse(detected["gemini"]["installed"])
+
+
+class HardGateParityTests(TestCase):
+    """setup_agents 的门禁集合与 dispatch_role 唯一真源锚定，防两处漂移。"""
+
+    def test_hard_gated_roles_matches_dispatch(self) -> None:
+        self.assertEqual(HARD_GATED_ROLES, dr.HARD_ROLES)
+
+
+class PatchModelArgvTests(TestCase):
+    """模型置换是 argv 数组内定点手术：占位符与其余 token 不得受扰。"""
+
+    def test_replaces_existing_model_flag(self) -> None:
+        argv = ["omp", "--model", "a/b", "-p", "{PROMPT}"]
+        self.assertEqual(patch_model_in_argv(argv, "c/d"), ["omp", "--model", "c/d", "-p", "{PROMPT}"])
+
+    def test_replaces_short_flag(self) -> None:
+        self.assertEqual(patch_model_in_argv(["x", "-m", "old"], "new"), ["x", "-m", "new"])
+
+    def test_inserts_before_prompt_flag_when_missing(self) -> None:
+        argv = ["claude", "-p", "{PROMPT}"]
+        self.assertEqual(patch_model_in_argv(argv, "sonnet-5"), ["claude", "--model", "sonnet-5", "-p", "{PROMPT}"])
+
+    def test_inserts_after_executable_when_no_prompt(self) -> None:
+        self.assertEqual(patch_model_in_argv(["cli", "run"], "m"), ["cli", "--model", "m", "run"])
+
+
+class PartialUpdateTests(TestCase):
+    """局部更新契约：只动声明的字段，链结构与其余参数原样。"""
+
+    def setUp(self) -> None:
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="agent-partial-test-"))
+        self.cfg = self.tmpdir / "roles.yaml"
+        self.data = load_config(self.cfg)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _with_reviewer_chain(self) -> None:
+        set_role(self.data, "Reviewer", "omp", "omp --model a/b || claude")
+        self.data["command_profiles"]["reviewer-primary"]["timeout_s"] = 1800
+
+    def test_set_model_touches_primary_only(self) -> None:
+        self._with_reviewer_chain()
+        set_model(self.data, "Reviewer", "x/y")
+        argv = self.data["command_profiles"]["reviewer-primary"]["argv"]
+        self.assertIn("x/y", argv)
+        self.assertIn("{PROMPT}", argv, "占位符必须保留")
+        self.assertNotIn("a/b", self.data["command_profiles"]["reviewer-primary"]["argv"])
+        self.assertNotIn("x/y", self.data["command_profiles"]["reviewer-fallback"]["argv"], "备选链不得同换")
+
+    def test_set_model_rejects_subagent_carrier(self) -> None:
+        with self.assertRaises(ConfigError):
+            set_model(self.data, "Designer", "m")
+
+    def test_set_model_rejects_unknown_role(self) -> None:
+        with self.assertRaises(ConfigError):
+            set_model(self.data, "Nobody", "m")
+
+    def test_set_timeout_updates_whole_chain(self) -> None:
+        self._with_reviewer_chain()
+        set_timeout(self.data, "Reviewer", 1200)
+        for prof in self.data["command_profiles"].values():
+            if prof["argv"][0] == "omp" or prof["argv"][0] == "claude":
+                self.assertEqual(prof["timeout_s"], 1200)
+
+    def test_set_timeout_hard_gate_cap_1800(self) -> None:
+        self._with_reviewer_chain()
+        with self.assertRaises(ConfigError):
+            set_timeout(self.data, "Reviewer", 1801)
+
+    def test_set_timeout_schema_cap_7200(self) -> None:
+        set_role(self.data, "Builder", "omp", "omp --model a/b")
+        with self.assertRaises(ConfigError):
+            set_timeout(self.data, "Builder", 7201)
+
+    def test_set_duty_updates_field(self) -> None:
+        set_duty(self.data, "Researcher", "前沿查新")
+        self.assertEqual(self.data["roles"]["Researcher"]["duty"], "前沿查新")
+
+    def test_set_duty_rejects_blank(self) -> None:
+        with self.assertRaises(ConfigError):
+            set_duty(self.data, "Researcher", "  ")
+
+    def test_set_duty_rejects_unknown_role(self) -> None:
+        with self.assertRaises(ConfigError):
+            set_duty(self.data, "Nobody", "x")
+
+
+class RemoveRoleTests(TestCase):
+    """删除契约：标准角色 fail-closed；自定义角色删除后只回收独占 profile。"""
+
+    def setUp(self) -> None:
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="agent-remove-test-"))
+        self.cfg = self.tmpdir / "roles.yaml"
+        self.data = load_config(self.cfg)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_standard_role_refused(self) -> None:
+        with self.assertRaises(ConfigError):
+            remove_role(self.data, "Reviewer")
+
+    def test_unknown_role_refused(self) -> None:
+        with self.assertRaises(ConfigError):
+            remove_role(self.data, "Nobody")
+
+    def test_removes_custom_role_and_gcs_its_chain(self) -> None:
+        set_role(self.data, "DataSteward", "omp", "omp --model a/b || claude")
+        save_config(self.cfg, self.data)
+        removed = remove_role(self.data, "DataSteward")
+        self.assertNotIn("DataSteward", self.data["roles"])
+        self.assertEqual(set(removed), {"datasteward-primary", "datasteward-fallback"})
+        self.assertNotIn("datasteward-primary", self.data["command_profiles"])
+        for role in ("Architecture", "Researcher", "Designer", "Builder", "Reviewer", "Maintainer", "Reporter"):
+            self.assertIn(role, self.data["roles"], "标准角色不受删除影响")
+
+    def test_keeps_profile_referenced_by_other_chain(self) -> None:
+        # 共享场景：DataSteward 的链 fallback 指向 Reviewer 的 profile，删除时不得回收它
+        set_role(self.data, "Reviewer", "omp", "omp --model a/b")
+        set_role(self.data, "DataSteward", "omp", "omp --model a/b")
+        self.data["command_profiles"]["datasteward-primary"]["fallback_profile"] = "reviewer-primary"
+        removed = remove_role(self.data, "DataSteward")
+        self.assertEqual(removed, ["datasteward-primary"])
+        self.assertIn("reviewer-primary", self.data["command_profiles"], "被他链引用的 profile 不得回收")
+
+
+class ListRolesTests(TestCase):
+    """清单视图：门禁/承载/模型/超时一字排开，自定义角色显式标 custom。"""
+
+    def setUp(self) -> None:
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="agent-list-test-"))
+        self.data = load_config(self.tmpdir / "roles.yaml")
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @mock.patch("tools.setup_agents.shutil.which")
+    def test_list_gates_and_ordering(self, mock_which: mock.MagicMock) -> None:
+        mock_which.return_value = "/usr/bin/omp"
+        set_role(self.data, "DataSteward", "omp", "omp --model a/b")
+        items = list_roles(self.data)
+        by_role = {i["role"]: i for i in items}
+        self.assertEqual(by_role["Reviewer"]["gate"], "hard")
+        self.assertEqual(by_role["Builder"]["gate"], "soft")
+        self.assertEqual(by_role["DataSteward"]["gate"], "custom")
+        self.assertEqual(by_role["DataSteward"]["standard"], False)
+        self.assertEqual(items[-1]["role"], "DataSteward", "自定义角色排标准角色之后")
+        self.assertEqual(by_role["DataSteward"]["model"], "a/b")
+        self.assertEqual(by_role["DataSteward"]["timeout_s"], 900)
+
+    def test_list_subagent_carrier(self) -> None:
+        items = list_roles(self.data)
+        designer = next(i for i in items if i["role"] == "Designer")
+        self.assertEqual(designer["carrier"], "subagent")
+        self.assertEqual(designer["chain"], [])
+
+    @mock.patch("tools.setup_agents.shutil.which")
+    def test_verify_notes_custom_roles(self, mock_which: mock.MagicMock) -> None:
+        mock_which.return_value = "/usr/bin/omp"
+        cfg = self.tmpdir / "roles.yaml"
+        set_role(self.data, "DataSteward", "omp", "omp --model a/b")
+        save_config(cfg, self.data)
+        notes = [r for r in verify_roles(cfg) if r["status"] == "custom_role_note"]
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]["role"], "DataSteward")
+        self.assertIn("仅作承载声明", notes[0]["msg"])

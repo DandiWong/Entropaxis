@@ -16,12 +16,24 @@
   # 3. 交互式向导配置各个角色的承载 CLI 与启动命令
   python3 .entropaxis/tools/setup_agents.py
 
-  # 4. 一键为所有角色批量应用指定 Agent 的推荐预设
+  # 4. 一键为全部标准角色应用指定 Agent 的推荐预设
   python3 .entropaxis/tools/setup_agents.py --apply-preset omp
   python3 .entropaxis/tools/setup_agents.py --apply-preset subagent
 
   # 5. 精确设置指定角色的 CLI 和启动命令
   python3 .entropaxis/tools/setup_agents.py --set-role Reviewer omp "omp --model a/b || claude -p {PROMPT}"
+
+  # 6. 角色清单：职责、门禁、承载链（CLI/模型/超时/存活态）
+  python3 .entropaxis/tools/setup_agents.py --list [--json]
+
+  # 7. 局部更新：只换主选模型 / 只调超时 / 只改职责，不动命令其余部分
+  python3 .entropaxis/tools/setup_agents.py --set-model Reviewer openai-codex/gpt-6.1-sol
+  python3 .entropaxis/tools/setup_agents.py --set-timeout Builder 3600
+  python3 .entropaxis/tools/setup_agents.py --set-duty Researcher "前沿技术选型与实测查新"
+
+  # 8. 删除自定义角色（标准 7 角色受保护；默认 dry-run，--yes 才落盘）
+  python3 .entropaxis/tools/setup_agents.py --remove-role DataSteward
+  python3 .entropaxis/tools/setup_agents.py --remove-role DataSteward --yes
 """
 
 from __future__ import annotations
@@ -51,7 +63,10 @@ PROMPT_FLAG_FAMILIES = {"omp", "claude", "codex"}  # 缺占位符时可安全补
 SHELL_METACHARS = set(';&|`$><\n')
 ROLE_NAME_RE = re.compile(r"^[A-Z][A-Za-z]*$")
 
-# 7 个标准角色（Manager 由当前会话承担，不在此配置）
+# 硬门禁角色（与 dispatch_role.HARD_ROLES 同源，见 rules/角色协作.md「门禁划分」；
+# 测试锚定两集合相等防漂移——setup_agents 不 import dispatch_role，避免其顶层 PyYAML 硬依赖）
+HARD_GATED_ROLES = {"Reviewer", "Maintainer"}
+MODEL_FLAGS = ("--model", "-m")
 STANDARD_ROLES: dict[str, str] = {
     "Architecture": "顶层架构/技术选型/方案设计",
     "Researcher": "调研（强制联网）/文献综述/竞品查新",
@@ -363,6 +378,127 @@ def role_view(data: dict[str, Any]) -> dict[str, dict[str, str]]:
         }
     return view
 
+def _argv_model(argv: list[str]) -> str | None:
+    """从结构化 argv 提取 --model/-m 的值；无该标志返回 None。"""
+    for i, t in enumerate(argv):
+        if t in MODEL_FLAGS and i + 1 < len(argv):
+            return argv[i + 1]
+    return None
+
+
+def patch_model_in_argv(argv: list[str], new_model: str) -> list[str]:
+    """就地置换主选模型：已有 --model/-m 换值；没有则插到首个 -p/{PROMPT} 之前
+    （再没有则紧跟可执行名），其余 token 原样保留——避免整条命令重写丢占位符/备选链。"""
+    tokens = list(argv)
+    for i, t in enumerate(tokens):
+        if t in MODEL_FLAGS and i + 1 < len(tokens):
+            tokens[i + 1] = new_model
+            return tokens
+    insert_pair = ["--model", new_model]
+    for i, t in enumerate(tokens):
+        if t in ("-p", "--prompt") or t == PROMPT:
+            return tokens[:i] + insert_pair + tokens[i:]
+    return (tokens[:1] + insert_pair + tokens[1:]) if tokens else insert_pair
+
+
+def _require_role(data: dict[str, Any], role: str) -> dict[str, Any]:
+    entry = (data.get("roles") or {}).get(role)
+    if entry is None:
+        known = "、".join(sorted((data.get("roles") or {}))) or "（配置为空）"
+        raise ConfigError(f"角色 {role} 不存在；现有: {known}\n👉 检查拼写，或先用 --set-role 新增")
+    return entry
+
+
+def _require_external_chain(data: dict[str, Any], role: str, action: str) -> list[tuple[str, dict[str, Any]]]:
+    """局部更新只对外置承载有意义：内置 Subagent 无 argv 可改。"""
+    entry = _require_role(data, role)
+    chain = profile_chain(data, entry.get("profile"))
+    if not chain:
+        raise ConfigError(f"{role} 为内置 Subagent 承载（profile 为空），无命令可{action}\n"
+                          f"👉 先 --set-role {role} <CLI> \"<命令>\" 配置外置承载")
+    return chain
+
+
+def set_model(data: dict[str, Any], role: str, model: str) -> None:
+    """只换主选 profile 的模型，fallback 链不动（整链同换会让备选失去意义）。"""
+    if not model.strip():
+        raise ConfigError("模型名不能为空")
+    chain = _require_external_chain(data, role, "置换模型")
+    name, prof = chain[0]
+    prof["argv"] = patch_model_in_argv(prof["argv"], model.strip())
+
+
+def set_timeout(data: dict[str, Any], role: str, seconds: int) -> None:
+    """角色超时 = 整条备选链统一调整（fallback 沿用旧超时会在主选放宽后率先 TIMEOUT）。
+    硬门禁 ≤1800s（角色协作.md「超时与颗粒度约束」），全员 ≤7200s（command_profile.schema.json）。"""
+    if role in HARD_GATED_ROLES and seconds > 1800:
+        raise ConfigError(f"硬门禁角色 {role} 超时须 ≤1800s，实得 {seconds}s\n👉 拆小任务或换角色承载")
+    if not 1 <= seconds <= 7200:
+        raise ConfigError(f"timeout_s 须为 1~7200 的整数，实得 {seconds}")
+    chain = _require_external_chain(data, role, "调整超时")
+    for _, prof in chain:
+        prof["timeout_s"] = seconds
+
+
+def set_duty(data: dict[str, Any], role: str, duty: str) -> None:
+    """定向更新角色职责（merge-only 下用户明确指令允许的字段级修改）。"""
+    if not duty.strip():
+        raise ConfigError("duty 不能为空")
+    _require_role(data, role)["duty"] = duty.strip()
+
+
+def remove_role(data: dict[str, Any], role: str) -> list[str]:
+    """删除自定义角色并回收其独占 profile（被其他角色/备选链引用的保留）。
+    返回被回收的 profile 名列表。标准 7 角色是认知模态体系基石，拒绝删除。"""
+    if role in STANDARD_ROLES:
+        raise ConfigError(f"标准角色 {role} 不可删除（认知模态体系，dispatch_role.py 依赖）\n"
+                          f"👉 停用外置承载请改用 --set-role {role} subagent \"\"")
+    entry = _require_role(data, role)
+    old = [n for n, _ in profile_chain(data, entry.get("profile"))]
+    data["roles"].pop(role)
+    referenced = {r.get("profile") for r in data["roles"].values()} | {
+        p.get("fallback_profile") for n, p in data["command_profiles"].items() if n not in old}
+    removed: list[str] = []
+    for name in old:
+        if name not in referenced:
+            data["command_profiles"].pop(name, None)
+            removed.append(name)
+    return removed
+
+
+def list_roles(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """角色清单视图：标准角色在前（固定序），自定义角色字典序殿后。
+    gate 取值 hard/soft/custom；custom 即 dispatch_role 不调度的非标准角色。"""
+    roles = data.get("roles") or {}
+    order = [r for r in STANDARD_ROLES if r in roles] + sorted(r for r in roles if r not in STANDARD_ROLES)
+    items: list[dict[str, Any]] = []
+    for role in order:
+        entry = roles[role] or {}
+        chain = profile_chain(data, entry.get("profile"))
+        chain_view = [{"profile": n, "cli": Path(p["argv"][0]).name, "model": _argv_model(p["argv"]),
+                       "timeout_s": p.get("timeout_s"), "executable": bool(shutil.which(p["argv"][0]))}
+                      for n, p in chain]
+        gate = "hard" if role in HARD_GATED_ROLES else ("soft" if role in STANDARD_ROLES else "custom")
+        item: dict[str, Any] = {"role": role, "standard": role in STANDARD_ROLES, "gate": gate,
+                                "duty": entry.get("duty", ""), "carrier": "external" if chain else "subagent",
+                                "chain": chain_view}
+        if chain:
+            item |= {"profile": chain[0][0], "cli": chain_view[0]["cli"],
+                     "model": chain_view[0]["model"], "timeout_s": chain_view[0]["timeout_s"]}
+        items.append(item)
+    return items
+
+
+def _fmt_list_line(item: dict[str, Any]) -> str:
+    tag = {"hard": "硬门禁", "soft": "软外置", "custom": "自定义·不被调度"}[item["gate"]]
+    if item["carrier"] == "subagent":
+        carrier = "内置 Subagent"
+    else:
+        segs = [f"{c['cli']}({c['model']})" if c["model"] else c["cli"] for c in item["chain"]]
+        dead = [c["cli"] for c in item["chain"] if not c["executable"]]
+        carrier = "外置 " + " → ".join(segs) + f" {item.get('timeout_s')}s" + (" ⚠️不在PATH:" + ",".join(dead) if dead else "")
+    return f"{item['role']}: {tag} | {carrier} | duty={item['duty']}"
+
 
 def verify_roles(config_path: Path) -> list[dict[str, Any]]:
     """校验 roles.yaml 的 schema 与各角色承载链的可执行状态。"""
@@ -375,6 +511,10 @@ def verify_roles(config_path: Path) -> list[dict[str, Any]]:
     reports: list[dict[str, Any]] = []
     for role, info in role_view(data).items():
         base = {"role": role, "cli": info["cli"], "cmd": info["cmd"], "profile": info["profile"]}
+        if role not in STANDARD_ROLES:  # 配置层开放但调度层封闭（dispatch --role 限 7 角色），核验面必须可见
+            base["standard"] = False
+            reports.append({"role": role, "status": "custom_role_note",
+                            "msg": f"⚠️ {role} 为非标准角色：dispatch_role.py --role 限 7 标准角色，此条目仅作承载声明。"})
         if not info["profile"]:
             reports.append({**base, "status": "subagent_default", "msg": "✅ 内置 Subagent 承载（默认）。"})
             continue
@@ -438,6 +578,12 @@ def main() -> int:
     parser.add_argument("--scan", "-s", action="store_true", help="扫描宿主机已安装的 Agent CLI")
     parser.add_argument("--json", action="store_true", help="以 JSON 输出扫描或校验结果")
     parser.add_argument("--verify", "-v", action="store_true", help="校验 roles.yaml 的 schema 与各角色承载链")
+    parser.add_argument("--list", action="store_true", help="角色清单：职责、门禁、承载链（CLI/模型/超时/PATH 存活态）")
+    parser.add_argument("--set-model", nargs=2, metavar=("ROLE", "MODEL"), help="只换角色主选模型的 --model 值，命令其余部分与备选链不动")
+    parser.add_argument("--set-timeout", nargs=2, metavar=("ROLE", "SEC"), help="调整角色整条承载链的 timeout_s（硬门禁角色 ≤1800）")
+    parser.add_argument("--set-duty", nargs=2, metavar=("ROLE", "DUTY"), help="定向更新角色职责描述")
+    parser.add_argument("--remove-role", metavar="ROLE", help="删除自定义角色并回收其独占 profile（标准 7 角色受保护）")
+    parser.add_argument("--yes", action="store_true", help="配合 --remove-role 跳过 dry-run 预览直接执行")
     parser.add_argument("--apply-preset", metavar="AGENT", help="一键为全部标准角色应用指定 Agent 的预设 (如 omp/subagent/claude)")
     parser.add_argument("--set-role", nargs=3, metavar=("ROLE", "CLI", "CMD"),
                         help="设定角色承载：CMD 可用 || 串备选（≤3），CLI 为 subagent 时改回内置承载")
@@ -454,6 +600,14 @@ def main() -> int:
                 print(f"{'✅' if item['installed'] else '—'} {item['id']}: {where}")
         return 0
 
+    if args.list:
+        items = list_roles(load_config(args.config))
+        if args.json:
+            print(json.dumps(items, ensure_ascii=False, separators=(",", ":")))
+        else:
+            for item in items:
+                print(_fmt_list_line(item))
+        return 0
     if args.verify:
         reports = verify_roles(args.config)
         if args.json:
@@ -463,12 +617,52 @@ def main() -> int:
                 print(f"{r.get('role')}: {r.get('msg')}")
         return 1 if any(r["status"] in ("schema_error", "profile_missing", "missing_config") for r in reports) else 0
 
-    if args.apply_preset or args.set_role:
+    if args.remove_role:
+        import copy
+        preview = copy.deepcopy(load_config(args.config))
+        try:
+            removed = remove_role(preview, args.remove_role)
+        except ConfigError as exc:
+            print(f"❌ {exc}", file=sys.stderr)
+            return 1
+        if not args.yes:
+            print(f"dry-run：将删除角色 {args.remove_role}"
+                  + (f"，回收 profile: {', '.join(removed)}" if removed else "（无独占 profile 需回收）")
+                  + "；未做任何改动，加 --yes 执行")
+            return 0
+        data = load_config(args.config)
+        removed = remove_role(data, args.remove_role)
+        try:
+            save_config(args.config, data)
+        except ConfigError as exc:
+            print(f"❌ {exc}\n👉 未写入；修正后重试。", file=sys.stderr)
+            return 1
+        print(f"✅ 已删除角色 {args.remove_role}"
+              + (f"，回收 profile: {', '.join(removed)}" if removed else ""))
+        return 0
+    if args.apply_preset or args.set_role or args.set_model or args.set_timeout or args.set_duty:
         data = load_config(args.config)
         try:
             if args.set_role:
                 role_name, cli_val, cmd_val = args.set_role
                 set_role(data, role_name, cli_val, cmd_val)
+                changed = [role_name]
+            elif args.set_model:
+                role_name, model_val = args.set_model
+                set_model(data, role_name, model_val)
+                changed = [role_name]
+            elif args.set_timeout:
+                role_name, sec_val = args.set_timeout
+                try:
+                    sec = int(sec_val)
+                except ValueError:
+                    print(f"❌ 超时须为整数秒，实得 {sec_val!r}\n👉 例如 --set-timeout Builder 3600", file=sys.stderr)
+                    return 1
+                set_timeout(data, role_name, sec)
+                changed = [role_name]
+            elif args.set_duty:
+                role_name, duty_val = args.set_duty
+                set_duty(data, role_name, duty_val)
                 changed = [role_name]
             else:
                 agent_id = args.apply_preset.lower().strip()
@@ -488,6 +682,9 @@ def main() -> int:
         view = role_view(data)
         for role_name in changed:
             print(f"✅ {role_name} → {view[role_name]['cmd']}")
+            if args.set_role and role_name not in STANDARD_ROLES:
+                print(f"⚠️ {role_name} 非标准认知模态：dispatch_role.py --role 限 7 标准角色，此条目仅作承载声明；"
+                      f"如需新认知模态走「系统演进」")
         return 0
 
     if sys.stdin.isatty():
