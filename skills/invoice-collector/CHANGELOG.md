@@ -2,6 +2,11 @@
 
 本文件记录 `invoice-collector` Skill 的所有显著变更，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.1.1] - 2026-10-06
+
+### Changed
+- `清单.md` 生成后不再自动打开，只回报绝对路径（跟随《文件交付》第 4 节 `.md` 不自动打开）。
+
 ## [2.1.0] - 2026-09-29
 
 ### Changed

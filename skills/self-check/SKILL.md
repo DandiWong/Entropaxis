@@ -1,9 +1,9 @@
 ---
 name: self-check
-description: "v1.0.0. Entropaxis 控制面系统自检执行体。当用户输入「系统自检」「自检」「Entropaxis 自检」「分发自检」「检查一下根系统」或要求对根系统健康度做全面检查时触发。执行三遍检查（元规则公理核对 / 双重体检门禁 / 收件方视角分发求值）、CLAUDE.md 违规自动改写，并装配「验证结论 + 可优化项」两节报告。不评判业务项目内容本身。"
+description: "v1.0.1. Entropaxis 控制面系统自检执行体。当用户输入「系统自检」「自检」「Entropaxis 自检」「分发自检」「检查一下根系统」或要求对根系统健康度做全面检查时触发。执行三遍检查（元规则公理核对 / 双重体检门禁 / 收件方视角分发求值）、CLAUDE.md 违规自动改写，并装配「验证结论 + 可优化项」两节报告。不评判业务项目内容本身。"
 metadata:
   scope: control-plane
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # 系统自检 (Entropaxis Self-Check)
@@ -79,4 +79,4 @@ python3 .entropaxis/tools/report_selfcheck.py
    「无需整改」「予以保留」等无动作项目。全项健康时直接说明本轮无待优化项。
 
 不强制落盘报告。确有必要落盘时遵循《文件交付》第 1 节触发门禁与 2.6 节根系统研究产物归属
-（`.entropaxis/data/docs/{{yyyymmdd}}_{{主题}}/`），并按第 4 节通过 `open_file.py` 打开。
+（`.entropaxis/data/docs/{{yyyymmdd}}_{{主题}}/`），并按第 4 节处理打开（`.md` 报告不自动打开，回复中给出路径）。
