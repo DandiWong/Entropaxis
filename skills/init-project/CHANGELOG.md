@@ -1,5 +1,10 @@
 # Changelog - init-project Skill
 
+## [1.4.0] - 2026-10-06
+### Changed
+- 初始化改为懒创建：只建四个顶层域、`RawInput/` 与契约文件；二级目录、`Archive/`、`_知识库/项目资料/` 有材料时再建，README 目录树与代码口径一致。
+- 注册表登记失败时自动删除新建目录不留孤儿；注册表不存在时保留目录并输出待补登记告警。
+
 ## [1.3.0] - 2026-10-02
 ### Added
 - `init_app.py --entry-only`：已有代码仓库只补 AGENTS.md / CLAUDE.md，已存在的跳过。

@@ -1173,6 +1173,107 @@ def check_deliverable_naming(root: Path) -> list[str]:
             )
     return issues
 
+# 存量卫生体检的遍历剪枝：隐藏目录（含 .venv）、依赖产物、归档、控制面本身，
+# 以及自带 .git 的上游仓库子目录（体检只覆盖第一方内容）。
+HYGIENE_PRUNED_DIRS = ("node_modules", "Archive", "__pycache__", paths.SYSTEM_DIRNAME)
+HYGIENE_DATE_WITHOUT_UNDERSCORE = re.compile(r"^20\d{6}(?![_\d])")
+HYGIENE_OVERSIZED_BYTES = 50 * 1024 * 1024
+
+
+def _shared_kb_dirs(root: Path) -> list[str]:
+    """读 workspace-config.yaml 的 shared_dirs 中显式标 `kb: true` 的目录名。
+
+    缺失、未标 kb 或解析失败都返回空表——共享知识库未声明就不按目录名猜测（《知识沉淀》）。
+    """
+    config = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "workspace-config.yaml"
+    if not config.is_file():
+        return []
+    try:
+        import yaml  # noqa: PLC0415
+        data = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return []
+    return [
+        str(entry["dir"]).strip("/")
+        for entry in data.get("shared_dirs") or []
+        if isinstance(entry, dict) and entry.get("kb") is True and entry.get("dir")
+    ]
+
+
+def _hygiene_summary(category: str, hits: list[Path], root: Path, advice: str) -> str:
+    shown = "、".join(str(path.relative_to(root)) for path in hits[:5])
+    if len(hits) > 5:
+        shown += "…"
+    return f"[{category}] 共 {len(hits)} 处：{shown}；处置建议：{advice}"
+
+
+def check_workspace_hygiene(root: Path) -> list[str]:
+    """存量卫生建议项：胶囊缺下划线、知识库根散落、超大文件。
+
+    存量乱象属「尚未整理」而非契约破损（空态即初始态），只报建议不阻断；
+    计数即整理前后对比的度量（方案 G-3）。
+    """
+    missing_underscore: list[Path] = []
+    oversized: list[Path] = []
+    kb_roots: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            name for name in dirnames
+            if not name.startswith(".")
+            and name not in HYGIENE_PRUNED_DIRS
+            and not (Path(dirpath) / name / ".git").exists()
+        ]
+        current = Path(dirpath)
+        for name in dirnames:
+            if HYGIENE_DATE_WITHOUT_UNDERSCORE.match(name):
+                missing_underscore.append(current / name)
+        if current.name == "_知识库":
+            kb_roots.append(current)
+        for filename in filenames:
+            path = current / filename
+            try:
+                if path.is_file() and path.stat().st_size > HYGIENE_OVERSIZED_BYTES:
+                    oversized.append(path)
+            except OSError:
+                continue
+    for name in _shared_kb_dirs(root):
+        if (root / name).is_dir():
+            kb_roots.append(root / name)
+    scattered: list[Path] = []
+    seen_roots: set[str] = set()
+    for kb_root in kb_roots:
+        key = str(kb_root.resolve())
+        if key in seen_roots:
+            continue
+        seen_roots.add(key)
+        for child in kb_root.iterdir():
+            if child.name == "index.md" or child.name.startswith("."):
+                continue
+            if child.is_file() and not child.is_symlink():
+                scattered.append(child)
+
+    issues = []
+    for category, hits, advice in (
+        (
+            "胶囊缺下划线",
+            sorted(missing_underscore),
+            "目录名改为 YYYYMMDD_主题（8 位日期后紧跟下划线）",
+        ),
+        (
+            "知识库根散落",
+            sorted(scattered),
+            "知识库根只留 index.md，散落文件沉淀进子目录或移回所属项目",
+        ),
+        (
+            "超大文件",
+            sorted(oversized),
+            "移入 Archive/ 或移出工作区，避免常驻层被大体量原件撑爆",
+        ),
+    ):
+        if hits:
+            issues.append(_hygiene_summary(category, hits, root, advice))
+    return issues
+
 
 def main() -> int:
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
@@ -1218,6 +1319,7 @@ def main() -> int:
         ("26. Skill 版本与 CHANGELOG 一致性检查", check_skill_metadata, True),
         ("27. 工具路由存在性检查", check_tool_routing, False),
         ("28. 项目入口待填项检查", check_project_entry_placeholders, False),
+        ("29. 工作区存量卫生检查", check_workspace_hygiene, False),
     ]
 
     all_issues = []

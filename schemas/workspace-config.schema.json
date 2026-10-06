@@ -27,6 +27,10 @@
             "type": "string",
             "minLength": 1
           },
+          "kb": {
+            "type": "boolean",
+            "description": "可选；true 表示该共享目录按知识库根纳入 lint [知识库根散落] 体检"
+          },
           "purpose": {
             "type": "string"
           }

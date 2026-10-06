@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest import TestCase
+from unittest import TestCase, mock
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 if str(SYSTEM_ROOT) not in sys.path:
@@ -48,8 +48,9 @@ class InitProjectTests(TestCase):
             ("Spec", "req"),
         )
 
-    def test_creates_standard_5domain_project(self) -> None:
+    def test_init_creates_only_top_level_domains(self) -> None:
         with TemporaryDirectory() as temporary:
+            warnings: list[str] = []
             target = init_project(
                 "示例项目",
                 workspace=Path(temporary),
@@ -63,37 +64,30 @@ class InitProjectTests(TestCase):
                 sensitivity="内部敏感",
                 dashboard_project_id="enablement",
                 start="20260728",
+                warnings=warnings,
             )
 
-            # 1. 根文件、知识库与暂存投递箱
+            # 1. 四个顶层域存在，且域下只有契约文件、无预建二级子目录
+            for domain in ("01_项目管理", "02_产品设计", "03_工程研发", "04_运营增长"):
+                self.assertTrue((target / domain).is_dir(), domain)
+                self.assertTrue(
+                    all(entry.is_file() for entry in (target / domain).iterdir()), domain
+                )
+            self.assertFalse((target / "01_项目管理" / "01_资料").exists())
+            self.assertFalse((target / "Archive").exists())
+            self.assertFalse((target / "_知识库" / "项目资料").exists())
+            # 2. 契约文件与暂存投递箱仍预建
             self.assertTrue((target / "AGENTS.md").is_file())
             self.assertTrue((target / "CLAUDE.md").is_file())
             self.assertTrue((target / "README.md").is_file())
             self.assertTrue((target / "01_项目管理" / "DECISIONS.md").is_file())
             self.assertFalse((target / "DECISIONS.md").exists())
             self.assertTrue((target / "_知识库" / "index.md").is_file())
-            self.assertTrue((target / "_知识库" / "项目资料").is_dir())
             self.assertTrue((target / "RawInput").is_dir())
             self.assertTrue((target / "RawInput" / ".gitkeep").is_file())
             self.assertFalse((target / "_契约").exists())
             self.assertFalse((target / "01_项目管理" / "Changelog.md").exists())
             self.assertFalse((target / "04_运营增长" / "01_上线发布" / "ReleaseNote.md").exists())
-            # 2. 标准 4 域子目录
-            self.assertTrue((target / "01_项目管理" / "01_资料").is_dir())
-            self.assertTrue((target / "01_项目管理" / "02_调研评估").is_dir())
-            self.assertTrue((target / "01_项目管理" / "03_会议决策").is_dir())
-            self.assertTrue((target / "01_项目管理" / "04_价值回收").is_dir())
-            self.assertFalse((target / "01_项目管理" / "03_方案规划").exists())
-            self.assertTrue((target / "02_产品设计" / "01_需求清单").is_dir())
-            self.assertTrue((target / "02_产品设计" / "02_原型Demo").is_dir())
-            self.assertTrue((target / "02_产品设计" / "03_设计规范").is_dir())
-            self.assertTrue((target / "03_工程研发").is_dir())
-            self.assertTrue((target / "04_运营增长" / "01_上线发布").is_dir())
-            self.assertTrue((target / "04_运营增长" / "02_培训").is_dir())
-            self.assertTrue((target / "04_运营增长" / "03_营销推广").is_dir())
-            self.assertTrue((target / "04_运营增长" / "04_数据").is_dir())
-            self.assertTrue((target / "04_运营增长" / "05_用户反馈").is_dir())
-            self.assertTrue((target / "Archive").is_dir())
             self.assertFalse((target / "docs").exists())
             self.assertIn(
                 "../01公司资料",
@@ -114,6 +108,51 @@ class InitProjectTests(TestCase):
                 (target / "CLAUDE.md").read_text(encoding="utf-8"),
                 "# 示例项目 · Claude Code 入口\n\n@AGENTS.md\n",
             )
+
+    @staticmethod
+    def _write_registry(workspace: Path) -> Path:
+        registry = workspace / paths.SYSTEM_DIRNAME / "data" / "templates" / "registry.yaml"
+        registry.parent.mkdir(parents=True)
+        registry.write_text("projects: []\n", encoding="utf-8")
+        return registry
+
+    def test_register_raise_removes_target(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            registry = self._write_registry(workspace)
+            before = registry.read_bytes()
+            with mock.patch("tools.init_project.register_project", side_effect=OSError("登记写入失败")):
+                with self.assertRaises(ProjectInitError) as ctx:
+                    init_project("试点项目", workspace=workspace, templates=TEMPLATES)
+            self.assertIn("已删除新建目录", str(ctx.exception))
+            self.assertFalse((workspace / "试点项目").exists())
+            self.assertEqual(registry.read_bytes(), before)
+
+    def test_register_false_removes_target(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            registry = self._write_registry(workspace)
+            before = registry.read_bytes()
+            with mock.patch("tools.init_project.project_registry.append_project", return_value=False):
+                with self.assertRaises(ProjectInitError) as ctx:
+                    init_project("试点项目", workspace=workspace, templates=TEMPLATES)
+            self.assertIn("append_project 未写入", str(ctx.exception.__cause__))
+            self.assertFalse((workspace / "试点项目").exists())
+            self.assertEqual(registry.read_bytes(), before)
+
+    def test_missing_registry_keeps_dir_with_warning(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            warnings: list[str] = []
+            target = init_project(
+                "试点项目",
+                workspace=workspace,
+                templates=TEMPLATES,
+                warnings=warnings,
+            )
+            self.assertTrue(target.is_dir())
+            self.assertTrue((target / "01_项目管理").is_dir())
+            self.assertTrue(any("bootstrap.py" in warning for warning in warnings), warnings)
 
     def test_creates_software_app_repo(self) -> None:
         with TemporaryDirectory() as temporary:

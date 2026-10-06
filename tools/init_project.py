@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""安全初始化通用业务/综合项目（标准 4 域 + 2 契约 + RawInput + Archive 架构）。"""
+"""安全初始化通用业务/综合项目（标准 4 域 + 2 契约 + RawInput，二级目录懒创建）。"""
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -28,22 +30,12 @@ TEMPLATE_FILES = {
     "知识库索引.template.md": "_知识库/index.md",
 }
 
-# 标准 4 域子目录架构
+# 标准 4 域顶层目录：二级目录有材料时再建（《项目组织》懒创建），导航口径只在 README 模板维护
 DOMAIN_DIRECTORIES = (
-    "01_项目管理/01_资料",
-    "01_项目管理/02_调研评估",
-    "01_项目管理/03_会议决策",
-    "01_项目管理/04_价值回收",
-    "02_产品设计/01_需求清单",
-    "02_产品设计/02_原型Demo",
-    "02_产品设计/03_设计规范",
+    "01_项目管理",
+    "02_产品设计",
     "03_工程研发",
-    "04_运营增长/01_上线发布",
-    "04_运营增长/02_培训",
-    "04_运营增长/03_营销推广",
-    "04_运营增长/04_数据",
-    "04_运营增长/05_用户反馈",
-    "Archive",
+    "04_运营增长",
 )
 
 
@@ -116,6 +108,7 @@ def init_project(
     start: str | None = None,
     parent: str = "",
     path: str | None = None,
+    warnings: list[str] | None = None,
 ) -> Path:
     name = _validate_name(name)
     path = _validate_path(path)
@@ -160,25 +153,60 @@ def init_project(
 
     with tempfile.TemporaryDirectory(prefix=".project-init-", dir=workspace / path if path else workspace) as temporary:
         staging = Path(temporary) / name
-        # 1. 知识库与暂存投递箱
-        (staging / "_知识库" / "项目资料").mkdir(parents=True)
+        # 1. 暂存投递箱（_知识库/ 父目录随 index.md 渲染创建）
         (staging / "RawInput").mkdir(parents=True)
         (staging / "RawInput" / ".gitkeep").write_text("", encoding="utf-8")
 
-        # 2. 标准 4 域目录
+        # 2. 标准 4 域顶层目录
         for directory in DOMAIN_DIRECTORIES:
             (staging / directory).mkdir(parents=True, exist_ok=True)
 
-
-        # 4. 写入渲染模板
+        # 3. 写入渲染模板
         for destination, content in rendered.items():
             path = staging / destination
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
         staging.replace(target)
 
-    register_project(workspace, name, dashboard_project_id, rel_dir=rel_dir, parent=parent)
+    _register_with_compensation(
+        workspace, target, name, dashboard_project_id, rel_dir, parent, warnings=warnings
+    )
     return target
+
+
+def _norm(path: str) -> str:
+    return path.strip("/")
+
+
+def _rollback(target: Path, exc: Exception) -> None:
+    try:
+        shutil.rmtree(target)
+    except OSError as cleanup_exc:
+        raise ProjectInitError(f"登记失败且清理失败，请手动删除: {target}（{cleanup_exc}）") from exc
+    raise ProjectInitError(f"注册表登记失败，已删除新建目录: {target}") from exc
+
+
+def _register_with_compensation(
+    workspace: Path,
+    target: Path,
+    name: str,
+    dashboard_project_id: str,
+    rel_dir: str,
+    parent: str,
+    *,
+    warnings: list[str] | None = None,
+) -> None:
+    """目录发布后的登记三态补偿：缺注册表保留目录告警，登记失败回滚目录。"""
+    if not project_registry.registry_path(workspace).is_file():
+        if warnings is not None:
+            warnings.append("注册表不存在，项目未登记：先运行 bootstrap.py 再补登记")  # 合法初始态，保留目录
+        return
+    try:
+        register_project(workspace, name, dashboard_project_id, rel_dir=rel_dir, parent=parent)
+    except Exception as exc:
+        _rollback(target, exc)
+    if not any(_norm(p["path"]) == _norm(rel_dir) for p in project_registry.load_projects(workspace)):
+        _rollback(target, RuntimeError("append_project 未写入"))
 
 
 def register_project(
@@ -205,10 +233,9 @@ def register_project(
         entry["boards"] = {"main": board}
     return project_registry.append_project(workspace, entry)
 
-
 def _parser() -> argparse.ArgumentParser:
     system_root = Path(__file__).resolve().parent.parent
-    parser = argparse.ArgumentParser(description="初始化通用业务/综合项目工作区（5 域 + 2 契约 + RawInput）")
+    parser = argparse.ArgumentParser(description="初始化通用业务/综合项目工作区（4 域 + 2 契约 + RawInput）")
     parser.add_argument("name", help="项目目录名")
     parser.add_argument(
         "--workspace",
@@ -234,6 +261,7 @@ def _parser() -> argparse.ArgumentParser:
         "--path",
         help="父目录相对路径（如 04A/05B）；嵌套布局才需要，平铺布局省略",
     )
+    parser.add_argument("--json", action="store_true", help="以 JSON 输出目标路径与告警")
     return parser
 
 
@@ -241,6 +269,7 @@ def main() -> None:
     parser = _parser()
     args = parser.parse_args()
     templates = Path(__file__).resolve().parent.parent / "templates" / "project"
+    warnings: list[str] = []
     try:
         target = init_project(
             args.name,
@@ -257,11 +286,16 @@ def main() -> None:
             start=args.start,
             parent=args.parent,
             path=args.path,
+            warnings=warnings,
         )
     except ProjectInitError as error:
         parser.error(str(error))
+    if args.json:
+        print(json.dumps({"target": str(target), "warnings": warnings}, ensure_ascii=False))
+        return
     print(target)
-
+    for warning in warnings:
+        print(f"⚠️ {warning}")
 
 if __name__ == "__main__":
     main()
