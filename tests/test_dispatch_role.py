@@ -1066,8 +1066,10 @@ class TraceTests(DispatchRoleTestBase):
         finally:
             dr.TRACE_LOG = old
         rows = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        self.assertEqual(len(rows), 1)
-        r = rows[0]
+        self.assertEqual(len(rows), 2)
+        start, r = rows
+        self.assertEqual((start["event"], start["pid"]), ("start", os.getpid()))
+        self.assertEqual(start["dispatch_id"], r["dispatch_id"], "开始与结束须可配对，续接才能识别被中断的调度")
         self.assertEqual((r["role"], r["exit_code"], r["executed"]), ("Researcher", 0, True))
         self.assertIn("调研某事", " ".join(r["argv"]), "轨迹须含提示词原文，否则无法核对跑的是什么")
         self.assertTrue(r["deliverable_valid"])

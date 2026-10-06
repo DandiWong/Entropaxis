@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -718,6 +719,11 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
             codes.add("NOT_EXECUTABLE")
             continue
         t0 = time.time()
+        # 开始记录：子进程跑到一半时会话断掉，只有结束记录的话分不清"没跑/在跑/被杀"；
+        # resume_context.py 按 dispatch_id 配对，无结束记录时再看 pid 是否存活。
+        dispatch_id = uuid.uuid4().hex
+        trace({"event": "start", "dispatch_id": dispatch_id, "pid": os.getpid(), "role": role,
+               "profile": prof["name"], "cwd": str(cwd), "deliverable": str(deliverable)})
         produces_file = deliverable != cwd
         before = _sha256_path(deliverable) if produces_file and deliverable.exists() else None
         try:
@@ -745,8 +751,8 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
                        else _deliverable_issues(deliverable, role))
             ok = proc.returncode == 0 and not reasons
             code = "" if ok else ("NO_VALID_OUTPUT" if proc.returncode == 0 else "CHAIN_EXHAUSTED")
-            trace({"role": role, "profile": prof["name"], "argv": argv, "cwd": str(cwd), "executed": True,
-                   "exit_code": proc.returncode, "duration_s": round(time.time() - t0, 1),
+            trace({"dispatch_id": dispatch_id, "role": role, "profile": prof["name"], "argv": argv,
+                   "cwd": str(cwd), "executed": True, "exit_code": proc.returncode, "duration_s": round(time.time() - t0, 1),
                    "deliverable": str(deliverable), "deliverable_valid": not reasons,
                    # 判据不合格要说出是哪一条：只报 NO_VALID_OUTPUT 会让人以为是模型不行
                    "criteria_issues": reasons[:8] or None,
@@ -763,8 +769,8 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
         except subprocess.TimeoutExpired:
             attempts.append({"profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
                              "ended_at": _now_iso(), "failure_code": "TIMEOUT", "timeout": True})
-            trace({"role": role, "profile": prof["name"], "argv": argv, "cwd": str(cwd), "executed": True,
-                   "failure_code": "TIMEOUT", "duration_s": round(time.time() - t0, 1)})
+            trace({"dispatch_id": dispatch_id, "role": role, "profile": prof["name"], "argv": argv,
+                   "cwd": str(cwd), "executed": True, "failure_code": "TIMEOUT", "duration_s": round(time.time() - t0, 1)})
             codes.add("TIMEOUT")
     if not codes:
         codes.add("CHAIN_EXHAUSTED")
