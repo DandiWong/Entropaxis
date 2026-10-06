@@ -296,6 +296,22 @@ class ApplyMovesTests(TestCase):
             self.assertEqual(list(outside.iterdir()), [])  # 根外既无文件也无新建目录
             self.assertEqual((root / "a").read_text(encoding="utf-8"), "payload")
 
+    def test_parent_relocated_before_mkdir_leaves_no_dir_outside(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root, outside = self._outside_fixture(Path(temporary).resolve())
+            manifest = _write_manifest(root, [("a", "out/new/a")])
+            real_mkdir = os.mkdir
+
+            def relocate_then_mkdir(path, *args, **kwargs):
+                if kwargs.get("dir_fd") is not None and (root / "out").exists():
+                    os.rename(root / "out", outside / "captured")  # 层 fd 已核对、mkdir 前被迁出
+                return real_mkdir(path, *args, **kwargs)
+
+            with mock.patch.object(apply_moves.os, "mkdir", relocate_then_mkdir):
+                self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 1)
+            self.assertEqual(list((outside / "captured").iterdir()), [])
+            self.assertEqual((root / "a").read_text(encoding="utf-8"), "payload")
+
     def test_parent_relocated_outside_after_open_is_reverted(self) -> None:
         with TemporaryDirectory() as temporary:
             root, outside = self._outside_fixture(Path(temporary).resolve())

@@ -103,11 +103,22 @@ def _open_dir_chain(root: Path, rel_dir: Path, shared: list[Path], *, create: bo
             except FileNotFoundError:
                 if not create:
                     raise
+                _check_scope(fd, root, shared)  # 建目录前核对当前层仍在工作区内
                 try:
                     os.mkdir(part, dir_fd=fd)
                 except FileExistsError:
                     pass
                 child = os.open(part, flags, dir_fd=fd)
+                try:
+                    _check_scope(child, root, shared)
+                except ScopeError:
+                    # ponytail: 核对与 mkdir 之间当前层被并发迁出（已豁免残余，见审计 C-6），删掉刚建的空目录
+                    os.close(child)
+                    try:
+                        os.rmdir(part, dir_fd=fd)
+                    except OSError:
+                        pass
+                    raise
             os.close(fd)
             fd = child
         _check_scope(fd, root, shared)
