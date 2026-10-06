@@ -433,13 +433,9 @@ def _profile_references(data: dict[str, Any], name: str) -> int:
 
 def _preference_name(data: dict[str, Any], role: str, number: int) -> str:
     profiles = data["command_profiles"]
-    base = f"{role.lower()}-preference-{number}"
-    if base not in profiles:
-        return base
-    suffix = 2
-    while f"{base}-{suffix}" in profiles:
-        suffix += 1
-    return f"{base}-{suffix}"
+    while f"{role.lower()}-{number}" in profiles:
+        number += 1
+    return f"{role.lower()}-{number}"
 
 
 def _gc_profiles(data: dict[str, Any], candidates: list[str]) -> list[str]:

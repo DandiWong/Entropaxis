@@ -1013,7 +1013,7 @@ def run_direct(cwd: Path, role: str, prompt: str, out: Path | None, owner: str,
                 rec = next((x for x in m["assignments"] if x.get("assignment_id") == aid), None)
                 if rec is None:
                     rec = {"assignment_id": aid, "role": role,
-                           "command_profile": source if chain else f"{role.lower()}-primary",
+                           "command_profile": source if chain else f"{role.lower()}-1",
                            "status": status, "attempts": []}
                     m["assignments"].append(rec)
                 else:
