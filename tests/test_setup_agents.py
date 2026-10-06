@@ -12,13 +12,17 @@ if str(SYSTEM_ROOT) not in sys.path:
 
 from tools import dispatch_role as dr
 from tools.setup_agents import (
-    ConfigError,
     HARD_GATED_ROLES,
+    KNOWN_AGENTS,
+    MODELS_LIMIT,
+    ConfigError,
     command_to_argvs,
     detect_installed_agents,
     list_roles,
     load_config,
+    parse_model_lines,
     patch_model_in_argv,
+    probe_models,
     remove_role,
     role_view,
     save_config,
@@ -321,3 +325,92 @@ class ListRolesTests(TestCase):
         self.assertEqual(len(notes), 1)
         self.assertEqual(notes[0]["role"], "DataSteward")
         self.assertIn("仅作承载声明", notes[0]["msg"])
+
+
+class ParseModelLinesTests(TestCase):
+    """列模型 stdout 解析：杂讯行剔除、格式过滤、截断。"""
+
+    def test_tab_parse_skips_noise_lines(self) -> None:
+        out = "Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\n\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n"
+        self.assertEqual(parse_model_lines(out, "tab"), ["gemini-3.8-flash-high", "gemini-3.8-flash-low"])
+
+    def test_lines_parse_keeps_only_slash_ids(self) -> None:
+        out = "Available models:\nopencode/big-pickle\nlocal model line\nopencode/mimo-v2.6-flash-free\n"
+        self.assertEqual(parse_model_lines(out, "lines"), ["opencode/big-pickle", "opencode/mimo-v2.6-flash-free"])
+
+    def test_dedup_and_truncate(self) -> None:
+        out = "\n".join(f"p/m{i}" for i in range(30)) + "\np/m0"
+        ids = parse_model_lines(out, "lines")
+        self.assertEqual(len(ids), MODELS_LIMIT)
+        self.assertEqual(len(set(ids)), MODELS_LIMIT, "重复 id 不得占位")
+
+
+class ProbeModelsTests(TestCase):
+    """枚举探测软降级：非零退出/异常不阻断扫描，错误留痕。"""
+
+    def _agent(self, **kw):
+        from tools.setup_agents import AgentInfo
+        base = dict(id="x", name="X", cli="x", version_cmd=[], description="", presets={})
+        return AgentInfo(**(base | kw))
+
+    def test_no_models_cmd_returns_empty(self) -> None:
+        self.assertEqual(probe_models(self._agent()), {})
+
+    @mock.patch("tools.setup_agents.subprocess.run")
+    def test_success_parses_and_marks_truncation(self, mock_run: mock.MagicMock) -> None:
+        mock_run.return_value = mock.MagicMock(returncode=0, stdout="a/b\nc/d\n" + "\n".join(f"p/m{i}" for i in range(30)) + "\n", stderr="")
+        out = probe_models(self._agent(models_cmd=("x", "models"), models_parse="lines"))
+        self.assertEqual(len(out["available_models"]), MODELS_LIMIT)
+        self.assertTrue(out.get("models_truncated"))
+
+    @mock.patch("tools.setup_agents.subprocess.run")
+    def test_nonzero_exit_leaves_trace(self, mock_run: mock.MagicMock) -> None:
+        mock_run.return_value = mock.MagicMock(returncode=1, stdout="", stderr="boom")
+        out = probe_models(self._agent(models_cmd=("x", "models"), models_parse="lines"))
+        self.assertEqual(out["available_models"], [])
+        self.assertEqual(out["models_error"], "boom")
+
+    @mock.patch("tools.setup_agents.subprocess.run", side_effect=OSError("nope"))
+    def test_exception_soft_degrades(self, _: mock.MagicMock) -> None:
+        out = probe_models(self._agent(models_cmd=("x", "models"), models_parse="lines"))
+        self.assertEqual(out["available_models"], [])
+        self.assertEqual(out["models_error"], "OSError")
+
+
+class NewAgentEntriesTests(TestCase):
+    """2026-10-07 调研新增条目：枚举能力声明 + 全部预设可安全转结构化 argv。"""
+
+    def test_enumerable_entries_declared(self) -> None:
+        by_id = {a.id: a for a in KNOWN_AGENTS}
+        self.assertEqual(by_id["agy"].models_cmd, ("agy", "models"))
+        self.assertEqual(by_id["agy"].models_parse, "tab")
+        self.assertEqual(by_id["opencode"].models_cmd, ("opencode", "models"))
+        self.assertEqual(by_id["opencode"].models_parse, "lines")
+        self.assertEqual(by_id["mimo"].models_cmd, ("mimo", "models"))
+        self.assertEqual(by_id["mimo"].models_parse, "lines")
+        self.assertEqual(by_id["pi"].models_cmd, (), "pi 需 pattern 搜索，不自动枚举")
+
+    def test_new_agent_presets_convert_to_argv(self) -> None:
+        # opencode/mimo 的 headless 是 run <位置参数>，预设必须显式含 {prompt}；
+        # 任何一条预设转不出含 {PROMPT} 的 argv，初始化向导就会静默保持旧配置
+        for agent in KNOWN_AGENTS:
+            if agent.id not in ("pi", "agy", "opencode", "mimo"):
+                continue
+            for role, preset in agent.presets.items():
+                with self.subTest(agent=agent.id, role=role):
+                    argvs = command_to_argvs(preset)
+                    self.assertTrue(any("{PROMPT}" in argv for argv in argvs))
+
+    @mock.patch("tools.setup_agents.shutil.which")
+    @mock.patch("tools.setup_agents.subprocess.run")
+    def test_scan_wires_model_enumeration(self, mock_run: mock.MagicMock, mock_which: mock.MagicMock) -> None:
+        mock_which.side_effect = lambda c: "/usr/bin/agy" if c == "agy" else None
+        mock_run.side_effect = [
+            mock.MagicMock(returncode=0, stdout="agy 1.2.7\n", stderr=""),   # --version
+            mock.MagicMock(returncode=0, stdout="gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n", stderr=""),  # models
+        ]
+        detected = {i["id"]: i for i in detect_installed_agents()}
+        self.assertEqual(detected["agy"]["version"], "agy 1.2.7")
+        self.assertEqual(detected["agy"]["available_models"], ["gemini-3.8-flash-high"])
+        # 未安装的 CLI 不得出现枚举字段
+        self.assertNotIn("available_models", detected["gemini"])

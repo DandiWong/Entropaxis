@@ -85,6 +85,10 @@ class AgentInfo(NamedTuple):
     version_cmd: list[str]
     description: str
     presets: dict[str, str]
+    # 机器枚举可用模型（2026-10-07 调研）：agy/opencode/mimo 有列模型子命令；pi 需 pattern 搜索
+    # 不自动枚举（claude/codex 无子命令，omp 未见）——预设表人工维护即"探测是候选不是默认"边界
+    models_cmd: tuple[str, ...] = ()
+    models_parse: str = ""  # "" 不枚举 | "tab" = 首列 model_id | "lines" = 每行 provider/model
 
 
 # 常见 Agent 及其针对认知模态的经过验证的标准启动命令预设
@@ -190,11 +194,99 @@ KNOWN_AGENTS: list[AgentInfo] = [
             "Researcher": "ollama run qwen2.5:32b",
         },
     ),
+    AgentInfo(
+        id="pi",
+        name="Pi coding agent (pi)",
+        cli="pi",
+        version_cmd=["pi", "--version"],
+        description="多 provider 终端 coding agent（badlogic/pi-mono）；模型 pattern 支持 provider/id 与 :thinking 档位",
+        # pi 无列模型子命令；/model 的 Ctrl+S 保存即默认模型，裸命令直接用该默认
+        presets={role: "pi -p {prompt}" for role in STANDARD_ROLES},
+    ),
+    AgentInfo(
+        id="agy",
+        name="Google Antigravity CLI (agy)",
+        cli="agy",
+        version_cmd=["agy", "--version"],
+        description="Google Antigravity 终端 agent（Gemini 系）；headless 出 JSON 信封（status/response/usage）",
+        models_cmd=("agy", "models"),
+        models_parse="tab",
+        presets={
+            "Researcher": "agy --model gemini-3.8-flash-medium -p {prompt}",
+            "Reporter": "agy --model gemini-3.8-flash-medium -p {prompt}",
+            "Builder": "agy --model gemini-3.1-pro-high -p {prompt}",
+        },
+    ),
+    AgentInfo(
+        id="opencode",
+        name="OpenCode (opencode)",
+        cli="opencode",
+        version_cmd=["opencode", "--version"],
+        description="终端 coding agent（sst/opencode）；模型格式 provider/model，含大量 -free 档",
+        models_cmd=("opencode", "models"),
+        models_parse="lines",
+        presets={  # headless 是 run <位置参数>，非 -p {PROMPT}
+            "Builder": "opencode run --model opencode/mimo-v2.6-flash-free {prompt}",
+            "Researcher": "opencode run --model opencode/mimo-v2.6-flash-free {prompt}",
+        },
+    ),
+    AgentInfo(
+        id="mimo",
+        name="Xiaomi MiMo Code (mimo)",
+        cli="mimo",
+        version_cmd=["mimo", "--version"],
+        description="小米 MiMo Code 终端 coding assistant；模型格式 provider/model，配置文件 mimocode.json",
+        models_cmd=("mimo", "models"),
+        models_parse="lines",
+        presets={  # headless 是 run <位置参数>，非 -p {PROMPT}
+            "Builder": "mimo run --model xiaomi/mimo-v2.5-pro {prompt}",
+        },
+    ),
 ]
 
 
+MODELS_LIMIT = 20  # 枚举仅作候选展示，截断防长输出（工具设计 Token 经济性）
+
+
+def parse_model_lines(stdout: str, parse: str) -> list[str]:
+    """列模型子命令 stdout → model id 列表。
+    tab：agy 输出「model_id<Tab>显示名」，无 tab 的杂讯行（如 Fetching...）跳过；
+    lines：opencode/mimo 输出「provider/model」每行一个，仅保留含 / 的行。"""
+    ids: list[str] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        mid = line.split("\t")[0].strip() if parse == "tab" else line
+        if parse == "tab" and "\t" not in line:
+            continue
+        if parse == "lines" and "/" not in mid:
+            continue
+        if mid and mid not in ids:
+            ids.append(mid)
+    return ids[:MODELS_LIMIT]
+
+
+def probe_models(agent: AgentInfo) -> dict[str, Any]:
+    """执行列模型子命令（软降级：失败/超时返回空列表并留痕，不阻断扫描）。"""
+    if not agent.models_cmd or not agent.models_parse:
+        return {}
+    try:
+        proc = subprocess.run(list(agent.models_cmd), capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"available_models": [], "models_error": f"{type(exc).__name__}"}
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return {"available_models": [], "models_error": (tail[0][:80] if tail else f"exit {proc.returncode}")}
+    models = parse_model_lines(proc.stdout or "", agent.models_parse)
+    out: dict[str, Any] = {"available_models": models}
+    if len(models) == MODELS_LIMIT:
+        out["models_truncated"] = True
+    return out
+
+
 def detect_installed_agents() -> list[dict[str, Any]]:
-    """扫描系统环境检测已安装的 Agent CLI 及其版本信息。"""
+    """扫描系统环境检测已安装的 Agent CLI 及其版本信息（含可用模型枚举）。"""
     results: list[dict[str, Any]] = []
 
     for agent in KNOWN_AGENTS:
@@ -240,7 +332,7 @@ def detect_installed_agents() -> list[dict[str, Any]]:
             except Exception:
                 version = "unknown-version"
 
-        results.append({
+        item = {
             "id": agent.id,
             "name": agent.name,
             "cli": agent.cli,
@@ -249,7 +341,9 @@ def detect_installed_agents() -> list[dict[str, Any]]:
             "path": cli_path,
             "description": agent.description,
             "presets": agent.presets,
-        })
+        }
+        item |= probe_models(agent)  # 枚举仅对已装 CLI 生效；结果是候选，写入须用户显式选择
+        results.append(item)
 
     return results
 
