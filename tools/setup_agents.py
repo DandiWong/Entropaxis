@@ -97,8 +97,8 @@ KNOWN_AGENTS: list[AgentInfo] = [
         version_cmd=["omp", "--version"],
         description="多模型编码与代理工具，支持 OpenAI/Anthropic/Gemini 独立进程调用",
         presets={
-            "Architecture": "omp --model openai-codex/gpt-5.6-terra",
-            "Reviewer": "omp --model openai-codex/gpt-5.6-terra",
+            "Architecture": "omp --model openai-codex/gpt-6.1-sol",
+            "Reviewer": "omp --model openai-codex/gpt-6.1-sol",
             "Researcher": "omp --model google-antigravity/gemini-3.8-flash || omp --model minimax-code-cn/MiniMax-M3",
             "Builder": "omp --model zhipu-coding-plan/glm-5.3 || claude --model sonnet-5",
             "Designer": "claude --model sonnet-5",
