@@ -136,11 +136,11 @@ class ApplyMovesTests(TestCase):
             real_move = apply_moves._move_noreplace
             calls = []
 
-            def flaky(src: Path, dst: Path, *args) -> None:
-                calls.append(src)
+            def flaky(*args) -> None:
+                calls.append(args)
                 if len(calls) == 2:
                     raise OSError("注入失败")
-                real_move(src, dst, *args)
+                real_move(*args)
 
             with mock.patch.object(apply_moves, "_move_noreplace", flaky):
                 self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 1)
@@ -274,27 +274,45 @@ class ApplyMovesTests(TestCase):
             self.assertEqual((root / "b").read_text(encoding="utf-8"), "concurrent-new-data")
             self.assertFalse((root / "a").exists())
 
+    def _outside_fixture(self, base: Path):
+        root, outside = base / "root", base / "outside"
+        root.mkdir(), outside.mkdir(), (root / "out").mkdir()
+        (root / "a").write_text("payload", encoding="utf-8")
+        return root, outside
+
     def test_parent_redirected_outside_root_after_precheck(self) -> None:
         with TemporaryDirectory() as temporary:
-            base = Path(temporary).resolve()
-            root, outside = base / "root", base / "outside"
-            root.mkdir(), outside.mkdir(), (root / "out").mkdir()
-            (root / "a").write_text("payload", encoding="utf-8")
+            root, outside = self._outside_fixture(Path(temporary).resolve())
+            manifest = _write_manifest(root, [("a", "out/new/a")])
+            real_move = apply_moves._move_noreplace
+
+            def redirect(*args):
+                (root / "out").rmdir()
+                (root / "out").symlink_to(outside, target_is_directory=True)
+                return real_move(*args)
+
+            with mock.patch.object(apply_moves, "_move_noreplace", redirect):
+                self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 1)
+            self.assertEqual(list(outside.iterdir()), [])  # 根外既无文件也无新建目录
+            self.assertEqual((root / "a").read_text(encoding="utf-8"), "payload")
+
+    def test_parent_relocated_outside_after_open_is_reverted(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root, outside = self._outside_fixture(Path(temporary).resolve())
             manifest = _write_manifest(root, [("a", "out/a")])
-            real_fd = apply_moves._scoped_dir_fd
+            real = apply_moves._rename_noreplace
             calls = []
 
-            def redirect(directory, *args):
-                calls.append(directory)
-                if len(calls) == 2:  # 打开目标父目录前把它换成指向根外的符号链接
-                    (root / "out").rmdir()
-                    (root / "out").symlink_to(outside, target_is_directory=True)
-                return real_fd(directory, *args)
+            def relocate(*args):
+                calls.append(args)
+                if len(calls) == 1:  # 父目录 fd 核对后、rename 前被整体迁出工作区
+                    os.rename(root / "out", outside / "captured")
+                return real(*args)
 
-            with mock.patch.object(apply_moves, "_scoped_dir_fd", redirect):
+            with mock.patch.object(apply_moves, "_rename_noreplace", relocate):
                 self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 1)
-            self.assertEqual(list(outside.iterdir()), [])
             self.assertEqual((root / "a").read_text(encoding="utf-8"), "payload")
+            self.assertEqual(list((outside / "captured").iterdir()), [])
 
     def _write_config(self, root: Path, body: str) -> None:
         config = root / ".entropaxis" / "data" / "templates" / "workspace-config.yaml"

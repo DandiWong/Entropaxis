@@ -12,8 +12,8 @@
 退出码：0 成功 / 1 执行中冲突或异常（已完成部分保留）/ 2 预检拒绝（零改动）/ 3 待人工核对（零改动）。
 
 移动原语是内核级原子「目标存在即失败」的 rename（macOS renameatx_np RENAME_EXCL、
-Linux renameat2 RENAME_NOREPLACE），以目录 fd 绑定父目录身份并在执行时复核其真实路径
-仍在工作区内、不在共享资料目录内；因此不存在"已复制未删源"之类的中间态。
+Linux renameat2 RENAME_NOREPLACE）；父目录自工作区根逐层 O_NOFOLLOW 以 fd 打开（缺失层相对 fd
+创建），执行前后复核真实路径仍在工作区内、不在共享资料目录内；因此不存在"已复制未删源"之类的中间态。
 """
 
 from __future__ import annotations
@@ -78,28 +78,70 @@ def _within(path: Path, base: Path) -> bool:
     return path == base or base in path.parents
 
 
-def _scoped_dir_fd(directory: Path, root: Path, shared: list[Path]) -> int:
-    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+def _check_scope(fd: int, root: Path, shared: list[Path]) -> None:
+    real = _fd_path(fd)
+    if not _within(real, root):
+        raise ScopeError(f"目录真实路径越出工作区：{real}")
+    if any(_within(real, d) for d in shared):
+        raise ScopeError(f"目录真实路径落在共享资料目录内：{real}")
+
+
+def _open_dir_chain(root: Path, rel_dir: Path, shared: list[Path], *, create: bool) -> int:
+    """自工作区根逐层以 fd 打开 rel_dir：每层 O_NOFOLLOW（不跟随符号链接），缺失层用
+    相对 fd 的 mkdir 创建，最后复核真实路径。路径在核对后被替换为符号链接也无法把创建或
+    打开引到根外；工作区内的符号链接目录因此一律拒绝（fail-closed）。"""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        real = _fd_path(fd)
-        if not _within(real, root):
-            raise ScopeError(f"父目录真实路径越出工作区：{real}")
-        if any(_within(real, d) for d in shared):
-            raise ScopeError(f"父目录真实路径落在共享资料目录内：{real}")
+        if _fd_path(fd) != root:
+            raise ScopeError(f"工作区根真实路径已变化：{_fd_path(fd)}")
+        for part in rel_dir.parts:
+            if part in ("", ".", ".."):
+                raise ScopeError(f"非法路径分量：{rel_dir}")
+            try:
+                child = os.open(part, flags, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                try:
+                    os.mkdir(part, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                child = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        _check_scope(fd, root, shared)
     except BaseException:
         os.close(fd)
         raise
     return fd
 
 
-def _move_noreplace(src: Path, dst: Path, root: Path, shared: list[Path]) -> None:
-    """原子无覆盖移动：目标存在即失败；父目录以 fd 绑定，执行时复核作用域。"""
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    src_fd = _scoped_dir_fd(src.parent, root, shared)
+def _move_noreplace(source: str, target: str, root: Path, shared: list[Path]) -> None:
+    """原子无覆盖移动（路径相对工作区根）：目标存在即失败；父目录逐层 fd 打开并复核作用域。
+
+    rename 后再复核目标父目录真实路径：若其在核对后被并发进程整体迁出工作区，立即原子
+    移回并报错，不静默成功。
+    ponytail: 核对与 rename 之间目录被整体迁出的微秒级窗口无法在 POSIX 上消除，只能事后
+    检测并移回；威胁模型不含同用户并发进程恶意搬移工作区目录（已由用户豁免，见审计 C-6）。
+    """
+    src_rel, dst_rel = Path(source), Path(target)
+    src_fd = _open_dir_chain(root, src_rel.parent, shared, create=False)
     try:
-        dst_fd = _scoped_dir_fd(dst.parent, root, shared)
+        dst_fd = _open_dir_chain(root, dst_rel.parent, shared, create=True)
         try:
-            _rename_noreplace(src_fd, src.name, dst_fd, dst.name)
+            _rename_noreplace(src_fd, src_rel.name, dst_fd, dst_rel.name)
+            try:
+                _check_scope(dst_fd, root, shared)
+            except ScopeError as escaped:
+                try:
+                    _rename_noreplace(dst_fd, dst_rel.name, src_fd, src_rel.name)
+                except OSError as revert_exc:
+                    raise ScopeError(
+                        f"移动后目标目录已不在工作区内且移回失败，须人工处理：{_fd_path(dst_fd)}/{dst_rel.name}"
+                        f"（{escaped}；{revert_exc}）"
+                    ) from revert_exc
+                raise ScopeError(f"移动后目标目录已不在工作区内，已移回原位：{escaped}") from escaped
         finally:
             os.close(dst_fd)
     finally:
@@ -303,7 +345,7 @@ def _execute(rows: list[Move], log_path: Path, root: Path, shared: list[Path], u
         try:
             _log(log_path, begin_marker, lineno, src, dst)
             stage = verb
-            _move_noreplace(root / source, root / target, root, shared)
+            _move_noreplace(source, target, root, shared)
             stage = f"记 {done_marker}"
             _log(log_path, done_marker, lineno, src, dst)
         except OSError as exc:
