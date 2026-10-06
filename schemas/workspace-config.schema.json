@@ -1,0 +1,40 @@
+{
+  "title": "workspace-config",
+  "target": "data/templates/workspace-config.yaml",
+  "type": "object",
+  "properties": {
+    "_meta": {
+      "type": "object",
+      "required": [
+        "source",
+        "managed_by",
+        "policy"
+      ]
+    },
+    "shared_dirs": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object",
+        "required": [
+          "dir",
+          "purpose"
+        ],
+        "properties": {
+          "dir": {
+            "type": "string",
+            "minLength": 1
+          },
+          "purpose": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "org": {
+      "type": "object"
+    }
+  }
+}

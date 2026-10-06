@@ -11,13 +11,11 @@ import shutil
 from pathlib import Path
 
 try:
-    from . import paths
+    from . import paths, scan_workspace
 except ImportError:
-    # runpy.run_path()（install_windows.py 冻结后调用它的方式）不会把脚本自身目录
-    # 加进 sys.path，跟直接 `python3 bootstrap.py` 的行为不同，这里补上避免
-    # ModuleNotFoundError: No module named 'paths'。
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import paths
+    import scan_workspace
 
 def render_instance_configs(
     verbose: bool = True,
@@ -441,6 +439,7 @@ def print_legacy_layout_hint() -> None:
 if __name__ == "__main__":
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
     force_rescan_opener = "--force-rescan-opener" in sys.argv
+    scan_enabled = "--no-scan" not in sys.argv
 
     if verbose:
         print("🚀 开始初始化/自愈工作区配置...")
@@ -452,6 +451,16 @@ if __name__ == "__main__":
         init_file_opener(verbose=verbose, force_rescan=force_rescan_opener)
         render_instance_configs(verbose=verbose)
         stamp_new_instances(verbose=verbose)
+        if scan_enabled:
+            try:
+                scanned = scan_workspace.scan_workspace(paths.WORKSPACE_ROOT)
+            except Exception as exc:
+                print(f"❌ 目录扫描失败: {exc}\n👉 检查注册表及共享目录配置；可用 --no-scan 跳过候选扫描。", file=sys.stderr)
+                sys.exit(1)
+            counts = {key: len(items) for key, items in scanned.items()}
+            if any(counts.values()):
+                print("目录候选（未登记）: " + " ".join(f"{key}={n}" for key, n in counts.items())
+                      + "；用 scan_workspace.py --json 查看，确认后 --apply --select <相对目录> 登记。")
         print("🎉 工作区初始化与自愈完成（入口已同步，实例配置就绪；角色默认内置 Subagent 兜底）。")
         print("💡 进阶自定义：说「自定义角色」绑定多模型（roles.yaml） / 「配置打开方式」 / registry.yaml 登记别名 / workspace-config.yaml 组织口径")
         if sys.platform == "win32" and verbose:
