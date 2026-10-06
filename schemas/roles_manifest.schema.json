@@ -104,6 +104,11 @@
                   "pattern": "^([a-z][a-z0-9-]*|(ack|verify):.+)$",
                   "$comment": "profile 名，或带类别前缀的非调度条目：ack:<豁免引用>、verify:<校验 profile>。"
                 },
+                "preference_number": {
+                  "$comment": "执行时在该角色有序偏好中的实际序号（从 1 起）；自定义独立 profile 不填。",
+                  "type": "integer",
+                  "minimum": 1
+                },
                 "argv_sha256": {
                   "type": "string",
                   "pattern": "^[0-9a-f]{64}$"

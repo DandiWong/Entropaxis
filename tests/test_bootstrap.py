@@ -1,15 +1,24 @@
+import io
 import json
 import shutil
 import sys
 import tempfile
+from contextlib import redirect_stdout
 from pathlib import Path
-from unittest import TestCase
+from unittest import TestCase, mock
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
-from tools.bootstrap import sync_entrypoints, detect_host_apps, init_file_opener, link_skills
+from tools import bootstrap, role_preferences
+from tools.bootstrap import (
+    detect_host_apps,
+    detect_role_preferences,
+    init_file_opener,
+    link_skills,
+    sync_entrypoints,
+)
 
 # ponytail: sync_entrypoints() 的路径由自身 __file__ 派生，无法用 monkeypatch 隔离到临时目录；
 # 直接对真实工作区跑，并用 finally 恢复，覆盖幂等性与漂移自愈两条核心路径。
@@ -118,3 +127,43 @@ class FileOpenerMergeTests(TestCase):
         second = init_file_opener(verbose=False, system_dir=self.system_dir)
         self.assertEqual(first, second)
         self.assertEqual(self.config_path.stat().st_mtime_ns, stamp)
+
+
+class RolePreferenceBootstrapTests(TestCase):
+    def test_local_detection_preserves_new_nonselected_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "roles.yaml"
+            original = (
+                "roles:\n"
+                "  Builder:\n"
+                "    duty: build\n"
+                "    preferences: [local-builder]\n"
+                "    profile: null\n"
+                "command_profiles:\n"
+                "  local-builder: {agent: codex, model: openai/gpt-test}\n"
+            )
+            config.write_text(original, encoding="utf-8")
+
+            fake_codex = Path(tmp) / "codex"
+            fake_codex.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = exec ] && [ \"$2\" = --help ]; then\n"
+                "  printf '%s\\n' --model\n"
+                "else\n"
+                "  exit 99\n"
+                "fi\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+
+            with mock.patch.object(role_preferences.shutil, "which", return_value=str(fake_codex)):
+                report = detect_role_preferences(config)
+
+            self.assertIsNone(report[0]["selected_profile"])
+            self.assertEqual(report[0]["preferences"][0]["status"], "local_ready")
+            self.assertEqual(config.read_text(encoding="utf-8"), original)
+
+    def test_missing_role_config_is_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(detect_role_preferences(Path(tmp) / "missing.yaml"), [])
+

@@ -1,5 +1,5 @@
 {
-  "$comment": "角色承载第 3 级配置的机器契约。物理宿主：data/templates/roles.yaml（merge-only；种子 templates/instance/roles.template.yaml）。roles 只存角色→profile 标识，命令本体只在 command_profiles（契约见 command_profile.schema.json）。profile 为 null 表示由当前会话内置 Subagent 承载。",
+  "$comment": "角色有序偏好配置。roles.preferences 是 command_profiles 标识的有序列表，序号从 1 起；profile 是选中标识或 null（未选中，不代表硬门禁外置就绪）。agent/model 是调用真源；provider/model 前缀原样保留。旧实例须显式迁移；bootstrap 仅首次渲染，真实模型检测须单独取得用户授权。",
   "title": "roles_config",
   "target": "data/templates/roles.yaml",
   "type": "object",
@@ -14,10 +14,15 @@
       "patternProperties": {
         "^[A-Z][A-Za-z]*$": {
           "type": "object",
-          "required": ["duty"],
+          "required": ["duty", "preferences", "profile"],
           "additionalProperties": false,
           "properties": {
             "duty": { "type": "string", "minLength": 1 },
+            "preferences": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+            },
             "profile": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9-]*$" }
           }
         }

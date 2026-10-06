@@ -2,7 +2,7 @@
 """
 工作区根入口与系统配置初始化工具 (Bootstrap)
 用于一键同步工作区根目录的 AGENTS.md / CLAUDE.md 入口文件，把 .entropaxis/skills 挂进 Agent 的 Skill 发现目录，自动检测宿主机安装的应用程序，
-生成/维护各类文件格式的默认打开器关联配置 (.entropaxis/data/templates/file-opener.json)，并自适应引导环境。
+生成/维护各类文件格式的默认打开器关联配置 (.entropaxis/data/templates/file-opener.json)，并在不调用模型、不选择 profile 的前提下报告角色本地候选。
 """
 import os
 import sys
@@ -16,6 +16,67 @@ except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import paths
     import scan_workspace
+
+
+def detect_role_preferences(config_path: Path | None = None) -> list[dict]:
+    """Return local role-profile candidates without changing configuration.
+
+    This is deliberately only the first phase: it loads the optional roles
+    instance and delegates executable/headless capability checks to
+    ``role_preferences.local_candidates``.  It neither validates models nor
+    selects a profile.
+    """
+    if config_path is None:
+        config_path = paths.DATA_DIR / "templates" / "roles.yaml"
+    if not config_path.exists():
+        return []
+
+    try:
+        import yaml
+
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    try:
+        from .role_preferences import local_candidates
+    except ImportError:
+        from role_preferences import local_candidates
+    return local_candidates(data)
+
+
+def report_local_role_preferences() -> list[dict]:
+    """Print the non-authorizing local detection result; failures do not block bootstrap."""
+    try:
+        candidates = detect_role_preferences()
+    except Exception as exc:
+        print(f"⚠️ 角色本地候选检测未完成: {exc}（初始化继续；未改写角色配置）")
+        return []
+
+    print("角色本地候选（仅检查本机 CLI 与无交互能力，**不是实际模型验证**）：")
+    if not candidates:
+        print("  • 未配置外置角色 profile；当前选择保持未知，Reviewer/Maintainer 未选择时保持阻断。")
+    for role in candidates:
+        selected = role.get("selected_profile") or "未选择"
+        preferences = role.get("preferences") or []
+        if not preferences:
+            print(f"  • {role.get('role', '?')}: {selected}（无外置偏好）")
+            continue
+        states = "；".join(
+            f"#{item.get('number', '?')} {item.get('profile', '?')}: {item.get('status', 'unknown')}"
+            for item in preferences
+        )
+        print(f"  • {role.get('role', '?')}: 当前 {selected}；{states}")
+    print(
+        "未选择或写入任何角色配置。若要验证实际模型，必须先在对话中说明提供商与可能成本并取得明确授权；"
+    )
+    print(
+        "获授权后才可执行：python3 .entropaxis/tools/setup_agents.py "
+        "--check-preferences --authorize-model-check --authorization-event '<用户确认>' [--json]"
+    )
+    return candidates
 
 def render_instance_configs(
     verbose: bool = True,
@@ -436,34 +497,42 @@ def print_legacy_layout_hint() -> None:
         print(f"   mv {paths.LEGACY_DATA_DIRNAME} {paths.SYSTEM_DIRNAME}/data")
 
 
-if __name__ == "__main__":
-    verbose = "--verbose" in sys.argv or "-v" in sys.argv
-    force_rescan_opener = "--force-rescan-opener" in sys.argv
-    scan_enabled = "--no-scan" not in sys.argv
+def main(argv: list[str] | None = None) -> int:
+    """Run bootstrap in the same order used by the command-line entrypoint."""
+    args = sys.argv[1:] if argv is None else argv
+    verbose = "--verbose" in args or "-v" in args
+    force_rescan_opener = "--force-rescan-opener" in args
+    scan_enabled = "--no-scan" not in args
 
     if verbose:
         print("🚀 开始初始化/自愈工作区配置...")
 
     print_legacy_layout_hint()
 
-    if sync_entrypoints(verbose=verbose):
-        link_skills(verbose=verbose)
-        init_file_opener(verbose=verbose, force_rescan=force_rescan_opener)
-        render_instance_configs(verbose=verbose)
-        stamp_new_instances(verbose=verbose)
-        if scan_enabled:
-            try:
-                scanned = scan_workspace.scan_workspace(paths.WORKSPACE_ROOT)
-            except Exception as exc:
-                print(f"❌ 目录扫描失败: {exc}\n👉 检查注册表及共享目录配置；可用 --no-scan 跳过候选扫描。", file=sys.stderr)
-                sys.exit(1)
-            counts = {key: len(items) for key, items in scanned.items()}
-            if any(counts.values()):
-                print("目录候选（未登记）: " + " ".join(f"{key}={n}" for key, n in counts.items())
-                      + "；用 scan_workspace.py --json 查看，确认后 --apply --select <相对目录> 登记。")
-        print("🎉 工作区初始化与自愈完成（入口已同步，实例配置就绪；角色默认内置 Subagent 兜底）。")
-        print("💡 进阶自定义：说「自定义角色」绑定多模型（roles.yaml） / 「配置打开方式」 / registry.yaml 登记别名 / workspace-config.yaml 组织口径")
-        if sys.platform == "win32" and verbose:
-            print_windows_hints()
-    else:
-        sys.exit(1)
+    if not sync_entrypoints(verbose=verbose):
+        return 1
+
+    link_skills(verbose=verbose)
+    init_file_opener(verbose=verbose, force_rescan=force_rescan_opener)
+    render_instance_configs(verbose=verbose)
+    stamp_new_instances(verbose=verbose)
+    report_local_role_preferences()
+    if scan_enabled:
+        try:
+            scanned = scan_workspace.scan_workspace(paths.WORKSPACE_ROOT)
+        except Exception as exc:
+            print(f"❌ 目录扫描失败: {exc}\n👉 检查注册表及共享目录配置；可用 --no-scan 跳过候选扫描。", file=sys.stderr)
+            return 1
+        counts = {key: len(items) for key, items in scanned.items()}
+        if any(counts.values()):
+            print("目录候选（未登记）: " + " ".join(f"{key}={n}" for key, n in counts.items())
+                  + "；用 scan_workspace.py --json 查看，确认后 --apply --select <相对目录> 登记。")
+    print("🎉 工作区初始化与自愈完成（入口已同步，实例配置就绪；角色选择保留既有值或未知，Reviewer/Maintainer 未选择时保持阻断）。")
+    print("💡 进阶自定义：说「自定义角色」绑定有序模型偏好（roles.yaml） / 「配置打开方式」 / registry.yaml 登记别名 / workspace-config.yaml 组织口径")
+    if sys.platform == "win32" and verbose:
+        print_windows_hints()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

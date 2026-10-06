@@ -47,18 +47,19 @@ except ImportError:  # pragma: no cover - 环境缺 PyYAML 时给出可行动错
     raise
 
 try:
-    from . import paths, update_capsule
+    from . import paths, update_capsule, role_preferences
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import paths  # type: ignore
     import update_capsule  # type: ignore
+    import role_preferences  # type: ignore
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 ROLES_CONFIG = SYSTEM_ROOT / "data" / "templates" / "roles.yaml"
 ACTIVE_CONFIG: Path | None = None  # 测试注入点；生产环境留空用 ROLES_CONFIG
 SCHEMA_DIR = SYSTEM_ROOT / "schemas"
 
-HARD_ROLES = {"Reviewer", "Maintainer"}
+HARD_ROLES = role_preferences.HARD_ROLES
 ALL_ROLES = ("Architecture", "Researcher", "Designer", "Builder", "Reviewer", "Maintainer", "Reporter")
 SCHED_STATES = ("pending", "running", "succeeded", "failed", "blocked")
 FAILURE_CODES = ("UNCONFIGURED", "SUBAGENT_AUTO", "NOT_EXECUTABLE", "TIMEOUT", "NO_VALID_OUTPUT", "CHAIN_EXHAUSTED", "VERIFY_FAILED")
@@ -350,42 +351,56 @@ def _argv_ok(argv: list[str]) -> bool:
     return bool(argv) and all(isinstance(t, str) and t and not (set(t) & SHELL_METACHARS) for t in argv)
 
 
-def resolve_profile_chain(profile_name: str, config: dict[str, Any]) -> list[dict[str, Any]]:
-    """按 fallback_profile 单跳展开备选链（链深 ≤3、带环检测）。"""
-    chain: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    name = profile_name
+def resolve_profile_chain(profile_name: str, config: dict[str, Any], role: str | None = None) -> list[dict[str, Any]]:
+    """Explicit assignment starts at its preference, then walks the ordered suffix.
+
+    Role context disambiguates shared profiles. Standalone custom argv chains
+    retain fallback links, with cycle detection and no silent depth truncation.
+    """
     profiles = config.get("command_profiles") or {}
-    while name and name not in seen and len(chain) < 3:
-        if name in seen:
-            break
+    entry = (config.get("roles") or {}).get(role, {}) if role else {}
+    names = entry.get("preferences")
+    if names is not None and (not isinstance(names, list) or any(name not in profiles for name in names)):
+        return []
+    if names is not None:
+        if profile_name not in names:
+            # An explicit standalone profile is scoped to itself, not another role.
+            profile = profiles.get(profile_name)
+            return [{"name": profile_name, **profile}] if isinstance(profile, dict) else []
+        start = names.index(profile_name)
+        return [{"name": name, **profiles[name], "preference_number": i + 1}
+                for i, name in enumerate(names) if i >= start and name in profiles]
+    chain, seen = [], set()
+    name = profile_name
+    while name and name not in seen:
         seen.add(name)
-        prof = profiles.get(name)
-        if not isinstance(prof, dict):
+        profile = profiles.get(name)
+        if not isinstance(profile, dict):
             break
-        chain.append({"name": name, **prof})
-        name = prof.get("fallback_profile") or ""
+        chain.append({"name": name, **profile})
+        name = profile.get("fallback_profile")
     return chain
 
 
 def _tier3_default_chain(role: str, config: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-    """第 3 级默认解析：roles.<角色>.profile 显式声明优先（null 即内置承载）；
-    未声明时按约定名 `<角色>-primary`。"""
+    """Selected preference controls the global entry point; null never auto-selects."""
     profiles = config.get("command_profiles") or {}
     declared = config.get("roles") or {}
     if role in declared:
         name = (declared[role] or {}).get("profile")
+        if "preferences" in declared[role] and name is not None and name not in declared[role]["preferences"]:
+            return "UNCONFIGURED", []
         if not name:
             return "SUBAGENT_AUTO", []
-        return (name, resolve_profile_chain(name, config)) if name in profiles else ("UNCONFIGURED", [])
-    canon = f"{role.lower()}-primary"
-    if canon in profiles:
-        return canon, resolve_profile_chain(canon, config)
+        return (name, resolve_profile_chain(name, config, role)) if name in profiles else ("UNCONFIGURED", [])
     return "UNCONFIGURED", []
 
 
 def build_argv(profile: dict[str, Any], prompt: str) -> list[str] | None:
-    argv = list(profile.get("argv") or [])
+    try:
+        argv = role_preferences.profile_argv(profile)
+    except (ValueError, TypeError):
+        return None
     if PROMPT_PLACEHOLDER not in argv:
         return None  # 无占位符 → 无法注入任务文本，按不可用处理
     # 元字符只校验 argv 模板本身（禁 shell 字符串与 || 内联）。提示词是数据不是命令——
@@ -703,9 +718,10 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
     codes: set[str] = set()
     for prof in chain:
         started = _now_iso()
+        ordinal = {"preference_number": prof["preference_number"]} if "preference_number" in prof else {}
         argv = build_argv(prof, prompt)
         if argv is None:
-            attempts.append({"profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(prof.get("argv"))), "started_at": started,
+            attempts.append({**ordinal, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(prof)), "started_at": started,
                              "ended_at": _now_iso(), "failure_code": "NOT_EXECUTABLE", "detail": "argv 缺 {PROMPT} 占位符或含 shell 元字符"})
             trace({"role": role, "profile": prof["name"], "argv": prof.get("argv"), "executed": False,
                    "failure_code": "NOT_EXECUTABLE", "detail": "argv 缺 {PROMPT} 占位符或含 shell 元字符"})
@@ -713,7 +729,7 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
             continue
         exe = _executable(argv[0])
         if exe is None:
-            attempts.append({"profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
+            attempts.append({**ordinal, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
                              "ended_at": _now_iso(), "failure_code": "NOT_EXECUTABLE", "detail": f"{argv[0]!r} 不可执行"})
             trace({"role": role, "profile": prof["name"], "argv": argv, "executed": False,
                    "failure_code": "NOT_EXECUTABLE", "detail": f"{argv[0]!r} 不可执行"})
@@ -723,7 +739,7 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
         # 开始记录：子进程跑到一半时会话断掉，只有结束记录的话分不清"没跑/在跑/被杀"；
         # resume_context.py 按 dispatch_id 配对，无结束记录时再看 pid 是否存活。
         dispatch_id = uuid.uuid4().hex
-        trace({"event": "start", "dispatch_id": dispatch_id, "pid": os.getpid(), "role": role,
+        trace({**ordinal, "event": "start", "dispatch_id": dispatch_id, "pid": os.getpid(), "role": role,
                "profile": prof["name"], "cwd": str(cwd), "deliverable": str(deliverable)})
         produces_file = deliverable != cwd
         before = _sha256_path(deliverable) if produces_file and deliverable.exists() else None
@@ -746,13 +762,13 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
                 # （复核 A）。退出码为 0 时承载事实已经确定——就是这条 profile 产出的——
                 # 先盖上，判据于是只评角色自己该产出的内容。receipt_id 清空，等判据过了再签。
                 stamp_carrier(deliverable, prof["name"],
-                              " ".join(prof.get("argv") or []) or prof["name"],
+                              " ".join(role_preferences.profile_argv_safe(prof)) or prof["name"],
                               "", audit=(role == "Reviewer"), receipt_id="")
             reasons = (["交付物未被本次调用写出或改写（沿用既有文件不构成本轮产出）"] if unchanged
                        else _deliverable_issues(deliverable, role))
             ok = proc.returncode == 0 and not reasons
             code = "" if ok else ("NO_VALID_OUTPUT" if proc.returncode == 0 else "CHAIN_EXHAUSTED")
-            trace({"dispatch_id": dispatch_id, "role": role, "profile": prof["name"], "argv": argv,
+            trace({**ordinal, "dispatch_id": dispatch_id, "role": role, "profile": prof["name"], "argv": argv,
                    "cwd": str(cwd), "executed": True, "exit_code": proc.returncode, "duration_s": round(time.time() - t0, 1),
                    "deliverable": str(deliverable), "deliverable_valid": not reasons,
                    # 判据不合格要说出是哪一条：只报 NO_VALID_OUTPUT 会让人以为是模型不行
@@ -763,15 +779,15 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
                 if role == "Reviewer" and produces_file:
                     # 新一轮审计结论可能让方案过审：推进所在胶囊的 lifecycle
                     update_capsule.sync_for(deliverable)
-                attempts.append({"profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
+                attempts.append({**ordinal, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
                                  "ended_at": ended, "exit_code": 0, "report_sha256": _sha256_path(deliverable)})
                 return "", attempts, True
-            attempts.append({"profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
+            attempts.append({**ordinal, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
                              "ended_at": ended, "exit_code": proc.returncode, "failure_code": code,
                              "detail": ("；".join(reasons) or (proc.stderr or ""))[-400:]})
             codes.add(code)
         except subprocess.TimeoutExpired:
-            attempts.append({"profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
+            attempts.append({**ordinal, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
                              "ended_at": _now_iso(), "failure_code": "TIMEOUT", "timeout": True})
             trace({"dispatch_id": dispatch_id, "role": role, "profile": prof["name"], "argv": argv,
                    "cwd": str(cwd), "executed": True, "failure_code": "TIMEOUT", "duration_s": round(time.time() - t0, 1)})
@@ -849,7 +865,7 @@ def run_assignment(cwd: Path, assignment_id: str, prompt: str, ack: str | None, 
         return EXIT_USAGE
     deliverable = (archive.parent / a["deliverable"]).resolve()
 
-    chain = resolve_profile_chain(a["command_profile"], config)
+    chain = resolve_profile_chain(a["command_profile"], config, role)
     source = "profile"
     if not chain:
         source, chain = _tier3_default_chain(role, config)
@@ -901,6 +917,7 @@ def run_assignment(cwd: Path, assignment_id: str, prompt: str, ack: str | None, 
 
     if succeeded:
         print(json.dumps({"outcome": "succeeded", "tier": tier, "role": role, "mode": mode, "source": source,
+                          "selected_preference": next((x.get("preference_number") for x in reversed(attempts) if "failure_code" not in x), None),
                           "carrier": carrier, "carrier_ref": carrier_ref, "carrier_stamped": stamped,
                "receipt_id": receipt.get("receipt_id") or None, "receipt_signed": receipt.get("mac", "") not in ("", "unsigned"),
                           "deliverable_sha256": _sha256_path(deliverable), "revision": updated["revision"]}, ensure_ascii=False))
@@ -1032,6 +1049,7 @@ def run_direct(cwd: Path, role: str, prompt: str, out: Path | None, owner: str,
 
     receipt = {"outcome": verdict["outcome"], "role": role, "gate": gate, "mode": f"{mode}（{mode_why}）",
                "carrier": carrier, "carrier_ref": carrier_ref, "carrier_stamped": stamped,
+               "selected_preference": ok_attempt.get("preference_number") if succeeded and ok_attempt else None,
                "receipt_id": receipt.get("receipt_id") or None, "receipt_signed": receipt.get("mac", "") not in ("", "unsigned"),
                "deliverable": str(deliverable) if deliverable else None,
                "target": str(target_file) if target_file else None,
@@ -1075,7 +1093,7 @@ def _workspace_ref(cwd: Path) -> str:
 def _profile_command_text(profile_name: str, config: dict[str, Any]) -> str:
     """profile 名 → 命令原文（档案零命令：原文只在第 3 级，这里仅用于回执与盖章）。"""
     prof = (config.get("command_profiles") or {}).get(profile_name) or {}
-    argv = prof.get("argv") or []
+    argv = role_preferences.profile_argv_safe(prof)
     return " ".join(argv) if argv else profile_name
 
 

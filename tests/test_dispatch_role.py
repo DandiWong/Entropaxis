@@ -142,7 +142,12 @@ class DispatchRoleTestBase(TestCase):
     # ---- 脚手架 ----------------------------------------------------------
 
     def write_config(self, profiles: dict, mode: str | None = "strict", grants: list | None = None) -> None:
-        block = {"command_profiles": profiles}
+        block = {"command_profiles": profiles, "roles": {}}
+        for role in dr.ALL_ROLES:
+            primary = f"{role.lower()}-primary"
+            if primary in profiles:
+                block["roles"][role] = {"duty": role, "profile": primary}
+        dr.role_preferences.migrate_config(block)
         if mode is not None:
             block["default_dispatch_mode"] = mode
         if grants is not None:
@@ -424,7 +429,7 @@ class RunFlowTests(DispatchRoleTestBase):
         self.assertEqual(rc, dr.EXIT_BLOCKED)
 
     def test_subagent_auto_via_roles(self) -> None:
-        self.config.write_text("roles:\n  Builder:\n    profile: null\n", encoding="utf-8")
+        self.config.write_text("roles:\n  Builder:\n    duty: build\n    preferences: []\n    profile: null\n", encoding="utf-8")
         self.write_workers(role="Builder", profile="p-none")
         rc = dr.run_assignment(self.ws, "r1", prompt="x", ack=None, owner="t")
         self.assertEqual(rc, dr.EXIT_LOCAL)
@@ -759,20 +764,6 @@ class StdinIsolationTests(DispatchRoleTestBase):
             for fd in (saved, r, w):
                 os.close(fd)
         self.assertEqual(rc, dr.EXIT_OK, "子进程不得因继承永不关闭的 stdin 而挂到超时")
-
-
-class RealConfigResolutionTests(TestCase):
-    """对真实 roles.yaml 的解析断言（门禁四律「执行态可见」的可负担部分）。"""
-
-    def test_researcher_chain_resolves_to_declared_cli(self) -> None:
-        cfg = dr.load_dispatch_config()
-        name, chain = dr._tier3_default_chain("Researcher", cfg)
-        if name in ("UNCONFIGURED", "SUBAGENT_AUTO"):
-            # 收件方尚未配置角色承载是合法初始态，不是契约破损（治理准则「空态即初始态」）
-            self.skipTest(f"本机未配置 Researcher 外置承载（{name}），跳过实例断言")
-        self.assertTrue(chain, f"Researcher 未解析出可执行链: {name}")
-        self.assertIn(dr.PROMPT_PLACEHOLDER, chain[0]["argv"], "argv 缺 {PROMPT} 占位符 → 任务文本无法注入")
-        self.assertLessEqual(len(chain), 3, "备选链深须 ≤3")
 
 
 class ArgvBuildTests(DispatchRoleTestBase):

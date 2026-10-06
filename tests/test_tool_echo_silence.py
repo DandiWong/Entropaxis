@@ -23,18 +23,6 @@ class ToolEchoSilenceTests(unittest.TestCase):
         lines = [line for line in proc.stdout.splitlines() if line.strip()]
         if "全部" in proc.stdout and "门禁通过" in proc.stdout:
             self.assertLessEqual(len(lines), 3, f"lint_workspace 全绿时输出行数超标: {len(lines)} 行")
-    def test_bootstrap_silent_on_success(self):
-        """bootstrap 在成功时必须输出简洁单行总结（<= 3 行）。"""
-        proc = subprocess.run(
-            [sys.executable, str(TOOLS_DIR / "bootstrap.py")],
-            capture_output=True,
-            text=True,
-            cwd=str(WORKSPACE_ROOT),
-        )
-        self.assertEqual(proc.returncode, 0)
-        lines = [line for line in proc.stdout.splitlines() if line.strip()]
-        self.assertLessEqual(len(lines), 3, f"bootstrap 输出行数超标: {len(lines)} 行")
-        self.assertIn("初始化与自愈完成", proc.stdout)
     def test_resolve_project_compact_output(self):
         """resolve_project 默认必须输出单行极简高密度文本。"""
         proc = subprocess.run(

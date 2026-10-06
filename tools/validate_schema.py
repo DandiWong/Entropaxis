@@ -2,8 +2,8 @@
 """按 .entropaxis/schemas/ 声明校验结构化契约 (Schema Validator).
 
 只支持 JSON Schema 的一个子集：type / required / properties / items / enum /
-pattern / minLength / minItems / minimum / additionalProperties / patternProperties /
-conditional_required。
+pattern / minLength / minItems / minimum / maximum / uniqueItems / oneOf /
+additionalProperties / patternProperties / conditional_required。
 够用即可——引入完整 JSON Schema 库会违反纯标准库铁律。
 
 schema 用 .json 而非 .yaml：Python 标准库没有 YAML 解析器。YAML 实例（如 data/templates/roles.yaml）
@@ -113,6 +113,12 @@ def validate(data, schema: dict, path: str = "$", *, allow_schema_directives: bo
     if "enum" in schema and data not in schema["enum"]:
         errs.append(f"{path}: 取值 {data!r} 不在允许集 {schema['enum']}")
 
+    if "oneOf" in schema:
+        matches = sum(not validate(data, sub, path, allow_schema_directives=allow_schema_directives)
+                      for sub in schema["oneOf"])
+        if matches != 1:
+            errs.append(f"{path}: oneOf 必须恰好匹配一个形态，实得 {matches}")
+
     if isinstance(data, str):
         if "pattern" in schema and not re.search(schema["pattern"], data):
             errs.append(f"{path}: 取值 {data!r} 不匹配 /{schema['pattern']}/")
@@ -122,6 +128,8 @@ def validate(data, schema: dict, path: str = "$", *, allow_schema_directives: bo
     if isinstance(data, (int, float)) and not isinstance(data, bool):
         if "minimum" in schema and data < schema["minimum"]:
             errs.append(f"{path}: 取值 {data} < 最小 {schema['minimum']}")
+        if "maximum" in schema and data > schema["maximum"]:
+            errs.append(f"{path}: 取值 {data} > 最大 {schema['maximum']}")
 
     if isinstance(data, dict):
         for key in schema.get("required", []):
@@ -150,6 +158,8 @@ def validate(data, schema: dict, path: str = "$", *, allow_schema_directives: bo
     if isinstance(data, list):
         if "minItems" in schema and len(data) < schema["minItems"]:
             errs.append(f"{path}: 元素数 {len(data)} < 最小 {schema['minItems']}")
+        if schema.get("uniqueItems") and any(item in data[:i] for i, item in enumerate(data)):
+            errs.append(f"{path}: 数组元素须唯一")
         item_schema = schema.get("items")
         if item_schema:
             for i, item in enumerate(data):

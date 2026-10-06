@@ -1,5 +1,5 @@
 {
-  "$comment": "第 3 级 command_profiles 的机器契约。物理宿主：data/templates/roles.yaml 的 command_profiles 段（merge-only；种子 templates/instance/roles.template.yaml；整文件契约见 roles_config.schema.json）。命令本体唯一存在于此处——角色指派档案与规则正文均不携带命令（角色协作.md「档案零命令」，档案只存 profile 标识）。argv 为结构化数组，经 subprocess 列表参数执行、无 shell 拼接；禁 shell 元字符（; & | ` $ > < 换行）与 || 内联备选链，备选以 fallback_profile 单跳表达，链深<=3 与环检测由 dispatch_role.py 执行。{PROMPT} 为唯一占位符（调度器替换为任务提示词；--cwd 类工作目录切换用 subprocess 的 cwd 参数表达，不进 argv）。",
+  "$comment": "命令定义唯一真源。每个 profile 二选一：agent/model 配对（argv 由适配器生成）或自定义 argv（校验命令也用此形态）。角色偏好顺序只在 roles.preferences，配对形态禁止 fallback_profile。独立自定义命令允许 fallback_profile，执行器带环检测。{PROMPT} 是任务占位符；subprocess 列表参数无 shell，工作目录由 cwd 传入。",
   "title": "command_profiles",
   "target": "data/templates/roles.yaml 的 command_profiles 段",
   "type": "object",
@@ -7,9 +7,21 @@
   "patternProperties": {
     "^[a-z][a-z0-9-]*$": {
       "type": "object",
-      "required": ["argv", "timeout_s"],
+      "required": ["timeout_s"],
+      "oneOf": [
+        {
+          "required": ["agent", "model"],
+          "properties": { "argv": { "type": "null" }, "fallback_profile": { "type": "null" } }
+        },
+        {
+          "required": ["argv"],
+          "properties": { "agent": { "type": "null" }, "model": { "type": "null" } }
+        }
+      ],
       "additionalProperties": false,
       "properties": {
+        "agent": { "enum": ["claude", "codex", "pi", "omp", "agy", "opencode", "mimo"] },
+        "model": { "type": "string", "minLength": 1, "pattern": "^[^;&|`$><\\n\\r]+$" },
         "argv": {
           "type": "array",
           "minItems": 1,

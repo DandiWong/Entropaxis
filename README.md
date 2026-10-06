@@ -75,6 +75,16 @@
    python3 .entropaxis/tools/bootstrap.py
    ```
    该工具会自动将 `.entropaxis/entrypoints/` 下的 `AGENTS.md` 与 `CLAUDE.md` 物理同步至工作区根目录，建立全局统一的规则控制面（纯文件复制，杜绝云同步网盘跨平台软链冲突）；并把 `.entropaxis/skills/` 以软链接挂进根目录 `.claude/skills/` 与 `.agents/skills/`，供 Agent 按 Skill 描述自动发现。
+
+   Bootstrap 还会在首次渲染 `roles.yaml` 后显示角色外置 profile 的**本地候选**（CLI 是否存在、是否可无交互启动）。这不是模型调用或模型有效性验证：默认角色选择为未知（`null`），Bootstrap 不会写入选择，也不会隐式授权或调用任何模型。已有旧式 fallback 链只会在显式 `--migrate-preferences`，或获授权的角色写入操作中迁移为有序偏好；本地检测及未授权的 `--check-preferences` 不迁移，迁移后当前选择仍须是偏好列表中的一项。
+
+   若确实要验证模型，先在对话中告知将使用的提供商及可能成本，并取得用户明确授权；随后才可运行：
+   ```bash
+   python3 .entropaxis/tools/setup_agents.py --check-preferences \
+     --authorize-model-check --authorization-event '<用户确认>' [--json]
+   ```
+   第二阶段按每个角色的偏好顺序选择首个有效回显，同一配对在本次操作中复用结果；全部失败则保留既有选择，新配置仍为 `null`。`selected_preference` 是从 1 起的序号，`outcome: selected` 才表示本次实测成功，保留的旧选择不构成可用性证据。回显成功也不代替调度器对角色交付物的验收。拒绝或未获答复时不得进行真实调用；`--dry-run` 只做本地检测。
+
    初始化默认只展示目录候选，不改写已有项目与共享资料登记；`--no-scan` 可跳过扫描。候选、人工选择与生效配置保持区分：
    ```bash
    python3 .entropaxis/tools/scan_workspace.py --json
