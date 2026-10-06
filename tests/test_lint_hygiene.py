@@ -65,3 +65,20 @@ class WorkspaceHygieneTests(TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(check_workspace_hygiene(root), [])
+
+    def test_explicit_kb_roots_respect_pruning(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            names = ["Archive/_知识库", f"{paths.SYSTEM_DIRNAME}/_知识库", "node_modules/_知识库"]
+            for name in names:
+                (root / name).mkdir(parents=True)
+                (root / name / "a.xlsx").write_bytes(b"x")
+            config = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "workspace-config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                "shared_dirs:\n"
+                + "".join(f"  - {{dir: {name}/, purpose: fixture, kb: true}}\n" for name in names),
+                encoding="utf-8",
+            )
+            self.assertEqual(check_workspace_hygiene(root), [])
+

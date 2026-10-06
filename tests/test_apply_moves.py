@@ -110,58 +110,6 @@ class ApplyMovesTests(TestCase):
             self.assertTrue((root / "a.txt").is_file())
             self.assertFalse((root / "x").exists())
 
-    def test_race_file_target_created_after_precheck(self) -> None:
-        with TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "a.txt").write_text("原内容", encoding="utf-8")
-            manifest = _write_manifest(root, [("a.txt", "b.txt")])
-            real_link = os.link
-
-            def link_racer(src, dst, **kwargs):
-                Path(dst).write_text("他人写入", encoding="utf-8")  # 预检通过后、link 前被他人抢占
-                return real_link(src, dst, **kwargs)
-
-            with mock.patch.object(apply_moves.os, "link", link_racer):
-                self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 1)
-
-            self.assertEqual((root / "b.txt").read_text(encoding="utf-8"), "他人写入")
-            self.assertTrue((root / "a.txt").is_file())
-            self.assertEqual((root / "a.txt").read_text(encoding="utf-8"), "原内容")
-
-    def test_race_dir_target_filled_after_claim(self) -> None:
-        with TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "d1").mkdir()
-            (root / "d1" / "inner.txt").write_text("原内容", encoding="utf-8")
-            manifest = _write_manifest(root, [("d1", "d2")])
-            real_rename = os.rename
-
-            def rename_racer(src, dst):
-                (Path(dst) / "他人文件.txt").write_text("他人写入", encoding="utf-8")  # 占位后被他人写入
-                return real_rename(src, dst)
-
-            with mock.patch.object(apply_moves.os, "rename", rename_racer):
-                self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 1)
-
-            self.assertEqual((root / "d2" / "他人文件.txt").read_text(encoding="utf-8"), "他人写入")
-            self.assertTrue((root / "d1" / "inner.txt").is_file())
-            self.assertFalse((root / "d2" / "inner.txt").exists())
-
-    def test_recover_linked_not_unlinked(self) -> None:
-        with TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "a.txt").write_text("甲", encoding="utf-8")
-            os.link(root / "a.txt", root / "b.txt")
-            manifest = _write_manifest(root, [("a.txt", "b.txt")])
-            log = manifest.parent / "moves.tsv.log"
-            log.write_text("BEGIN\t1\ta.txt\tb.txt\n", encoding="utf-8")
-
-            self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 0)
-
-            self.assertFalse((root / "a.txt").exists())
-            self.assertEqual((root / "b.txt").read_text(encoding="utf-8"), "甲")
-            self.assertIn("DONE\t1\ta.txt\tb.txt", _log_text(manifest))
-
     def test_recover_renamed_not_logged(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -188,11 +136,11 @@ class ApplyMovesTests(TestCase):
             real_move = apply_moves._move_noreplace
             calls = []
 
-            def flaky(src: Path, dst: Path) -> None:
+            def flaky(src: Path, dst: Path, *args) -> None:
                 calls.append(src)
                 if len(calls) == 2:
                     raise OSError("注入失败")
-                real_move(src, dst)
+                real_move(src, dst, *args)
 
             with mock.patch.object(apply_moves, "_move_noreplace", flaky):
                 self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 1)
@@ -241,23 +189,6 @@ class ApplyMovesTests(TestCase):
                 self.assertFalse((root / f"b{i}.txt").exists())
                 self.assertEqual(_log_text(manifest).count(f"UNDONE\t{i}\t"), 1)
 
-    def test_recover_undo_linked_not_unlinked(self) -> None:
-        with TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "a.txt").write_text("甲", encoding="utf-8")
-            manifest = _write_manifest(root, [("a.txt", "b.txt")])
-            self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 0)
-            # 注入中断：撤销已 link 未 unlink，仅记录 UNDO_BEGIN
-            os.link(root / "b.txt", root / "a.txt")
-            with (manifest.parent / "moves.tsv.log").open("a", encoding="utf-8") as handle:
-                handle.write("UNDO_BEGIN\t1\ta.txt\tb.txt\n")
-
-            self.assertEqual(apply_moves.run(manifest, root=root, apply=True, undo=True), 0)
-
-            self.assertEqual((root / "a.txt").read_text(encoding="utf-8"), "甲")
-            self.assertFalse((root / "b.txt").exists())
-            self.assertIn("UNDONE\t1\ta.txt\tb.txt", _log_text(manifest))
-
     def test_recover_undo_restored_not_logged(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -290,3 +221,213 @@ class ApplyMovesTests(TestCase):
             self.assertTrue((root / "b").is_dir())
             self.assertEqual(list((root / "b").iterdir()), [])
             self.assertEqual(log.read_text(encoding="utf-8"), "BEGIN\t1\ta.txt\tb\n")
+
+    # ---- 实施主审回归（C-4~C-7、M-9~M-12、N-1）----
+
+    def _racing_rename(self, before):
+        real = apply_moves._rename_noreplace
+
+        def racer(src_fd, src_name, dst_fd, dst_name):
+            before()
+            return real(src_fd, src_name, dst_fd, dst_name)
+
+        return mock.patch.object(apply_moves, "_rename_noreplace", racer)
+
+    def test_race_file_target_created_after_precheck(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "a.txt").write_text("原内容", encoding="utf-8")
+            manifest = _write_manifest(root, [("a.txt", "b.txt")])
+            with self._racing_rename(lambda: (root / "b.txt").write_text("他人写入", encoding="utf-8")):
+                self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 1)
+            self.assertEqual((root / "b.txt").read_text(encoding="utf-8"), "他人写入")
+            self.assertEqual((root / "a.txt").read_text(encoding="utf-8"), "原内容")
+
+    def test_race_dir_target_created_after_precheck(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "d1").mkdir()
+            (root / "d1" / "inner.txt").write_text("原内容", encoding="utf-8")
+            manifest = _write_manifest(root, [("d1", "d2")])
+
+            def occupy() -> None:
+                (root / "d2").mkdir()  # 他人抢占的空目录也不得被替换
+
+            with self._racing_rename(occupy):
+                self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 1)
+            self.assertTrue((root / "d1" / "inner.txt").is_file())
+            self.assertEqual(list((root / "d2").iterdir()), [])
+
+    def test_source_replaced_before_rename_loses_nothing(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "a").write_text("original", encoding="utf-8")
+            manifest = _write_manifest(root, [("a", "b")])
+
+            def replace_source() -> None:
+                (root / "tmp").write_text("concurrent-new-data", encoding="utf-8")
+                os.replace(root / "tmp", root / "a")
+
+            with self._racing_rename(replace_source):
+                self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 0)
+            # 原子 rename 移走的是被替换后的目录项本身，没有任何路径被单独删除
+            self.assertEqual((root / "b").read_text(encoding="utf-8"), "concurrent-new-data")
+            self.assertFalse((root / "a").exists())
+
+    def test_parent_redirected_outside_root_after_precheck(self) -> None:
+        with TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            root, outside = base / "root", base / "outside"
+            root.mkdir(), outside.mkdir(), (root / "out").mkdir()
+            (root / "a").write_text("payload", encoding="utf-8")
+            manifest = _write_manifest(root, [("a", "out/a")])
+            real_fd = apply_moves._scoped_dir_fd
+            calls = []
+
+            def redirect(directory, *args):
+                calls.append(directory)
+                if len(calls) == 2:  # 打开目标父目录前把它换成指向根外的符号链接
+                    (root / "out").rmdir()
+                    (root / "out").symlink_to(outside, target_is_directory=True)
+                return real_fd(directory, *args)
+
+            with mock.patch.object(apply_moves, "_scoped_dir_fd", redirect):
+                self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 1)
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertEqual((root / "a").read_text(encoding="utf-8"), "payload")
+
+    def _write_config(self, root: Path, body: str) -> None:
+        config = root / ".entropaxis" / "data" / "templates" / "workspace-config.yaml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(body, encoding="utf-8")
+
+    def test_shared_dir_rejected_in_every_yaml_form(self) -> None:
+        bodies = (
+            "shared_dirs:\n  - purpose: 共享\n    dir: shared/\n",
+            "shared_dirs: [{dir: shared/, purpose: 共享}]\n",
+            "shared_dirs:\n  - {dir: shared/, purpose: 共享}\n",
+        )
+        for body in bodies:
+            for rows in ([("shared/a", "private/a")], [("private/b", "shared/b")]):
+                with self.subTest(body=body, rows=rows), TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    (root / "shared").mkdir()
+                    (root / "private").mkdir()
+                    (root / "shared" / "a").write_text("s", encoding="utf-8")
+                    (root / "private" / "b").write_text("p", encoding="utf-8")
+                    self._write_config(root, body)
+                    manifest = _write_manifest(root, rows)
+                    self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 2)
+                    self.assertTrue((root / "shared" / "a").exists())
+                    self.assertTrue((root / "private" / "b").exists())
+                    self.assertEqual(_log_text(manifest), "")
+
+    def test_shared_dir_symlink_alias_rejected(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "real").mkdir()
+            (root / "real" / "a").write_text("s", encoding="utf-8")
+            (root / "alias").symlink_to(root / "real", target_is_directory=True)
+            self._write_config(root, "shared_dirs:\n  - {dir: alias/, purpose: 共享}\n")
+            manifest = _write_manifest(root, [("real/a", "private/a")])
+            self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 2)
+            self.assertTrue((root / "real" / "a").exists())
+
+    def test_unparseable_config_fails_closed(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "a").write_text("x", encoding="utf-8")
+            self._write_config(root, "shared_dirs: [unclosed\n")
+            manifest = _write_manifest(root, [("a", "b")])
+            self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 2)
+            self.assertTrue((root / "a").exists())
+
+    def test_edited_manifest_after_apply_rejected(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "a").write_text("original", encoding="utf-8")
+            manifest = _write_manifest(root, [("a", "b")])
+            self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 0)
+            (root / "d").write_text("unrelated", encoding="utf-8")
+            _write_manifest(root, [("c", "d")])
+            self.assertEqual(apply_moves.run(manifest, root=root, apply=True, undo=True), 2)
+            self.assertEqual((root / "d").read_text(encoding="utf-8"), "unrelated")
+            self.assertEqual((root / "b").read_text(encoding="utf-8"), "original")
+            self.assertFalse((root / "c").exists())
+
+    def test_equivalent_targets_rejected(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "a").write_text("a", encoding="utf-8")
+            (root / "b").write_text("b", encoding="utf-8")
+            manifest = _write_manifest(root, [("a", "out/c"), ("b", "out/./c")])
+            self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 2)
+            self.assertTrue((root / "a").exists() and (root / "b").exists())
+            self.assertEqual(_log_text(manifest), "")
+
+    def test_recovery_manual_makes_no_partial_changes(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "b1").write_text("one", encoding="utf-8")  # 第 1 行：已移动未记 DONE，可补记
+            (root / "a2").write_text("two", encoding="utf-8")  # 第 2 行：两端都在，须人工
+            (root / "b2").write_text("foreign", encoding="utf-8")
+            manifest = _write_manifest(root, [("a1", "b1"), ("a2", "b2")])
+            log = manifest.parent / "moves.tsv.log"
+            log.write_text("BEGIN\t1\ta1\tb1\nBEGIN\t2\ta2\tb2\n", encoding="utf-8")
+            before = log.read_bytes()
+            self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 3)
+            self.assertEqual(log.read_bytes(), before)
+
+    def test_both_ends_present_requires_manual(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "a.txt").write_text("甲", encoding="utf-8")
+            os.link(root / "a.txt", root / "b.txt")
+            manifest = _write_manifest(root, [("a.txt", "b.txt")])
+            (manifest.parent / "moves.tsv.log").write_text("BEGIN\t1\ta.txt\tb.txt\n", encoding="utf-8")
+            self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 3)
+            self.assertTrue((root / "a.txt").exists() and (root / "b.txt").exists())
+
+    def test_apply_recovers_incomplete_undo_intent(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "a").write_text("payload", encoding="utf-8")  # 撤销已完成、UNDONE 未落盘
+            manifest = _write_manifest(root, [("a", "b")])
+            (manifest.parent / "moves.tsv.log").write_text(
+                "BEGIN\t1\ta\tb\nDONE\t1\ta\tb\nUNDO_BEGIN\t1\ta\tb\n", encoding="utf-8"
+            )
+            self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 0)
+            self.assertIn("UNDONE\t1\ta\tb", _log_text(manifest))
+            self.assertEqual((root / "a").read_text(encoding="utf-8"), "payload")
+
+    def test_only_empty_dir_target_requires_manual_both_directions(self) -> None:
+        for undo in (False, True):
+            with self.subTest(undo=undo), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / ("a" if undo else "b")).mkdir()
+                manifest = _write_manifest(root, [("a", "b")])
+                log = manifest.parent / "moves.tsv.log"
+                text = "BEGIN\t1\ta\tb\n" + ("DONE\t1\ta\tb\nUNDO_BEGIN\t1\ta\tb\n" if undo else "")
+                log.write_text(text, encoding="utf-8")
+                self.assertEqual(apply_moves.run(manifest, root=root, apply=True, undo=undo), 3)
+                self.assertEqual(log.read_text(encoding="utf-8"), text)
+
+    def test_log_failure_is_controlled(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "a").write_text("x", encoding="utf-8")
+            manifest = _write_manifest(root, [("a", "b")])
+            real_log = apply_moves._log
+
+            def failing_done(path, status, *args):
+                if status == "DONE":
+                    raise OSError("磁盘满")
+                return real_log(path, status, *args)
+
+            with mock.patch.object(apply_moves, "_log", failing_done):
+                self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 1)
+            self.assertTrue((root / "b").exists())
+            # 下次运行按物理状态补记 DONE，随后可撤销
+            self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 0)
+            self.assertEqual(apply_moves.run(manifest, root=root, apply=True, undo=True), 0)
+            self.assertTrue((root / "a").exists())

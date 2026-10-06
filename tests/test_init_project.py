@@ -140,6 +140,19 @@ class InitProjectTests(TestCase):
             self.assertFalse((workspace / "试点项目").exists())
             self.assertEqual(registry.read_bytes(), before)
 
+    def test_registry_read_failure_removes_target(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            registry = self._write_registry(workspace)
+            before = registry.read_bytes()
+            with mock.patch(
+                "tools.init_project.project_registry.load_projects", side_effect=OSError("读取失败")
+            ):
+                with self.assertRaises(ProjectInitError):
+                    init_project("试点项目", workspace=workspace, templates=TEMPLATES)
+            self.assertFalse((workspace / "试点项目").exists())
+            self.assertEqual(registry.read_bytes(), before)
+
     def test_missing_registry_keeps_dir_with_warning(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)

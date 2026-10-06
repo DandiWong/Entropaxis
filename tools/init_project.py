@@ -196,16 +196,22 @@ def _register_with_compensation(
     *,
     warnings: list[str] | None = None,
 ) -> None:
-    """目录发布后的登记三态补偿：缺注册表保留目录告警，登记失败回滚目录。"""
+    """目录发布后的登记三态补偿：缺注册表保留目录告警，登记失败回滚目录。
+
+    不在写入后重读注册表：append_project 只在 os.replace 成功后返回 True，
+    抛错或返回 False 时注册表必未被改写，删除目录即回到一致状态。
+    """
     if not project_registry.registry_path(workspace).is_file():
         if warnings is not None:
             warnings.append("注册表不存在，项目未登记：先运行 bootstrap.py 再补登记")  # 合法初始态，保留目录
         return
     try:
-        register_project(workspace, name, dashboard_project_id, rel_dir=rel_dir, parent=parent)
+        if any(_norm(p["path"]) == _norm(rel_dir) for p in project_registry.load_projects(workspace)):
+            return  # 此前已登记同路径
+        written = register_project(workspace, name, dashboard_project_id, rel_dir=rel_dir, parent=parent)
     except Exception as exc:
         _rollback(target, exc)
-    if not any(_norm(p["path"]) == _norm(rel_dir) for p in project_registry.load_projects(workspace)):
+    if not written:
         _rollback(target, RuntimeError("append_project 未写入"))
 
 

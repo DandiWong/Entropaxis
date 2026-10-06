@@ -1200,6 +1200,21 @@ def _shared_kb_dirs(root: Path) -> list[str]:
     ]
 
 
+def _hygiene_skip_dir(path: Path) -> bool:
+    name = path.name
+    return name.startswith(".") or name in HYGIENE_PRUNED_DIRS or (path / ".git").exists()
+
+
+def _hygiene_pruned(root: Path, path: Path) -> bool:
+    """path 自身或任一上级（到 root 为止）命中遍历剪枝规则。"""
+    current = path
+    while current != root and root in current.parents:
+        if _hygiene_skip_dir(current):
+            return True
+        current = current.parent
+    return False
+
+
 def _hygiene_summary(category: str, hits: list[Path], root: Path, advice: str) -> str:
     shown = "、".join(str(path.relative_to(root)) for path in hits[:5])
     if len(hits) > 5:
@@ -1217,12 +1232,7 @@ def check_workspace_hygiene(root: Path) -> list[str]:
     oversized: list[Path] = []
     kb_roots: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [
-            name for name in dirnames
-            if not name.startswith(".")
-            and name not in HYGIENE_PRUNED_DIRS
-            and not (Path(dirpath) / name / ".git").exists()
-        ]
+        dirnames[:] = [name for name in dirnames if not _hygiene_skip_dir(Path(dirpath) / name)]
         current = Path(dirpath)
         for name in dirnames:
             if HYGIENE_DATE_WITHOUT_UNDERSCORE.match(name):
@@ -1237,7 +1247,8 @@ def check_workspace_hygiene(root: Path) -> list[str]:
             except OSError:
                 continue
     for name in _shared_kb_dirs(root):
-        if (root / name).is_dir():
+        # 显式 kb 根同样受遍历剪枝约束，不因声明而解除跳过规则
+        if (root / name).is_dir() and not _hygiene_pruned(root, root / name):
             kb_roots.append(root / name)
     scattered: list[Path] = []
     seen_roots: set[str] = set()
