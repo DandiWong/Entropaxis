@@ -6,6 +6,8 @@
 """
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -143,6 +145,30 @@ class DispatchReceiptTests(TestCase):
         ok, why = rc.verify(r["receipt_id"], d)
         self.assertFalse(ok, "目录内容被改写后回执必须失配")
         self.assertIn("不符", why)
+
+    def test_relative_directory_target_receipt_tracks_only_versioned_changes(self) -> None:
+        repo = self.ws / "repo"
+        target = repo / "tools"
+        target.mkdir(parents=True)
+        tracked = target / "input.py"
+        tracked.write_text("value = 1\n", encoding="utf-8")
+        subprocess.run(["git", "init", "--quiet", str(repo)], check=True, capture_output=True)
+        subprocess.run(["git", "add", "tools/input.py"], cwd=repo, check=True, capture_output=True)
+        relative_target = Path(os.path.relpath(target, Path.cwd()))
+        receipt = rc.issue("Reviewer", "a" * 64, self.deliverable, relative_target, "reviewer-primary")
+        ok, why = rc.verify(receipt["receipt_id"], self.deliverable,
+                            target_sha256=rc.target_sha256(target))
+        self.assertTrue(ok, why)
+
+        (target / "cache.txt").write_text("untracked local state\n", encoding="utf-8")
+        ok, why = rc.verify(receipt["receipt_id"], self.deliverable,
+                            target_sha256=rc.target_sha256(relative_target))
+        self.assertTrue(ok, why)
+
+        tracked.write_text("value = 2\n", encoding="utf-8")
+        ok, _ = rc.verify(receipt["receipt_id"], self.deliverable,
+                          target_sha256=rc.target_sha256(relative_target))
+        self.assertFalse(ok)
 
     def test_dir_digest_shared_with_dispatch_role(self) -> None:
         """档案指纹与回执指纹必须同算法：各留一份实现只会漂移。"""

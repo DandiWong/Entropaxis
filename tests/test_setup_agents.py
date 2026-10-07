@@ -246,3 +246,14 @@ class SetupAgentsTests(TestCase):
             detected = sa.detect_installed_agents()
 
         self.assertTrue(any(item["id"] == "subagent" for item in detected))
+
+    def test_cli_rejects_malformed_and_non_object_config_without_writing(self) -> None:
+        for content in ("roles: []\ncommand_profiles: {}\n", "roles: {}\ncommand_profiles: []\n", "roles: [\n"):
+            self.config.write_text(content, encoding="utf-8")
+            before = self.config.read_bytes()
+
+            code, _, err = self.invoke("--config", str(self.config), "--verify")
+
+            self.assertNotEqual(code, 0)
+            self.assertNotIn("Traceback", err)
+            self.assertEqual(self.config.read_bytes(), before)

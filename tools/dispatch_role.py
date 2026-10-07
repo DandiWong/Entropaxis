@@ -47,10 +47,11 @@ except ImportError:  # pragma: no cover - 环境缺 PyYAML 时给出可行动错
     raise
 
 try:
-    from . import paths, update_capsule, role_preferences
+    from . import paths, setup_agents, update_capsule, role_preferences
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import paths  # type: ignore
+    import setup_agents  # type: ignore
     import update_capsule  # type: ignore
     import role_preferences  # type: ignore
 
@@ -110,22 +111,25 @@ def _receipt_module():
 # ---------------------------------------------------------------- 第 3 级配置
 
 def load_dispatch_config(config_path: Path | None = None) -> dict[str, Any]:
-    """读第 3 级配置：roles.yaml 整文件（契约 schemas/roles_config.schema.json）。"""
+    """读并完整校验第 3 级 roles.yaml；缺失配置仍表示未配置。"""
     if config_path is None:
         config_path = ACTIVE_CONFIG or ROLES_CONFIG
     empty = {"default_dispatch_mode": None, "roles": {}, "command_profiles": {}, "dispatch_authorizations": [],
              "path": str(config_path), "present": False}
     if not config_path.exists():
         return empty
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    return {
-        "default_dispatch_mode": data.get("default_dispatch_mode"),
-        "roles": data.get("roles") or {},
-        "command_profiles": data.get("command_profiles") or {},
-        "dispatch_authorizations": data.get("dispatch_authorizations") or [],
-        "path": str(config_path),
-        "present": True,
-    }
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise setup_agents.ConfigError(f"无法读取 roles.yaml {config_path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise setup_agents.ConfigError(f"roles.yaml 必须是对象: {config_path}")
+    errors = setup_agents.schema_errors(data)
+    if not errors:
+        errors = role_preferences.semantic_errors(data)
+    if errors:
+        raise setup_agents.ConfigError("roles.yaml 未通过校验：" + "；".join(errors[:3]))
+    return {**data, "path": str(config_path), "present": True}
 
 
 def graceful_grant_valid(config: dict[str, Any], role: str, now: datetime | None = None) -> tuple[bool, str]:
@@ -352,24 +356,17 @@ def _argv_ok(argv: list[str]) -> bool:
 
 
 def resolve_profile_chain(profile_name: str, config: dict[str, Any], role: str | None = None) -> list[dict[str, Any]]:
-    """Explicit assignment starts at its preference, then walks the ordered suffix.
-
-    Role context disambiguates shared profiles. Standalone custom argv chains
-    retain fallback links, with cycle detection and no silent depth truncation.
-    """
+    """解析角色偏好后缀或独立 custom argv 的 fallback 链。"""
     profiles = config.get("command_profiles") or {}
     entry = (config.get("roles") or {}).get(role, {}) if role else {}
     names = entry.get("preferences")
     if names is not None and (not isinstance(names, list) or any(name not in profiles for name in names)):
         return []
-    if names is not None:
-        if profile_name not in names:
-            # An explicit standalone profile is scoped to itself, not another role.
-            profile = profiles.get(profile_name)
-            return [{"name": profile_name, **profile}] if isinstance(profile, dict) else []
+    if names is not None and profile_name in names:
         start = names.index(profile_name)
         return [{"name": name, **profiles[name], "preference_number": i + 1}
-                for i, name in enumerate(names) if i >= start and name in profiles]
+                for i, name in enumerate(names) if i >= start]
+
     chain, seen = [], set()
     name = profile_name
     while name and name not in seen:
@@ -710,10 +707,30 @@ def trace(record: dict[str, Any], path: Path | None = None) -> None:
     except OSError:
         pass
 
+def _timeout_error(profile: dict[str, Any], role: str | None) -> str | None:
+    timeout = profile.get("timeout_s")
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 7200:
+        return "timeout_s 必须为 1..7200 的整数"
+    if role in HARD_ROLES and timeout > 1800:
+        return f"{role} 的 timeout_s 不得超过 1800"
+    return None
+
 
 def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverable: Path,
                   role: str | None = None) -> tuple[str, list[dict[str, Any]], bool]:
     """执行备选链，返回 (聚合失败码, attempts, succeeded)。"""
+    invalid = [(prof, _timeout_error(prof, role)) for prof in chain]
+    invalid = [(prof, reason) for prof, reason in invalid if reason]
+    if invalid:
+        attempts = []
+        for prof, reason in invalid:
+            ordinal = {"preference_number": prof["preference_number"]} if "preference_number" in prof else {}
+            attempts.append({**ordinal, "profile": prof.get("name", "<unknown>"),
+                             "argv_sha256": _sha256_str(json.dumps(prof)), "started_at": _now_iso(),
+                             "ended_at": _now_iso(), "failure_code": "NOT_EXECUTABLE", "detail": reason})
+            trace({"role": role, "profile": prof.get("name"), "argv": prof.get("argv"), "executed": False,
+                   "failure_code": "NOT_EXECUTABLE", "detail": reason})
+        return "NOT_EXECUTABLE", attempts, False
     attempts: list[dict[str, Any]] = []
     codes: set[str] = set()
     for prof in chain:
@@ -749,7 +766,7 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
             # 外置 Reviewer 卡在 `phase: readPipedInput` 22 分钟零产出，最后以 TIMEOUT 收场，
             # 看起来像模型不行，其实一个字都没开始生成。
             proc = subprocess.run([exe, *argv[1:]], cwd=str(cwd), capture_output=True, text=True,
-                                  stdin=subprocess.DEVNULL, timeout=int(prof.get("timeout_s", 900)))
+                                  stdin=subprocess.DEVNULL, timeout=prof["timeout_s"])
             ended = _now_iso()
             # 交付物须由本次调用写出或改写：沿用上一轮的既有文件而退出码 0，会被盖上本 profile 的
             # 承载章并判成功——外置 Reviewer 什么都没做也能记成独立复核。比对须在盖章之前。
@@ -846,6 +863,17 @@ def run_assignment(cwd: Path, assignment_id: str, prompt: str, ack: str | None, 
         print(json.dumps({"error": "manifest 校验失败", "issues": errs}, ensure_ascii=False))
         return EXIT_USAGE
     role = a["role"]
+    profile_name = a["command_profile"]
+    chain = resolve_profile_chain(profile_name, config, role)
+    if not chain:
+        print(json.dumps({"error": f"指派 {assignment_id} 引用的 command_profile 不存在或无效: {profile_name}",
+                          "rule": "指派显式 profile 不得回退到角色默认偏好"}, ensure_ascii=False))
+        return EXIT_USAGE
+    timeout_errors = [reason for profile in chain if (reason := _timeout_error(profile, role))]
+    if timeout_errors:
+        print(json.dumps({"error": f"指派 {assignment_id} 的 command_profile timeout 无效",
+                          "issues": timeout_errors}, ensure_ascii=False))
+        return EXIT_USAGE
     mode, mode_why = resolve_mode(man, config, role)
     gate = "hard" if role in HARD_ROLES else "soft"
     target_file: Path | None = None
@@ -865,17 +893,9 @@ def run_assignment(cwd: Path, assignment_id: str, prompt: str, ack: str | None, 
         return EXIT_USAGE
     deliverable = (archive.parent / a["deliverable"]).resolve()
 
-    chain = resolve_profile_chain(a["command_profile"], config, role)
     source = "profile"
-    if not chain:
-        source, chain = _tier3_default_chain(role, config)
-        if source in ("UNCONFIGURED", "SUBAGENT_AUTO"):
-            failure, attempts = source, []
-            succeeded = False
-        else:
-            failure, attempts, succeeded = execute_chain(chain, prompt, cwd, deliverable, role)
-    else:
-        failure, attempts, succeeded = execute_chain(chain, prompt, cwd, deliverable, role)
+    bound = _bind_prompt(prompt, role, deliverable, target_file, cwd)
+    failure, attempts, succeeded = execute_chain(chain, bound, cwd, deliverable, role)
 
     carrier = next((x["profile"] for x in reversed(attempts) if "failure_code" not in x), "session-local") if succeeded else "session-local"
     carrier_ref = _profile_command_text(carrier, config) if carrier != "session-local" else "当前会话 Agent"
@@ -1274,7 +1294,7 @@ def cmd_resolve(cwd: Path) -> int:
     return EXIT_OK
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd")
     pr = sub.add_parser("resolve", help="解析三级链，打印生效指派")
@@ -1331,6 +1351,14 @@ def main(argv: list[str] | None = None) -> int:
         return run_assignment(args.cwd, args.assignment, prompt, args.ack, args.owner)
     p.print_help()
     return EXIT_USAGE
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except setup_agents.ConfigError as exc:
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        return EXIT_USAGE
 
 
 if __name__ == "__main__":

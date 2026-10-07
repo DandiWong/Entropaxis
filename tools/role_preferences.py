@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import secrets
 import shutil
+import signal
 import subprocess
 import tempfile
 from typing import Any
@@ -19,6 +21,10 @@ AGENTS = ("claude", "codex", "pi", "omp", "agy", "opencode", "mimo")
 HARD_ROLES = frozenset(("Reviewer", "Maintainer"))
 PROMPT = "{PROMPT}"
 UNSAFE = set(';&|`$><\n\r')
+
+PROBE_SYSTEM_PROMPT = "You are an isolated model availability probe. Follow only the user message."
+CONTEXT_UNISOLATED_PROBE_AGENTS = frozenset(("agy", "opencode", "mimo"))
+PROCESS_REAP_TIMEOUT_S = 1
 
 
 def profile_argv(profile: dict[str, Any]) -> list[str]:
@@ -148,20 +154,9 @@ def _local_status(profile: dict[str, Any], cache: dict[tuple[str, ...], tuple[st
         return "not_installed", "executable not found"
     if "agent" not in profile:
         return "unsupported", "custom argv requires manual verification"
-    agent = profile["agent"]
-    help_argv = [executable, *(["exec"] if agent == "codex" else ["run"] if agent in ("opencode", "mimo") else []), "--help"]
-    key = tuple(help_argv)
+    key = (executable,)
     if key not in cache:
-        try:
-            with tempfile.TemporaryDirectory(prefix="entropaxis-role-local-") as cwd:
-                result = subprocess.run(help_argv, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
-            help_text = result.stdout + result.stderr
-            capable = result.returncode == 0 and "--model" in help_text
-            if agent in ("claude", "pi", "omp", "agy"):
-                capable = capable and ("-p" in help_text or "--print" in help_text)
-            cache[key] = ("local_ready", "invocation supported; model access unverified") if capable else ("unsupported", "installed version lacks required invocation flags")
-        except (OSError, subprocess.SubprocessError):
-            cache[key] = ("unsupported", "local help probe failed")
+        cache[key] = ("local_ready", "executable found; invocation and model access unverified")
     return cache[key]
 
 
@@ -186,10 +181,44 @@ def _probe_argv(profile: dict[str, Any], prompt: str) -> list[str]:
     argv = [prompt if token == PROMPT else token for token in profile_argv(profile)]
     agent = profile["agent"]
     flags = {
-        "claude": ["--output-format", "json", "--tools", "", "--no-session-persistence", "--setting-sources", ""],
-        "codex": ["--json", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check"],
-        "pi": ["--mode", "json", "--no-session", "--no-tools", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files"],
-        "omp": ["--mode", "json", "--no-session", "--no-tools", "--no-extensions", "--no-skills", "--no-rules", "--no-title", "--no-prewalk"],
+        "claude": [
+            "--output-format", "json",
+            "--tools", "",
+            "--bare",
+            "--restricted",
+            "--no-session-persistence",
+            "--system-prompt", PROBE_SYSTEM_PROMPT,
+        ],
+        "codex": [
+            "--json",
+            "--sandbox", "read-only",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "--ignore-user-config",
+            "--ignore-rules",
+        ],
+        "pi": [
+            "--mode", "json",
+            "--no-session",
+            "--no-tools",
+            "--no-extensions",
+            "--no-skills",
+            "--no-prompt-templates",
+            "--no-context-files",
+            "--system-prompt", PROBE_SYSTEM_PROMPT,
+        ],
+        "omp": [
+            "--mode", "json",
+            "--no-session",
+            "--no-tools",
+            "--no-lsp",
+            "--no-extensions",
+            "--no-skills",
+            "--no-rules",
+            "--no-title",
+            "--no-prewalk",
+            "--system-prompt", PROBE_SYSTEM_PROMPT,
+        ],
         "agy": ["--output-format", "json", "--mode", "plan", "--sandbox"],
         "opencode": ["--format", "json"],
         "mimo": ["--format", "json"],
@@ -197,9 +226,26 @@ def _probe_argv(profile: dict[str, Any], prompt: str) -> list[str]:
     return argv + flags[agent]
 
 
-def _assistant_response(stdout: str, agent: str) -> str | None:
-    """Extract only assistant responses, never echoed prompts or diagnostics."""
+def _resolved_model(message: dict[str, Any]) -> str | None:
+    provider = message.get("provider")
+    model = message.get("responseModel") or message.get("model")
+    if not isinstance(provider, str) or not provider or not isinstance(model, str) or not model:
+        return None
+    return f"{provider}/{model}"
+
+
+def _claude_resolved_model(event: dict[str, Any]) -> str | None:
+    model_usage = event.get("modelUsage")
+    if not isinstance(model_usage, dict):
+        return None
+    models = [model for model in model_usage if isinstance(model, str) and model]
+    return models[0] if len(models) == 1 else None
+
+
+def _assistant_response(stdout: str, agent: str) -> tuple[str | None, str | None]:
+    """Extract a terminal assistant response and its protocol-reported identity."""
     texts: list[str] = []
+    identities: set[str] = set()
     for line in stdout.splitlines():
         try:
             event = json.loads(line)
@@ -208,44 +254,117 @@ def _assistant_response(stdout: str, agent: str) -> str | None:
         if not isinstance(event, dict):
             continue
         if event.get("is_error") or event.get("type") in ("error", "turn.failed"):
-            return None
-        if agent == "agy" and event.get("status") == "SUCCESS" and isinstance(event.get("response"), str):
-            texts.append(event["response"])
-        elif agent == "claude" and event.get("type") == "result" and isinstance(event.get("result"), str):
+            return None, None
+        if agent == "claude" and event.get("type") == "result" and isinstance(event.get("result"), str):
             texts.append(event["result"])
-        elif agent in ("opencode", "mimo") and event.get("type") == "text":
-            text = event.get("part", {}).get("text")
-            if isinstance(text, str):
-                texts.append(text)
+            identity = _claude_resolved_model(event)
+            if identity is not None:
+                identities.add(identity)
         elif agent == "codex" and event.get("type") == "item.completed":
-            item = event.get("item", {})
-            if item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+            item = event.get("item")
+            if isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str):
                 texts.append(item["text"])
         elif agent in ("pi", "omp") and event.get("type") == "message_end":
-            message = event.get("message", {})
-            if message.get("role") == "assistant" and message.get("stopReason") not in ("error", "aborted"):
-                texts.extend(part["text"] for part in message.get("content", []) if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str))
-    return "".join(texts).strip() if texts else None
+            message = event.get("message")
+            if isinstance(message, dict) and message.get("role") == "assistant" and message.get("stopReason") not in ("error", "aborted"):
+                text = "".join(
+                    part["text"] for part in message.get("content", [])
+                    if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
+                )
+                texts.append(text)
+                identity = _resolved_model(message)
+                if identity is not None:
+                    identities.add(identity)
+    response = "".join(texts)
+    if not response:
+        return None, None
+    return response, next(iter(identities)) if len(identities) == 1 else None
+
+
+def _terminate_probe_process(process: subprocess.Popen[str]) -> None:
+    try:
+        if os.name == "posix":
+            # Pipe EOF does not prove descendants exited: kill the entire group.
+            os.killpg(process.pid, signal.SIGKILL)
+        else:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=PROCESS_REAP_TIMEOUT_S,
+            )
+    except (OSError, subprocess.TimeoutExpired):
+        if process.poll() is None:
+            process.kill()
+    process.communicate()
+
+
+def _probe_environment(agent: str, cwd: str, env: dict[str, str]) -> dict[str, str]:
+    if agent != "codex":
+        return env
+    Path(cwd).chmod(0o700)
+    codex_home = Path(cwd) / "codex-home"
+    codex_home.mkdir(mode=0o700)
+    source_home = Path(env.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+    source_auth = source_home / "auth.json"
+    if source_auth.is_file():
+        probe_auth = codex_home / "auth.json"
+        shutil.copyfile(source_auth, probe_auth)
+        probe_auth.chmod(0o600)
+    env["CODEX_HOME"] = str(codex_home)
+    return env
+
+
+def _probe_command(profile: dict[str, Any], prompt: str, cwd: str) -> list[str]:
+    argv = _probe_argv(profile, prompt)
+    if profile["agent"] == "codex":
+        instructions = Path(cwd) / "codex-system-prompt.md"
+        instructions.write_text(PROBE_SYSTEM_PROMPT, encoding="utf-8")
+        argv.extend(("-c", f'experimental_instructions_file="{instructions}"'))
+    if profile["agent"] == "omp":
+        config = Path(cwd) / "probe-config.yml"
+        config.write_text('codexResets:\n  autoRedeem: "no"\n', encoding="utf-8")
+        argv.extend(("--config", str(config)))
+    return argv
 
 
 def _live_probe(profile: dict[str, Any], timeout: int) -> str:
+    if profile["agent"] in CONTEXT_UNISOLATED_PROBE_AGENTS:
+        return "context_unisolated"
     nonce = "ENTROPAXIS_" + secrets.token_hex(8)
     prompt = f"Reply with exactly {nonce}. Do not use tools, read files, or perform any other action."
-    env = os.environ.copy()
-    # CLI-level denial adds protection to the prompt; no auto-approval or sandbox bypass.
-    if profile["agent"] in ("opencode", "mimo"):
-        key = "OPENCODE_CONFIG_CONTENT" if profile["agent"] == "opencode" else "MIMOCODE_CONFIG_CONTENT"
-        env[key] = json.dumps({"permission": {"*": "deny"}})
+    process: subprocess.Popen[str] | None = None
     try:
         with tempfile.TemporaryDirectory(prefix="entropaxis-role-live-") as cwd:
-            result = subprocess.run(_probe_argv(profile, prompt), cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return "timeout"
-    except (OSError, subprocess.SubprocessError):
+            env = _probe_environment(profile["agent"], cwd, os.environ.copy())
+            process = subprocess.Popen(
+                _probe_command(profile, prompt, cwd),
+                cwd=cwd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=os.name == "posix",
+            )
+            try:
+                stdout, _ = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _terminate_probe_process(process)
+                return "timeout"
+    except OSError:
+        if process is not None:
+            _terminate_probe_process(process)
         return "launch_failed"
-    if result.returncode:
+    if process is None or process.returncode:
         return "call_failed"
-    return "available" if _assistant_response(result.stdout, profile["agent"]) == nonce else "invalid_response"
+    response, resolved_model = _assistant_response(stdout, profile["agent"])
+    if response != nonce:
+        return "invalid_response"
+    if resolved_model is None:
+        return "identity_missing"
+    if resolved_model != profile["model"]:
+        return "identity_mismatch"
+    return "available"
 
 
 def select_preferences(data: dict[str, Any], *, authorized: bool = False, authorization_event: str = "", roles: list[str] | None = None, timeout: int = 30) -> list[dict[str, Any]]:

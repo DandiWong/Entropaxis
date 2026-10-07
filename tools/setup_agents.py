@@ -318,7 +318,7 @@ def detect_installed_agents() -> list[dict[str, Any]]:
 
 
 class ConfigError(ValueError):
-    """命令无法安全转成结构化 argv（缺占位符 / 含 shell 元字符 / 角色名非法）。"""
+    """roles.yaml 或命令契约不能安全使用。"""
 
 
 def _yaml():
@@ -332,11 +332,19 @@ def _yaml():
 def load_config(config_path: Path) -> dict[str, Any]:
     """读 roles.yaml；缺失时以模板为底（仅内存，不落盘）。"""
     src = config_path if config_path.exists() else TEMPLATE_PATH
-    data = _yaml().safe_load(src.read_text(encoding="utf-8")) if src.exists() else None
-    data = data or {}
+    yaml = _yaml()
+    try:
+        data = yaml.safe_load(src.read_text(encoding="utf-8")) if src.exists() else {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise ConfigError(f"无法读取 roles.yaml {src}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"roles.yaml 必须是对象: {src}")
+    for field in ("roles", "command_profiles"):
+        if field in data and not isinstance(data[field], dict):
+            raise ConfigError(f"roles.yaml 的 {field} 必须是对象")
     data.setdefault("default_dispatch_mode", "strict")
-    data["roles"] = data.get("roles") or {}
-    data["command_profiles"] = data.get("command_profiles") or {}
+    data.setdefault("roles", {})
+    data.setdefault("command_profiles", {})
     data.setdefault("dispatch_authorizations", [])
     return data
 
@@ -801,7 +809,7 @@ def _validation_errors(data: dict[str, Any]) -> list[str]:
     return errors if errors else role_preferences.semantic_errors(data)
 
 
-def main() -> int:
+def _main() -> int:
     parser = argparse.ArgumentParser(
         description="Entropaxis 角色承载配置工具（data/templates/roles.yaml）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1000,6 +1008,14 @@ def main() -> int:
     for report in verify_roles(args.config):
         print(f"{report.get('role')}: {report.get('msg')}")
     return 0
+
+
+def main() -> int:
+    try:
+        return _main()
+    except ConfigError as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

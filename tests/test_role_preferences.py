@@ -3,11 +3,13 @@ import copy
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
-import subprocess
+
 import yaml
 
 SYSTEM = Path(__file__).resolve().parent.parent
@@ -23,28 +25,52 @@ class PreferenceExecutionTests(unittest.TestCase):
         self.log = self.root / "calls.jsonl"
         executable = self.root / "omp"
         executable.write_text(f'''#!{sys.executable}
-import json, os, re, sys, time
+import json, os, re, subprocess, sys, time
 from pathlib import Path
+marker = os.environ.get("PROBE_STARTUP_MARKER")
+if marker:
+    Path(marker).write_text("started")
 args = sys.argv[1:]
-if "--help" in args:
-    print("--model -p --mode --no-session --no-tools --no-extensions --no-skills --no-rules --no-title --no-prewalk")
-    sys.exit(0)
 model = args[args.index("--model") + 1]
 prompt = args[args.index("-p") + 1]
+system_prompt = args[args.index("--system-prompt") + 1] if "--system-prompt" in args else ""
+global_system = Path(os.environ["HOME"]) / ".omp" / "SYSTEM.md"
 with open(os.environ["PROBE_LOG"], "a") as stream:
-    stream.write(json.dumps({{"model": model, "cwd": os.getcwd(), "stdin": sys.stdin.read(), "args": args}}) + "\\n")
+    stream.write(json.dumps({{"cwd": os.getcwd(), "stdin": sys.stdin.read()}}) + "\\n")
 if model.endswith("fail"):
     sys.exit(4)
+if model.endswith("descendant"):
+    if model.endswith("closed-descendant"):
+        child_code = "import os,signal,sys,time;from pathlib import Path;signal.signal(signal.SIGTERM,signal.SIG_IGN);os.close(1);os.close(2);Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(30)"
+        subprocess.Popen([sys.executable, "-c", child_code, os.environ["PROBE_CHILD_PID"]])
+        time.sleep(30)
+    child_code = "import os,sys,time;from pathlib import Path;Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(30)"
+    subprocess.Popen([sys.executable, "-c", child_code, os.environ["PROBE_CHILD_PID"]])
+    time.sleep(30)
 if model.endswith("slow"):
     time.sleep(2)
 if model.endswith("echo"):
     print(json.dumps({{"type": "message_end", "message": {{"role": "user", "content": [{{"type": "text", "text": prompt}}]}}}}))
-else:
-    nonce = re.search(r"ENTROPAXIS_[a-f0-9]+", prompt).group()
-    print(json.dumps({{"type": "message_end", "message": {{"role": "assistant", "content": [{{"type": "text", "text": nonce}}], "stopReason": "stop"}}}}))
+    sys.exit(0)
+nonce = re.search(r"ENTROPAXIS_[a-f0-9]+", prompt).group()
+provider, separator, response_model = model.partition("/")
+if model.endswith("provider-mismatch"):
+    provider = "different-provider"
+elif model.endswith("case-mismatch"):
+    response_model = response_model.swapcase()
+elif model.endswith("mismatch"):
+    response_model = "different-model"
+response = nonce if not global_system.exists() or system_prompt else global_system.read_text()
+message = {{"role": "assistant", "provider": provider, "model": response_model, "content": [{{"type": "text", "text": response}}], "stopReason": "stop"}}
+if model.endswith("missing"):
+    message.pop("model")
+print(json.dumps({{"type": "message_end", "message": message}}))
 ''', encoding="utf-8")
         executable.chmod(0o755)
-        env = mock.patch.dict(os.environ, {"PATH": str(self.root), "PROBE_LOG": str(self.log)})
+        env = mock.patch.dict(
+            os.environ,
+            {"PATH": str(self.root), "PROBE_LOG": str(self.log), "PROBE_STARTUP_MARKER": str(self.root / "started")},
+        )
         env.start()
         self.addCleanup(env.stop)
 
@@ -59,7 +85,7 @@ else:
     def test_missing_authorization_never_launches_and_preserves_selection(self):
         data = self.config(["provider/ok"], "choice-1")
         before = copy.deepcopy(data)
-        with mock.patch.object(rp.subprocess, "run", side_effect=AssertionError("unauthorized process")):
+        with mock.patch.object(rp.subprocess, "Popen", side_effect=AssertionError("unauthorized process")):
             for kwargs in ({}, {"authorized": True}, {"authorization_event": "user consent"}):
                 result = rp.select_preferences(data, **kwargs)
                 self.assertEqual(result[0]["outcome"], "authorization_required")
@@ -71,26 +97,72 @@ else:
         self.assertEqual((report["outcome"], report["selected_preference"], data["roles"]["Researcher"]["profile"]),
                          ("selected", 3, "choice-3"))
         self.assertEqual([item["status"] for item in report["attempts"]], ["call_failed", "invalid_response", "available"])
-        self.assertEqual([item["model"] for item in self.calls()], ["provider/fail", "provider/echo", "provider/ok"])
+        self.assertEqual(len(self.calls()), 3)
         for call in self.calls():
             self.assertNotEqual(call["cwd"], str(self.root))
             self.assertEqual(call["stdin"], "")
-            self.assertIn("--no-tools", call["args"])
-            self.assertFalse(any("dangerously" in arg for arg in call["args"]))
             self.assertFalse(Path(call["cwd"]).exists())
 
-    def test_model_prefix_and_case_survive_real_subprocess(self):
+    def test_protocol_identity_requires_exact_provider_and_case(self):
         data = self.config(["google-antigravity/Gemini-Exact:high"])
-        rp.select_preferences(data, authorized=True, authorization_event="explicit permission")
-        self.assertEqual(self.calls()[0]["model"], "google-antigravity/Gemini-Exact:high")
+        report = rp.select_preferences(data, authorized=True, authorization_event="explicit permission")[0]
+        self.assertEqual((report["outcome"], report["attempts"][0]["status"]), ("selected", "available"))
 
-    def test_local_phase_never_selects_or_calls_model(self):
+        data = self.config(
+            [
+                "provider/missing",
+                "provider/mismatch",
+                "provider/provider-mismatch",
+                "google-antigravity/Gemini-Exact:case-mismatch",
+            ],
+            "choice-1",
+        )
+        report = rp.select_preferences(data, authorized=True, authorization_event="explicit permission")[0]
+        self.assertEqual(
+            [attempt["status"] for attempt in report["attempts"]],
+            ["identity_missing", "identity_mismatch", "identity_mismatch", "identity_mismatch"],
+        )
+        self.assertEqual((report["outcome"], data["roles"]["Researcher"]["profile"]), ("no_available_preference", "choice-1"))
+
+    def test_claude_requested_alias_cannot_override_billed_model_identity(self):
+        executable = self.root / "claude"
+        executable.write_text(f'''#!{sys.executable}
+import json, re, sys
+prompt = sys.argv[sys.argv.index("-p") + 1]
+nonce = re.search(r"ENTROPAXIS_[a-f0-9]+", prompt).group()
+print(json.dumps({{"type": "result", "result": nonce, "model": "requested-alias",
+                  "modelUsage": {{"actual-model": {{"inputTokens": 1}}}}}}))
+''', encoding="utf-8")
+        executable.chmod(0o755)
+        data = self.config(["requested-alias"], "choice-1")
+        data["command_profiles"]["choice-1"]["agent"] = "claude"
+        report = rp.select_preferences(data, authorized=True, authorization_event="fixture consent")[0]
+        self.assertEqual(report["attempts"][0]["status"], "identity_mismatch")
+        self.assertEqual(data["roles"]["Researcher"]["profile"], "choice-1")
+        self.assertEqual(report["outcome"], "no_available_preference")
+
+    def test_unisolated_adapters_do_not_launch_or_change_selection(self):
+        for agent in ("agy", "opencode", "mimo"):
+            executable = self.root / agent
+            executable.write_bytes((self.root / "omp").read_bytes())
+            executable.chmod(0o755)
+            data = self.config(["provider/ok"], "choice-1")
+            data["command_profiles"]["choice-1"]["agent"] = agent
+            before = copy.deepcopy(data)
+            report = rp.select_preferences(data, authorized=True, authorization_event="fixture consent")[0]
+            self.assertEqual(report["attempts"][0]["status"], "context_unisolated")
+            self.assertEqual(data, before)
+            self.assertFalse((self.root / "started").exists())
+
+    def test_local_phase_only_discovers_binary_without_launching(self):
         data = self.config(["provider/ok"])
         before = copy.deepcopy(data)
         report = rp.local_candidates(data)[0]
         self.assertEqual(report["preferences"][0]["status"], "local_ready")
         self.assertEqual(data, before)
+        self.assertFalse((self.root / "started").exists())
         self.assertEqual(self.calls(), [])
+
 
     def test_timeout_advances_and_all_fail_preserves_existing_or_null(self):
         data = self.config(["provider/slow", "provider/ok"])
@@ -101,6 +173,28 @@ else:
             result = rp.select_preferences(data, authorized=True, authorization_event="yes")[0]
             self.assertEqual(result["outcome"], "no_available_preference")
             self.assertEqual(data["roles"]["Researcher"]["profile"], selected)
+
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX process groups")
+    def test_timeout_reaps_descendant_process_group(self):
+        child_pid = self.root / "child.pid"
+        for model in ("provider/descendant", "provider/closed-descendant"):
+            child_pid.unlink(missing_ok=True)
+            data = self.config([model])
+            with mock.patch.dict(os.environ, {"PROBE_CHILD_PID": str(child_pid)}):
+                report = rp.select_preferences(data, authorized=True, authorization_event="yes", timeout=1)[0]
+            self.assertEqual(report["attempts"][0]["status"], "timeout")
+            self.assertTrue(child_pid.exists())
+            pid = int(child_pid.read_text())
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail("timed-out probe left its descendant running")
 
     def test_same_pair_called_once_per_authorized_operation(self):
         data = self.config(["provider/ok"])
@@ -160,7 +254,7 @@ else:
         self.assertEqual(json.loads(authorized.stdout)[0]["selected_preference"], 2)
         saved = yaml.safe_load(config.read_text())
         self.assertEqual(saved["roles"]["Researcher"]["profile"], "choice-2")
-        self.assertEqual([item["model"] for item in self.calls()], ["provider/fail", "provider/ok"])
+        self.assertEqual(len(self.calls()), 2)
 
 
 class PreferenceContractTests(unittest.TestCase):

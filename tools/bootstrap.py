@@ -55,7 +55,7 @@ def report_local_role_preferences() -> list[dict]:
         print(f"⚠️ 角色本地候选检测未完成: {exc}（初始化继续；未改写角色配置）")
         return []
 
-    print("角色本地候选（仅检查本机 CLI 与无交互能力，**不是实际模型验证**）：")
+    print("角色本地候选（仅检查本机可执行文件是否存在，不启动 CLI，也不验证模型）：")
     if not candidates:
         print("  • 未配置外置角色 profile；当前选择保持未知，Reviewer/Maintainer 未选择时保持阻断。")
     for role in candidates:

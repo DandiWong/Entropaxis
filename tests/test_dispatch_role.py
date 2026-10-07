@@ -10,6 +10,8 @@
   - 与 schemas/roles_manifest.schema.json 的样本一致性（jsonschema 可用时）
 """
 
+import contextlib
+import io
 import json
 import os
 import stat
@@ -123,7 +125,7 @@ class DispatchRoleTestBase(TestCase):
         self.scripts.mkdir()
         self.ok_body = self.ws / OK_BODY_NAME
         self.ok_body.write_text(research_doc(), encoding="utf-8")
-        self.ok = _mkexe(self.scripts, "ok.sh", f'#!/bin/sh\ncat "{self.ok_body}" > "$1"\n')
+        self.ok = _mkexe(self.scripts, "ok.sh", f'#!/bin/sh\nout=${{1#*将本次产出写入：}}\nout=${{out%%（*}}\ncat "{self.ok_body}" > "$out"\n')
         self.fail = _mkexe(self.scripts, "fail.sh", FAIL_SH)
         self.slow = _mkexe(self.scripts, "slow.sh", SLOW_SH)
         self.config = self.ws / "roles.yaml"
@@ -146,8 +148,7 @@ class DispatchRoleTestBase(TestCase):
         for role in dr.ALL_ROLES:
             primary = f"{role.lower()}-primary"
             if primary in profiles:
-                block["roles"][role] = {"duty": role, "profile": primary}
-        dr.role_preferences.migrate_config(block)
+                block["roles"][role] = {"duty": role, "preferences": [primary], "profile": primary}
         if mode is not None:
             block["default_dispatch_mode"] = mode
         if grants is not None:
@@ -420,18 +421,24 @@ class RunFlowTests(DispatchRoleTestBase):
         man = yaml.safe_load((self.ws / "workers.yaml").read_text(encoding="utf-8"))["roles_manifest"]
         self.assertEqual(man["assignments"][0]["attempts"][-1]["failure_code"], "NOT_EXECUTABLE")
 
-    def test_unconfigured_unknown_profile_soft_local(self) -> None:
-        rc = self._run("Builder", "p-unknown", {"p-other": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 5}})
-        self.assertEqual(rc, dr.EXIT_LOCAL)
+    def test_unknown_assignment_profile_is_rejected_without_launch_or_archive_change(self) -> None:
+        launched = self.ws / "launched"
+        launcher = _mkexe(self.scripts, "launcher.sh", f'#!/bin/sh\ntouch "{launched}"\n')
+        self.write_config({"p-other": {"argv": [launcher, "{PROMPT}"], "timeout_s": 5}})
+        self.write_workers(role="Builder", profile="p-unknown")
+        before = (self.ws / "workers.yaml").read_bytes()
 
-    def test_unconfigured_hard_blocked(self) -> None:
-        rc = self._run("Reviewer", "p-unknown", {"p-other": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 5}})
-        self.assertEqual(rc, dr.EXIT_BLOCKED)
-
-    def test_subagent_auto_via_roles(self) -> None:
-        self.config.write_text("roles:\n  Builder:\n    duty: build\n    preferences: []\n    profile: null\n", encoding="utf-8")
-        self.write_workers(role="Builder", profile="p-none")
         rc = dr.run_assignment(self.ws, "r1", prompt="x", ack=None, owner="t")
+
+        self.assertEqual(rc, dr.EXIT_USAGE)
+        self.assertFalse(launched.exists())
+        self.assertEqual((self.ws / "workers.yaml").read_bytes(), before)
+
+    def test_subagent_auto_via_unselected_role_is_available_only_to_direct_run(self) -> None:
+        self.config.write_text(
+            "default_dispatch_mode: strict\nroles:\n  Builder:\n    duty: build\n    preferences: []\n    profile: null\ncommand_profiles: {}\n",
+            encoding="utf-8")
+        rc = dr.run_direct(self.ws, "Builder", "x", Path("out.md"), owner="t")
         self.assertEqual(rc, dr.EXIT_LOCAL)
 
     def test_no_valid_output_when_zero_exit_but_no_deliverable(self) -> None:
@@ -452,6 +459,53 @@ class RunFlowTests(DispatchRoleTestBase):
         self.ok_body.write_text(audit_doc(dr._sha256_file(self.ws / "01.md")), encoding="utf-8")
         rc = dr.run_assignment(self.ws, "r1", prompt=str(self.ws / "05.md"), ack=None, owner="t")
         self.assertEqual(rc, dr.EXIT_OK)
+
+    def test_assignment_binds_prompt_and_stamps_receipt(self) -> None:
+        seen = self.ws / "seen.txt"
+        writer = _mkexe(
+            self.scripts, "bound-writer.sh",
+            f'#!/bin/sh\nprintf "%s" "$1" > "{seen}"\nout=${{1#*将本次产出写入：}}\nout=${{out%%（*}}\ncat "{self.ok_body}" > "$out"\n',
+        )
+        self.write_config({"p-bound": {"argv": [writer, "{PROMPT}"], "timeout_s": 30}})
+        self.write_workers(role="Reviewer", profile="p-bound")
+        self.ok_body.write_text(audit_doc(dr._sha256_file(self.ws / "01.md")), encoding="utf-8")
+
+        rc = dr.run_assignment(self.ws, "r1", prompt="审计该方案", ack=None, owner="t")
+
+        self.assertEqual(rc, dr.EXIT_OK)
+        self.assertIn("审计该方案", seen.read_text(encoding="utf-8"))
+        self.assertIn(str((self.ws / "01.md").resolve()), seen.read_text(encoding="utf-8"))
+        self.assertIn(str((self.ws / "05.md").resolve()), seen.read_text(encoding="utf-8"))
+        self.assertRegex((self.ws / "05.md").read_text(encoding="utf-8"), r"(?m)^receipt_id: .+")
+
+    def test_invalid_config_and_timeout_never_launch_or_mutate_archive(self) -> None:
+        launched = self.ws / "launched"
+        launcher = _mkexe(self.scripts, "launcher.sh", f'#!/bin/sh\ntouch "{launched}"\n')
+        self.write_config({"p-hard-timeout": {"argv": [launcher, "{PROMPT}"], "timeout_s": 1801}})
+        self.write_workers(role="Reviewer", profile="p-hard-timeout")
+        before = (self.ws / "workers.yaml").read_bytes()
+
+        rc = dr.run_assignment(self.ws, "r1", prompt="x", ack=None, owner="t")
+
+        self.assertEqual(rc, dr.EXIT_USAGE)
+        self.assertFalse(launched.exists())
+        self.assertEqual((self.ws / "workers.yaml").read_bytes(), before)
+
+        failure, attempts, succeeded = dr.execute_chain(
+            [{"name": "p-hard-timeout", "argv": [launcher, "{PROMPT}"], "timeout_s": 1801}],
+            "x", self.ws, self.ws / "unused.md", "Reviewer",
+        )
+        self.assertEqual(failure, "NOT_EXECUTABLE")
+        self.assertFalse(succeeded)
+        self.assertEqual(attempts[0]["failure_code"], "NOT_EXECUTABLE")
+        self.assertFalse(launched.exists())
+
+        self.config.write_text("roles: [\n", encoding="utf-8")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            rc = dr.main(["resolve", "--cwd", str(self.ws)])
+        self.assertEqual(rc, dr.EXIT_USAGE)
+        self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_fallback_cycle_guards(self) -> None:
         profs = {"p-a": {"argv": [self.fail, "{PROMPT}"], "timeout_s": 5, "fallback_profile": "p-b"},

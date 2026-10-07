@@ -89,6 +89,7 @@ def target_sha256(path: Path) -> str:
     否则同一对象在两台机器上给出两个指纹。签发（issue）、调度档案（dispatch_role）与
     审计门禁（check_audit_gate）共用本函数——此前签发端对目录记空串、调度端对目录直接
     抛异常，目录型外置审计永远核验不过。"""
+    path = path.resolve()
     if path.is_file():
         return _sha256_file(path)
     root = _find_repo_root(path)

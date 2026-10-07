@@ -76,14 +76,18 @@
    ```
    该工具会自动将 `.entropaxis/entrypoints/` 下的 `AGENTS.md` 与 `CLAUDE.md` 物理同步至工作区根目录，建立全局统一的规则控制面（纯文件复制，杜绝云同步网盘跨平台软链冲突）；并把 `.entropaxis/skills/` 以软链接挂进根目录 `.claude/skills/` 与 `.agents/skills/`，供 Agent 按 Skill 描述自动发现。
 
-   Bootstrap 还会在首次渲染 `roles.yaml` 后显示角色外置 profile 的**本地候选**（CLI 是否存在、是否可无交互启动）。这不是模型调用或模型有效性验证：默认角色选择为未知（`null`），Bootstrap 不会写入选择，也不会隐式授权或调用任何模型。已有旧式 fallback 链只会在显式 `--migrate-preferences`，或获授权的角色写入操作中迁移为有序偏好；本地检测及未授权的 `--check-preferences` 不迁移，迁移后当前选择仍须是偏好列表中的一项。
+   Bootstrap 在首次渲染 `roles.yaml` 后显示角色外置 profile 的**本地候选**：只检查可执行文件是否存在，不启动 CLI，不加载扩展，也不据此判断无交互能力或模型权限。默认角色选择为未知（`null`），Bootstrap 不会写入选择或隐式授权模型调用。已有旧式 fallback 链只会在显式 `--migrate-preferences`，或获授权的角色写入操作中迁移为有序偏好；本地检测及未授权的 `--check-preferences` 不迁移，迁移后当前选择仍须是偏好列表中的一项。
 
    若确实要验证模型，先在对话中告知将使用的提供商及可能成本，并取得用户明确授权；随后才可运行：
    ```bash
    python3 .entropaxis/tools/setup_agents.py --check-preferences \
      --authorize-model-check --authorization-event '<用户确认>' [--json]
    ```
-   第二阶段按每个角色的偏好顺序选择首个有效回显，同一配对在本次操作中复用结果；全部失败则保留既有选择，新配置仍为 `null`。`selected_preference` 是从 1 起的序号，`outcome: selected` 才表示本次实测成功，保留的旧选择不构成可用性证据。回显成功也不代替调度器对角色交付物的验收。拒绝或未获答复时不得进行真实调用；`--dry-run` 只做本地检测。
+   第二阶段按偏好顺序验证 nonce 与响应中的精确模型身份，同一配对在本次操作中复用结果。身份缺失记 `identity_missing`，身份不符记 `identity_mismatch`；二者均不选中。Pi/OMP 使用显式最小系统提示词，Claude 使用 bare/restricted 模式，Codex 使用私有临时配置目录；Agy/OpenCode/MiMo 未具备已验证的完整上下文隔离路径，记 `context_unisolated`，不启动探测。Codex 的当前 JSON 回显不提供模型身份，因此不能仅凭 nonce 自动选中。OMP 探测通过临时配置关闭自动兑换重置机会，不修改宿主全局配置；超时终止探测进程组并回收父进程。
+
+   全部失败则保留既有选择，新配置仍为 `null`。`selected_preference` 是从 1 起的序号，`outcome: selected` 才表示本次实测成功，保留的旧选择不构成可用性证据。回显成功也不代替调度器对角色交付物的验收。拒绝或未获答复时不得进行真实调用；`--dry-run` 只做本地检测。
+
+   调度前校验配置的结构与语义；错误 YAML、错误字段类型和非法时限均拒绝执行。显式 assignment profile 不存在时直接报错，不替换为全局偏好；独立自定义 argv 保留自己的完整 fallback 链。assignment 与直接执行使用相同的输入、交付路径和结构契约。普通 profile 时限不超过 7200 秒，Reviewer/Maintainer 不超过 1800 秒。受审目标先规范为绝对路径，相对路径与绝对路径的回执指纹一致。
 
    初始化默认只展示目录候选，不改写已有项目与共享资料登记；`--no-scan` 可跳过扫描。候选、人工选择与生效配置保持区分：
    ```bash
