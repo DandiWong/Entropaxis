@@ -28,6 +28,7 @@ if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
 from tools import dispatch_role as dr  # noqa: E402
+from tools import role_preferences  # noqa: E402
 
 OK_BODY_NAME = "ok_body.md"  # 替身 CLI 把这份合规产出拷到交付物位置
 FAIL_SH = '#!/bin/sh\nexit 1\n'
@@ -582,6 +583,27 @@ class RealWorkspaceConfigTests(TestCase):
             self.skipTest("本机尚未初始化 roles.yaml")
         data = yaml.safe_load(dr.ROLES_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(vs.validate(data, vs.load_schema("roles_config")), [])
+
+    def test_real_config_declares_role_level_timeouts_without_notes(self) -> None:
+        """实例按三层超时解析组织：角色级声明、profile 不带 note、共享配对各角色取值不同。"""
+        if not dr.ROLES_CONFIG.exists():
+            self.skipTest("本机尚未初始化 roles.yaml")
+        data = yaml.safe_load(dr.ROLES_CONFIG.read_text(encoding="utf-8"))
+        roles, profiles = data["roles"], data["command_profiles"]
+        for role in roles:
+            self.assertIn("timeout_s", roles[role], f"{role} 缺角色级 timeout_s")
+        self.assertEqual([name for name, profile in profiles.items() if "note" in profile], [])
+        # 同一 agent/model 配对跨角色共享时，超时按角色解析而非共用
+        for name, profile in profiles.items():
+            if "agent" not in profile or "timeout_s" in profile:
+                continue
+            users = {role for role, entry in roles.items() if name in (entry.get("preferences") or [])}
+            values = {role_preferences.effective_timeout(data, profile, role) for role in users}
+            if len(users) > 1:
+                self.assertEqual(values, {roles[role]["timeout_s"] for role in users},
+                                 f"{name} 跨角色共享但超时未按角色解析")
+        for role in ("Reviewer", "Maintainer"):
+            self.assertLessEqual(roles[role]["timeout_s"], 1800, f"{role} 超过硬门禁上限")
 
 
 class DirectRunTests(DispatchRoleTestBase):

@@ -114,7 +114,8 @@ def load_dispatch_config(config_path: Path | None = None) -> dict[str, Any]:
     """读并完整校验第 3 级 roles.yaml；缺失配置仍表示未配置。"""
     if config_path is None:
         config_path = ACTIVE_CONFIG or ROLES_CONFIG
-    empty = {"default_dispatch_mode": None, "roles": {}, "command_profiles": {}, "dispatch_authorizations": [],
+    empty = {"default_dispatch_mode": None, "default_timeout_s": role_preferences.FALLBACK_TIMEOUT_S,
+             "roles": {}, "command_profiles": {}, "dispatch_authorizations": [],
              "path": str(config_path), "present": False}
     if not config_path.exists():
         return empty
@@ -356,7 +357,12 @@ def _argv_ok(argv: list[str]) -> bool:
 
 
 def resolve_profile_chain(profile_name: str, config: dict[str, Any], role: str | None = None) -> list[dict[str, Any]]:
-    """解析角色偏好后缀或独立 custom argv 的 fallback 链。"""
+    """解析角色偏好后缀或独立 custom argv 的 fallback 链。
+
+    每条都带上解析后的 `timeout_s`：执行器只认这一个字段，而它按
+    profile → 角色级 → default_timeout_s 三级取值（同一 profile 可被多个角色共享，
+    超时却按角色定）。在此处物化，执行侧就不必知道三层规则。
+    """
     profiles = config.get("command_profiles") or {}
     entry = (config.get("roles") or {}).get(role, {}) if role else {}
     names = entry.get("preferences")
@@ -364,7 +370,8 @@ def resolve_profile_chain(profile_name: str, config: dict[str, Any], role: str |
         return []
     if names is not None and profile_name in names:
         start = names.index(profile_name)
-        return [{"name": name, **profiles[name], "preference_number": i + 1}
+        return [{"name": name, **profiles[name], "preference_number": i + 1,
+                 "timeout_s": role_preferences.effective_timeout(config, profiles[name], role)}
                 for i, name in enumerate(names) if i >= start]
 
     chain, seen = [], set()
@@ -374,7 +381,8 @@ def resolve_profile_chain(profile_name: str, config: dict[str, Any], role: str |
         profile = profiles.get(name)
         if not isinstance(profile, dict):
             break
-        chain.append({"name": name, **profile})
+        chain.append({"name": name, **profile,
+                      "timeout_s": role_preferences.effective_timeout(config, profile, role)})
         name = profile.get("fallback_profile")
     return chain
 
@@ -708,6 +716,11 @@ def trace(record: dict[str, Any], path: Path | None = None) -> None:
         pass
 
 def _timeout_error(profile: dict[str, Any], role: str | None) -> str | None:
+    """链上每条都已由 resolve_profile_chain 物化 timeout_s；这里只做最终防御。
+
+    校验器（semantic_errors）已在写入前拦过非法值，此处的意义是：绕过校验器的
+    调用方（测试注入、手工改档）也不会把非法超时送进 subprocess.run。
+    """
     timeout = profile.get("timeout_s")
     if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 7200:
         return "timeout_s 必须为 1..7200 的整数"
@@ -1213,7 +1226,8 @@ def run_verify(profile_name: str, config: dict[str, Any], cwd: Path, role: str) 
     before = _source_fingerprints(cwd)
     try:
         proc = subprocess.run([exe, *argv[1:]], cwd=str(cwd), capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL, timeout=int(prof.get("timeout_s", 900)))
+                              stdin=subprocess.DEVNULL,
+                              timeout=role_preferences.effective_timeout(config, prof, role))
     except subprocess.TimeoutExpired:
         trace({"role": role, "profile": f"verify:{profile_name}", "argv": argv, "cwd": str(cwd), "executed": True,
                "failure_code": "TIMEOUT", "duration_s": round(time.time() - t0, 1)})

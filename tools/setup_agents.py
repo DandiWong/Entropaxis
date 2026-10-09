@@ -343,6 +343,7 @@ def load_config(config_path: Path) -> dict[str, Any]:
         if field in data and not isinstance(data[field], dict):
             raise ConfigError(f"roles.yaml 的 {field} 必须是对象")
     data.setdefault("default_dispatch_mode", "strict")
+    data.setdefault("default_timeout_s", role_preferences.FALLBACK_TIMEOUT_S)
     data.setdefault("roles", {})
     data.setdefault("command_profiles", {})
     data.setdefault("dispatch_authorizations", [])
@@ -465,16 +466,20 @@ def _old_role_profiles(data: dict[str, Any], entry: dict[str, Any]) -> list[str]
 
 
 def _raw_profile(old: dict[str, Any] | None, argv: list[str]) -> dict[str, Any]:
-    profile: dict[str, Any] = {"argv": argv, "timeout_s": (old or {}).get("timeout_s", 900)}
-    if (old or {}).get("note"):
-        profile["note"] = old["note"]
+    """自定义 argv profile 不写 timeout_s：缺省按角色级 → default_timeout_s 解析，
+    避免每条命令各写一个 900 把改超时的手续放大成 N 次。既有 profile 级的覆盖保留。"""
+    profile: dict[str, Any] = {"argv": argv}
+    timeout = (old or {}).get("timeout_s")
+    if isinstance(timeout, int):
+        profile["timeout_s"] = timeout
     return profile
 
 
 def _agent_profile(old: dict[str, Any] | None, agent: str, model: str) -> dict[str, Any]:
-    profile: dict[str, Any] = {"agent": agent, "model": model, "timeout_s": (old or {}).get("timeout_s", 900)}
-    if (old or {}).get("note"):
-        profile["note"] = old["note"]
+    profile: dict[str, Any] = {"agent": agent, "model": model}
+    timeout = (old or {}).get("timeout_s")
+    if isinstance(timeout, int):
+        profile["timeout_s"] = timeout
     return profile
 
 
@@ -633,11 +638,19 @@ def set_model(data: dict[str, Any], role: str, model: str, preference: int | Non
 
 
 def set_timeout(data: dict[str, Any], role: str, seconds: int, preference: int | None = None) -> None:
+    """设置超时：缺省改角色级（该角色全部偏好生效）；`--preference N` 定向覆盖单个偏好。
+
+    同一 profile 可被多个角色共享而超时按角色定，因此角色级是默认档；profile 覆盖仍保留，
+    只用于「这条命令就是比该角色其他命令慢」的少数场景。
+    """
     role_preferences.migrate_config(data)
-    if role in HARD_GATED_ROLES and seconds > 1800:
-        raise ConfigError(f"硬门禁角色 {role} 超时须 ≤1800s，实得 {seconds}s\n👉 拆小任务或换角色承载")
-    if not 1 <= seconds <= 7200:
-        raise ConfigError(f"timeout_s 须为 1~7200 的整数，实得 {seconds}")
+    if role in HARD_GATED_ROLES and seconds > role_preferences.HARD_ROLE_MAX_TIMEOUT_S:
+        raise ConfigError(f"硬门禁角色 {role} 超时须 ≤{role_preferences.HARD_ROLE_MAX_TIMEOUT_S}s，实得 {seconds}s\n👉 拆小任务或换角色承载")
+    if not 1 <= seconds <= role_preferences.MAX_TIMEOUT_S:
+        raise ConfigError(f"timeout_s 须为 1~{role_preferences.MAX_TIMEOUT_S} 的整数，实得 {seconds}")
+    if preference is None:
+        _require_role(data, role)["timeout_s"] = seconds
+        return
     name, profile = _target_preference(data, role, preference, "调整超时")
     _, profile = _editable_preference(data, role, name, profile)
     profile["timeout_s"] = seconds
@@ -681,11 +694,15 @@ def remove_role(data: dict[str, Any], role: str) -> list[str]:
     return _gc_profiles(data, old)
 
 
-def _preference_item(number: int, name: str, profile: dict[str, Any]) -> dict[str, Any]:
+def _preference_item(number: int, name: str, profile: dict[str, Any], role: str | None = None,
+                     data: dict[str, Any] | None = None) -> dict[str, Any]:
     argv = _profile_argv(profile)
+    # 清单显示解析后的实际超时，而不是 profile 上的原始字段：共享 profile 的角色级取值
+    # 不同（Builder 3600 / Reviewer 1800 共用同一 glm-5.3），只显示原始值会误导。
+    timeout = role_preferences.effective_timeout(data or {}, profile, role)
     return {
         "number": number, "profile": name, "agent": profile.get("agent") or Path(argv[0]).name,
-        "model": _profile_model(profile), "timeout_s": profile.get("timeout_s"),
+        "model": _profile_model(profile), "timeout_s": timeout,
         "executable": bool(shutil.which(argv[0])),
     }
 
@@ -696,7 +713,8 @@ def list_roles(data: dict[str, Any]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for role in order:
         entry = roles[role] or {}
-        preferences = [_preference_item(number, name, profile) for number, (name, profile) in enumerate(_all_preferences(data, role), 1)]
+        preferences = [_preference_item(number, name, profile, role, data)
+                       for number, (name, profile) in enumerate(_all_preferences(data, role), 1)]
         selected = entry.get("profile")
         selected_number = next((item["number"] for item in preferences if item["profile"] == selected), None)
         gate = "hard" if role in HARD_GATED_ROLES else ("soft" if role in STANDARD_ROLES else "custom")
@@ -830,9 +848,10 @@ def _main() -> int:
                         help="删除偏好；默认 dry-run，加 --yes 执行")
     parser.add_argument("--move-preference", nargs=3, metavar=("ROLE", "FROM", "TO"),
                         help="移动一个偏好到新序号，不改写 profile")
-    parser.add_argument("--preference", type=int, metavar="NUMBER", help="--set-model/--set-timeout 的目标偏好序号")
+    parser.add_argument("--preference", type=int, metavar="NUMBER", help="--set-model/--set-timeout 的目标偏好序号（缺省为选中偏好；--set-timeout 缺省写角色级）")
     parser.add_argument("--set-model", nargs=2, metavar=("ROLE", "MODEL"), help="更新一个偏好的模型")
-    parser.add_argument("--set-timeout", nargs=2, metavar=("ROLE", "SEC"), help="更新一个偏好的 timeout_s")
+    parser.add_argument("--set-timeout", nargs=2, metavar=("ROLE", "SEC"),
+                        help="设置角色级 timeout_s（该角色全部偏好生效）；配 --preference NUMBER 定向覆盖单个偏好")
     parser.add_argument("--set-duty", nargs=2, metavar=("ROLE", "DUTY"), help="定向更新角色职责描述")
     parser.add_argument("--remove-role", metavar="ROLE", help="删除自定义角色并回收其独占 profile")
     parser.add_argument("--yes", action="store_true", help="配合删除命令跳过 dry-run 预览直接执行")

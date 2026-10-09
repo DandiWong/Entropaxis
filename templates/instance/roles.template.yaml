@@ -3,31 +3,31 @@ _meta:
   managed_by: bootstrap.py render_instance_configs（仅缺失时渲染）+ setup_agents.py --set-role + 人工
   policy: merge-only
   schema: .entropaxis/schemas/roles_config.schema.json
-  note: preferences 从 1 起按序尝试；agent/model 为调用真源，provider 前缀原样保留。profile 为 null 表示尚未选择外置偏好；bootstrap 只做本地检测，真实模型调用须另获用户授权。Reviewer/Maintainer 硬门禁不因空选择而放宽。
+  note: 角色承载第 3 级默认（语义见 rules/角色协作.md）。preferences 按顺序引用 agent/model 配对，profile 为当前选中偏好；保留既有选择不代表本次已验证真实模型可用性。真实检测须另获用户授权；模型 provider 前缀原样保留。超时三层解析：profile.timeout_s > roles.<角色>.timeout_s > default_timeout_s，故同一 agent/model 配对不同角色可各自设超时。超时决策依据：2026-10-06 用户指令将 Builder 放宽至 3600s；2026-09-22 用户指令要求审计角色走 omp（异厂独立性），硬门禁 ≤1800s 约束见 rules/角色协作.md。profile 标识一经被胶囊档案引用即不可改名或删除。
 default_dispatch_mode: strict
+default_timeout_s: 900
 roles:
-  Architecture: {duty: 顶层架构/技术选型/方案设计, preferences: [architecture-1], profile: null}
-  Researcher: {duty: 调研（强制联网）/文献综述/竞品查新, preferences: [researcher-1, researcher-2], profile: null}
-  Designer: {duty: 视觉美学/UI交互原型/排版呈现, preferences: [designer-1], profile: null}
-  Builder: {duty: 方案实施/核心编码/重构, preferences: [builder-1, builder-2], profile: null}
-  Reviewer: {duty: 方案审计/对抗评审/架构合规, preferences: [reviewer-1, reviewer-2, reviewer-3], profile: null}
-  Maintainer: {duty: 全流程验收/守门落盘/证据核验, preferences: [maintainer-1], profile: null}
-  Reporter: {duty: 汇报材料提炼/交付总结, preferences: [reporter-1, reporter-2], profile: null}
+  Architecture: {duty: 顶层架构/技术选型/方案设计, timeout_s: 900, preferences: [architecture-1], profile: null}
+  Researcher: {duty: 调研（强制联网）/文献综述/竞品查新, timeout_s: 900, preferences: [researcher-1, researcher-2], profile: null}
+  Designer: {duty: 视觉美学/UI交互原型/排版呈现, timeout_s: 900, preferences: [designer-1], profile: null}
+  Builder: {duty: 方案实施/核心编码/重构, timeout_s: 3600, preferences: [builder-1, builder-2], profile: null}
+  Reviewer: {duty: 方案审计/对抗评审/架构合规, timeout_s: 1800, preferences: [reviewer-1, reviewer-2, reviewer-3], profile: null}
+  Maintainer: {duty: 全流程验收/守门落盘/证据核验, timeout_s: 900, preferences: [maintainer-1], profile: null}
+  Reporter: {duty: 汇报材料提炼/交付总结, timeout_s: 900, preferences: [reporter-1, reporter-2], profile: null}
 command_profiles:
-  architecture-1: {agent: claude, model: claude-opus-5.5, timeout_s: 900}
-  researcher-1: {agent: omp, model: google-antigravity/gemini-3.8-flash, timeout_s: 900}
-  researcher-2: {agent: omp, model: minimax-code-cn/MiniMax-M3, timeout_s: 900}
-  designer-1: {agent: claude, model: claude-sonnet-5.5, timeout_s: 900}
-  builder-1: {agent: omp, model: zhipu-coding-plan/glm-5.3, timeout_s: 3600}
-  builder-2: {agent: claude, model: claude-sonnet-5.5, timeout_s: 3600}
-  reviewer-1: {agent: omp, model: openai-codex/gpt-6.1-sol, timeout_s: 1800}
-  reviewer-2: {agent: omp, model: zhipu-coding-plan/glm-5.3, timeout_s: 1800}
-  reviewer-3: {agent: claude, model: claude-opus-5.5, timeout_s: 1800}
-  maintainer-1: {agent: claude, model: claude-opus-5.5, timeout_s: 900}
-  reporter-1: {agent: omp, model: google-antigravity/gemini-3.8-flash, timeout_s: 900}
-  reporter-2: {agent: omp, model: minimax-code-cn/MiniMax-M3, timeout_s: 900}
+  architecture-1: {agent: claude, model: claude-opus-5.5}
+  researcher-1: {agent: omp, model: google-antigravity/gemini-3.8-flash}
+  researcher-2: {agent: omp, model: minimax-code-cn/MiniMax-M3}
+  designer-1: {agent: claude, model: claude-sonnet-5.5}
+  builder-1: {agent: omp, model: stepfun/step-5-preview}
+  builder-2: {agent: omp, model: zhipu-coding-plan/glm-5.3}
+  reviewer-1: {agent: omp, model: openai-codex/gpt-6.1-sol}
+  reviewer-2: {agent: omp, model: zhipu-coding-plan/glm-5.3}
+  reviewer-3: {agent: claude, model: claude-opus-5.5}
+  maintainer-1: {agent: claude, model: claude-opus-5.5}
+  reporter-1: {agent: omp, model: google-antigravity/gemini-3.8-flash}
+  reporter-2: {agent: omp, model: minimax-code-cn/MiniMax-M3}
   builder-verify:
     argv: [python3, -m, pytest, -q]
     timeout_s: 600
-    note: 自定义校验命令；不含任务占位符，在任务 cwd 执行。
 dispatch_authorizations: []

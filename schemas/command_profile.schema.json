@@ -1,5 +1,5 @@
 {
-  "$comment": "命令定义唯一真源。每个 profile 二选一：agent/model 配对（argv 由适配器生成）或自定义 argv（校验命令也用此形态）。角色偏好顺序只在 roles.preferences，配对形态禁止 fallback_profile。独立自定义命令允许 fallback_profile，执行器带环检测。{PROMPT} 是任务占位符；subprocess 列表参数无 shell，工作目录由 cwd 传入。",
+  "$comment": "命令定义唯一真源。每个 profile 二选一：agent/model 配对（argv 由适配器生成）或自定义 argv（校验命令也用此形态）。角色偏好顺序只在 roles.preferences，配对形态禁止 fallback_profile。独立自定义命令允许 fallback_profile，执行器带环检测。{PROMPT} 是任务占位符；subprocess 列表参数无 shell，工作目录由 cwd 传入。timeout_s 可选：缺省按 roles.<Role>.timeout_s → default_timeout_s → 900 解析；不挂角色的独立命令只受 default_timeout_s 兜底。",
   "title": "command_profiles",
   "target": "data/templates/roles.yaml 的 command_profiles 段",
   "type": "object",
@@ -7,7 +7,6 @@
   "patternProperties": {
     "^[a-z][a-z0-9-]*$": {
       "type": "object",
-      "required": ["timeout_s"],
       "oneOf": [
         {
           "required": ["agent", "model"],
@@ -28,8 +27,7 @@
           "items": { "type": "string", "pattern": "^[^;&|`$><\\n]+$" }
         },
         "fallback_profile": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
-        "timeout_s": { "type": "integer", "minimum": 1, "maximum": 7200 },
-        "note": { "type": "string" }
+        "timeout_s": { "type": "integer", "minimum": 1, "maximum": 7200 }
       }
     }
   }

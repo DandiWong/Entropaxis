@@ -258,7 +258,7 @@ print(json.dumps({{"type": "result", "result": nonce, "model": "requested-alias"
 
 
 class PreferenceContractTests(unittest.TestCase):
-    def test_migration_preserves_long_order_ids_notes_timeouts_and_verifier(self):
+    def test_migration_preserves_long_order_ids_timeouts_and_verifier(self):
         profiles = {f"p-{i}": {"argv": ["omp", "--model", f"provider/model-{i}", "-p", rp.PROMPT],
                                "timeout_s": 800 + i, "note": f"user note {i}"} for i in range(5)}
         for i in range(4):
@@ -270,8 +270,10 @@ class PreferenceContractTests(unittest.TestCase):
         self.assertEqual(data["roles"]["Builder"]["preferences"], [f"p-{i}" for i in range(5)])
         self.assertEqual(data["roles"]["Builder"]["profile"], "p-0")
         self.assertEqual(profiles["verify"], original_verify)
+        # note 已从契约删除（零读者字段）：迁移时剥掉，否则旧实例一跑写入命令就把
+        # 已删字段带回 schema 校验。timeout_s 与 profile ID 一律保留。
         for i in range(5):
-            self.assertEqual(profiles[f"p-{i}"], {"agent": "omp", "model": f"provider/model-{i}", "timeout_s": 800 + i, "note": f"user note {i}"})
+            self.assertEqual(profiles[f"p-{i}"], {"agent": "omp", "model": f"provider/model-{i}", "timeout_s": 800 + i})
         migrated = copy.deepcopy(data)
         rp.migrate_config(data)
         self.assertEqual(data, migrated)
@@ -282,10 +284,58 @@ class PreferenceContractTests(unittest.TestCase):
                         {"agent": "unknown", "model": "provider/name", "timeout_s": 30},
                         {"agent": "omp", "model": "provider/name", "timeout_s": 7201},
                         {"agent": "omp", "timeout_s": 30},
-                        {"agent": "omp", "model": "provider/name", "fallback_profile": "other", "timeout_s": 30}):
+                        {"agent": "omp", "model": "provider/name", "fallback_profile": "other", "timeout_s": 30},
+                        # note 已从契约删除：残留字段一律按未声明拒绝，否则旧实例会把它带回来
+                        {"agent": "omp", "model": "provider/name", "timeout_s": 30, "note": "x"},
+                        {"argv": ["omp", "-p", rp.PROMPT], "timeout_s": 0}):
             with self.subTest(profile=profile):
                 self.assertTrue(vs.validate({"pair": profile}, schema))
-        self.assertEqual(vs.validate({"pair": {"agent": "pi", "model": "provider/name", "timeout_s": 30}}, schema), [])
+        # timeout_s 可选：缺省由角色级/default_timeout_s 解析（见 effective_timeout）
+        for profile in ({"agent": "pi", "model": "provider/name", "timeout_s": 30},
+                        {"agent": "pi", "model": "provider/name"},
+                        {"argv": ["python3", "-m", "pytest"]}):
+            with self.subTest(profile=profile):
+                self.assertEqual(vs.validate({"pair": profile}, schema), [])
+
+    def test_effective_timeout_resolves_role_level_before_default(self):
+        """同一 profile 跨角色共享时，超时按角色各自解析（Builder 3600 / Reviewer 1800 共用同一配对）。"""
+        data = {"default_timeout_s": 900,
+                "roles": {"Builder": {"duty": "b", "preferences": ["shared"], "profile": "shared", "timeout_s": 3600},
+                          "Reviewer": {"duty": "r", "preferences": ["shared"], "profile": "shared", "timeout_s": 1800}},
+                "command_profiles": {"shared": {"agent": "omp", "model": "provider/name"}}}
+        profile = data["command_profiles"]["shared"]
+        self.assertEqual(rp.effective_timeout(data, profile, "Builder"), 3600)
+        self.assertEqual(rp.effective_timeout(data, profile, "Reviewer"), 1800)
+        # profile 覆盖优先于角色级
+        profile["timeout_s"] = 60
+        self.assertEqual(rp.effective_timeout(data, profile, "Builder"), 60)
+        del profile["timeout_s"]
+        # 未声明角色级时落到 default_timeout_s
+        data["roles"]["Reporter"] = {"duty": "x", "preferences": ["shared"], "profile": "shared"}
+        self.assertEqual(rp.effective_timeout(data, profile, "Reporter"), 900)
+        del data["default_timeout_s"]
+        self.assertEqual(rp.effective_timeout(data, profile, "Reporter"), rp.FALLBACK_TIMEOUT_S)
+
+    def test_hard_gate_timeout_rejected_at_role_and_profile_level(self):
+        def build(role_timeout=None, profile_timeout=None):
+            profile = {"agent": "omp", "model": "provider/name"}
+            if profile_timeout is not None:
+                profile["timeout_s"] = profile_timeout
+            role = {"duty": "review", "preferences": ["one"], "profile": "one"}
+            if role_timeout is not None:
+                role["timeout_s"] = role_timeout
+            return {"roles": {"Reviewer": role}, "command_profiles": {"one": profile}}
+
+        for label, data in (("role-level", build(role_timeout=1801)),
+                            ("profile override", build(profile_timeout=1801)),
+                            ("default overflow", {"default_timeout_s": 7201, "roles": {"Reviewer": {"duty": "r", "preferences": ["one"], "profile": "one"}},
+                                                  "command_profiles": {"one": {"agent": "omp", "model": "provider/name"}}})):
+            with self.subTest(level=label):
+                self.assertTrue(rp.semantic_errors(data))
+        # 硬门禁上限本身合法；非硬门禁角色不受 1800 限制
+        self.assertEqual(rp.semantic_errors(build(role_timeout=1800)), [])
+        self.assertEqual(rp.semantic_errors(build(profile_timeout=1800)), [])
+        self.assertEqual(rp.semantic_errors(build(role_timeout=3600) | {"roles": {"Builder": build(role_timeout=3600)["roles"]["Reviewer"]}}), [])
 
     def test_invalid_selection_duplicate_reference_and_hard_timeout_rejected(self):
         data = {"roles": {"Reviewer": {"duty": "review", "preferences": ["one"], "profile": "one"}},

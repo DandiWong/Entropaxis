@@ -25,6 +25,25 @@ UNSAFE = set(';&|`$><\n\r')
 PROBE_SYSTEM_PROMPT = "You are an isolated model availability probe. Follow only the user message."
 CONTEXT_UNISOLATED_PROBE_AGENTS = frozenset(("agy", "opencode", "mimo"))
 PROCESS_REAP_TIMEOUT_S = 1
+# 超时兜底链的最末一级：profile.timeout_s → roles.<Role>.timeout_s → default_timeout_s → 本值
+FALLBACK_TIMEOUT_S = 900
+# 硬门禁超时上限（级联雪崩与误阻断防护）；角色级与 profile 级覆盖同样受此约束
+HARD_ROLE_MAX_TIMEOUT_S = 1800
+MAX_TIMEOUT_S = 7200
+
+
+def effective_timeout(data: dict[str, Any], profile: dict[str, Any], role: str | None = None) -> int:
+    """解析一次调度实际使用的超时：profile > 角色 > 顶层 default > 900。
+
+    同一 profile 可被多个角色共享，而超时按角色定（Builder 3600 vs Reviewer 1800 共用
+    glm-5.3 就是实证）；因此取值必须带 role 解析，不能只读 profile 自身。缺 timeout_s
+    不再让 subprocess 侧补默认——那会让超时事实分散在两处。
+    """
+    for value in (profile.get("timeout_s"), (data.get("roles", {}).get(role) or {}).get("timeout_s") if role else None,
+                  data.get("default_timeout_s"), FALLBACK_TIMEOUT_S):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return FALLBACK_TIMEOUT_S
 
 
 def profile_argv(profile: dict[str, Any]) -> list[str]:
@@ -83,6 +102,11 @@ def semantic_errors(data: dict[str, Any]) -> list[str]:
     for role, entry in data.get("roles", {}).items():
         names = entry.get("preferences")
         selected = entry.get("profile")
+        timeout = effective_timeout(data, {}, role)
+        if not 1 <= timeout <= MAX_TIMEOUT_S:
+            errors.append(f"{role}: 解析后的 timeout_s {timeout} 超出 1..{MAX_TIMEOUT_S}")
+        elif role in HARD_ROLES and timeout > HARD_ROLE_MAX_TIMEOUT_S:
+            errors.append(f"{role}: 超时 {timeout}s 超过硬门禁上限 {HARD_ROLE_MAX_TIMEOUT_S}s")
         if names is not None:
             if len(names) != len(set(names)):
                 errors.append(f"{role}: duplicate preference reference")
@@ -97,10 +121,13 @@ def semantic_errors(data: dict[str, Any]) -> list[str]:
                     errors.append(f"{role}: preference {name} has no task prompt")
         elif selected and selected not in profiles:
             errors.append(f"{role}: unknown selected profile {selected}")
+        # 每个偏好单独解析（profile 覆盖可能高于角色级），硬门禁上限对三级取值一律生效
         for name, profile in preference_profiles(data, role, selected_only=False):
-            timeout = profile.get("timeout_s")
-            if isinstance(timeout, int) and role in HARD_ROLES and timeout > 1800:
-                errors.append(f"{role}/{name}: hard-gate timeout exceeds 1800s")
+            resolved = effective_timeout(data, profile, role)
+            if not 1 <= resolved <= MAX_TIMEOUT_S:
+                errors.append(f"{role}/{name}: 解析后的 timeout_s {resolved} 超出 1..{MAX_TIMEOUT_S}")
+            elif role in HARD_ROLES and resolved > HARD_ROLE_MAX_TIMEOUT_S:
+                errors.append(f"{role}/{name}: 超时 {resolved}s 超过硬门禁上限 {HARD_ROLE_MAX_TIMEOUT_S}s")
     return errors
 
 
@@ -112,7 +139,11 @@ def profile_argv_safe(profile: dict[str, Any]) -> list[str]:
 
 
 def migrate_config(data: dict[str, Any]) -> None:
-    """Explicit migration, preserving profile IDs, selection, notes and timeouts."""
+    """Explicit migration, preserving profile IDs, selection and timeouts.
+
+    `note` 已从契约删除（零读者，内容与配置值/规则正文重复会漂移）：迁移时一并剥掉，
+    否则旧实例一跑写入命令就把已删字段带回来，schema 校验反被拖垮。
+    """
     profiles = data.get("command_profiles", {})
     preference_names: set[str] = set()
     for role, entry in data.get("roles", {}).items():
@@ -124,6 +155,7 @@ def migrate_config(data: dict[str, Any]) -> None:
         if not profile:
             continue
         profile.pop("fallback_profile", None)
+        profile.pop("note", None)
         argv = profile.get("argv", [])
         if not argv or argv[0] not in AGENTS:
             continue

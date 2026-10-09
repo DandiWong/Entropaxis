@@ -41,7 +41,6 @@ class SetupAgentsTests(TestCase):
         for number in range(1, 6):
             sa.set_preference(data, "Builder", number, "omp", f"provider/model-{number}")
         second = data["roles"]["Builder"]["preferences"][1]
-        data["command_profiles"][second]["note"] = "keep this note"
         data["command_profiles"][second]["timeout_s"] = 123
 
         sa.set_preference(data, "Builder", 2, "codex", "provider/replaced")
@@ -53,7 +52,6 @@ class SetupAgentsTests(TestCase):
         self.assertNotIn(removed, preferences)
         self.assertEqual(data["command_profiles"][second]["agent"], "codex")
         self.assertEqual(data["command_profiles"][second]["model"], "provider/replaced")
-        self.assertEqual(data["command_profiles"][second]["note"], "keep this note")
         self.assertEqual(data["command_profiles"][second]["timeout_s"], 123)
 
     def test_cli_set_preference_appends_agent_model_record_with_json_only_output(self) -> None:
@@ -80,6 +78,42 @@ class SetupAgentsTests(TestCase):
         self.assertEqual(code, 1)
         self.assertNotIn("Traceback", err)
         self.assertIn("invalid literal", err)
+
+    def test_cli_set_timeout_defaults_to_role_level_and_preference_overrides(self) -> None:
+        """角色级超时对该角色全部偏好生效；--preference 才落到单条 profile。"""
+        data = self.data()
+        sa.set_preference(data, "Builder", 1, "omp", "provider/one")
+        sa.set_preference(data, "Builder", 2, "codex", "provider/two")
+        first, second = data["roles"]["Builder"]["preferences"]
+        data["roles"]["Builder"]["profile"] = None
+        sa.save_config(self.config, data)
+
+        code, _, err = self.invoke("--config", str(self.config), "--set-timeout", "Builder", "1200")
+        self.assertEqual(code, 0, err)
+        saved = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        self.assertEqual(saved["roles"]["Builder"]["timeout_s"], 1200)
+        self.assertNotIn("timeout_s", saved["command_profiles"][first])
+        self.assertNotIn("timeout_s", saved["command_profiles"][second])
+        self.assertEqual(role_preferences.effective_timeout(saved, saved["command_profiles"][second], "Builder"), 1200)
+
+        code, _, err = self.invoke("--config", str(self.config), "--set-timeout", "Builder", "300", "--preference", "1")
+        self.assertEqual(code, 0, err)
+        saved = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        self.assertEqual(saved["command_profiles"][first]["timeout_s"], 300)
+        self.assertEqual(saved["roles"]["Builder"]["timeout_s"], 1200)
+        self.assertEqual(role_preferences.effective_timeout(saved, saved["command_profiles"][second], "Builder"), 1200)
+
+    def test_cli_rejects_hard_gate_timeout_above_limit_without_writing(self) -> None:
+        data = self.data()
+        sa.set_preference(data, "Reviewer", 1, "omp", "provider/one")
+        sa.save_config(self.config, data)
+        before = self.config.read_bytes()
+
+        code, _, err = self.invoke("--config", str(self.config), "--set-timeout", "Reviewer", "1801")
+
+        self.assertEqual(code, 1)
+        self.assertIn("1800", err)
+        self.assertEqual(self.config.read_bytes(), before)
 
     def test_cli_targets_requested_preference_without_rebuilding_others(self) -> None:
         data = self.data()

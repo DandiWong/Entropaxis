@@ -1,5 +1,5 @@
 {
-  "$comment": "角色有序偏好配置。roles.preferences 是 command_profiles 标识的有序列表，序号从 1 起；profile 是选中标识或 null（未选中，不代表硬门禁外置就绪）。agent/model 是调用真源；provider/model 前缀原样保留。旧实例须显式迁移；bootstrap 仅首次渲染，真实模型检测须单独取得用户授权。",
+  "$comment": "角色有序偏好配置。roles.preferences 是 command_profiles 标识的有序列表，序号从 1 起；profile 是选中标识或 null（未选中，不代表硬门禁外置就绪）。agent/model 是调用真源；provider/model 前缀原样保留。旧实例须显式迁移；bootstrap 仅首次渲染，真实模型检测须单独取得用户授权。超时三层解析：profile.timeout_s > roles.<Role>.timeout_s > default_timeout_s（缺省 900）；未挂角色的独立命令（如 builder-verify）只受 default_timeout_s 兜底。",
   "title": "roles_config",
   "target": "data/templates/roles.yaml",
   "type": "object",
@@ -8,6 +8,12 @@
   "properties": {
     "_meta": { "type": "object", "required": ["source", "managed_by", "policy"] },
     "default_dispatch_mode": { "enum": ["strict", "graceful"] },
+    "default_timeout_s": {
+      "$comment": "未声明 timeout_s 的角色与 profile 的兜底超时（1..7200）。",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 7200
+    },
     "roles": {
       "type": "object",
       "additionalProperties": false,
@@ -23,7 +29,13 @@
               "uniqueItems": true,
               "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
             },
-            "profile": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9-]*$" }
+            "profile": { "type": ["string", "null"], "pattern": "^[a-z][a-z0-9-]*$" },
+            "timeout_s": {
+              "$comment": "角色级超时：该角色全部偏好的默认值，profile 的 timeout_s 可覆盖。缺省取顶层 default_timeout_s。硬门禁角色（Reviewer/Maintainer）上限 1800s 仍按角色判定，不因 profile 覆盖而放宽。",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 7200
+            }
           }
         }
       }
