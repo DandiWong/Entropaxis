@@ -1,9 +1,12 @@
+import json
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from tools import paths
+from tools import check_distribution as cd
 from tools.check_distribution import (
     ToolError,
     build_recipient_tree,
@@ -144,6 +147,51 @@ class DistributionSetTests(unittest.TestCase):
             with self.assertRaises(ToolError) as ctx:
                 build_recipient_tree(root, [], root / "out")
             self.assertIn("👉", str(ctx.exception))
+
+    def test_missing_tracked_file_is_not_silently_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            with self.assertRaises(ToolError):
+                build_recipient_tree(root, ["missing.md"], root / "out")
+
+
+class InitChainTests(unittest.TestCase):
+    def run_chain(self, second="", tests="Ran 1 test in 0.001s\n\nOK\n", boot_code=0, lint_output=None):
+        results = [subprocess.CompletedProcess([], boot_code, "", ""),
+                   subprocess.CompletedProcess([], 0, second, ""),
+                   subprocess.CompletedProcess([], 0, lint_output if lint_output is not None else
+                                               '{"passed": true, "blocking_count": 0, "checks": []}', ""),
+                   subprocess.CompletedProcess([], 0, "", tests)]
+        with mock.patch.object(cd, "_run", side_effect=results):
+            return cd.run_init_chain(Path("unused"))
+
+    def test_clean_chain_passes(self):
+        self.assertEqual(self.run_chain(), ([], []))
+
+    def test_first_boot_failure_blocks(self):
+        self.assertTrue(any("初始化失败" in i for i in self.run_chain(boot_code=1)[0]))
+
+    def test_second_boot_warning_blocks_even_with_zero_exit(self):
+        for marker in ("❌", "损坏", "Traceback"):
+            with self.subTest(marker=marker):
+                self.assertTrue(any("不幂等" in i for i in self.run_chain(second=marker)[0]))
+
+    def test_zero_or_undiscovered_tests_block(self):
+        for output in ("Ran 0 tests in 0.001s\n\nOK\n", "OK\n"):
+            with self.subTest(output=output):
+                self.assertTrue(any("单测失败" in i for i in self.run_chain(tests=output)[0]))
+
+    def test_lint_advisories_preserve_issue_details(self):
+        payload = {"passed": True, "blocking_count": 0, "checks": [
+            {"title": "实例声明", "blocking": False, "issues": ["词表未声明"]}]}
+        blocking, advisory = self.run_chain(lint_output=json.dumps(payload))
+        self.assertEqual(blocking, [])
+        self.assertIn("词表未声明", advisory[0])
+
+    def test_invalid_lint_output_blocks(self):
+        for output in ("garbled", "[]", "{}"):
+            with self.subTest(output=output):
+                self.assertTrue(any("无法解析" in i for i in self.run_chain(lint_output=output)[0]))
 
 
 if __name__ == "__main__":

@@ -111,7 +111,7 @@ def build_recipient_tree(system: Path, files: list[str], dest: Path) -> int:
     for rel in files:
         src = system / rel
         if not src.is_file():
-            continue
+            raise ToolError(f"❌ 跟踪文件缺失或不是普通文件: {rel}\n👉 修复建议: 恢复该文件或确认删除并更新版本库后重跑。")
         target = system_dest / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, target)
@@ -201,23 +201,29 @@ def run_init_chain(workspace: Path) -> tuple[list[str], list[str]]:
     again = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/bootstrap.py"], workspace)
     if again.returncode != 0:
         blocking.append(f"[初始化不幂等] 第二次运行 bootstrap.py 退出码 {again.returncode}。")
+    for marker in ("❌", "损坏", "Traceback"):
+        if marker in again.stdout + again.stderr:
+            blocking.append(f"[初始化不幂等] 第二次运行 bootstrap.py 输出含「{marker}」。")
 
-    lint = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/lint_workspace.py"], workspace)
-    if lint.returncode != 0:
-        failed = [ln.strip() for ln in lint.stdout.splitlines() if ln.strip().startswith("•")]
-        blocking.append(
-            f"[新环境体检失败] lint_workspace.py 退出码 {lint.returncode}；"
-            f"阻断项：{'; '.join(failed) or '见完整输出'}"
-        )
-    advisory_count = sum(1 for ln in lint.stdout.splitlines() if "⚠️ 建议" in ln)
-    if advisory_count:
-        advisory.append(f"[新环境体检建议] 收件方首检有 {advisory_count} 类建议项（不阻断）。")
+    lint = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/lint_workspace.py", "--json"], workspace)
+    try:
+        result = json.loads(lint.stdout)
+        if not isinstance(result, dict) or not isinstance(result.get("checks"), list):
+            raise ValueError("体检缺少检查明细")
+        for check in result["checks"]:
+            target = blocking if check["blocking"] else advisory
+            target.extend(f"[新环境体检] {check['title']}: {issue}" for issue in check["issues"])
+        if lint.returncode != 0 or result.get("passed") is not True or result.get("blocking_count") != 0:
+            blocking.append(f"[新环境体检失败] lint_workspace.py 退出码 {lint.returncode}；请核验体检阻断明细。")
+    except (ValueError, KeyError, TypeError) as exc:
+        blocking.append(f"[新环境体检失败] 无法解析检查结果: {exc}；输出尾部：{(lint.stdout + lint.stderr).strip()[-300:]}")
 
     tests = _run(
         [sys.executable, "-m", "unittest", "discover", "-s", f"{paths.SYSTEM_DIRNAME}/tests", "-t", paths.SYSTEM_DIRNAME],
         workspace,
     )
-    if tests.returncode != 0:
+    ran = re.search(r"^Ran (\d+) tests? in", tests.stderr or tests.stdout, re.MULTILINE)
+    if tests.returncode != 0 or ran is None or int(ran.group(1)) == 0:
         blocking.append(
             f"[新环境单测失败] 退出码 {tests.returncode}；尾部：{(tests.stderr or tests.stdout).strip()[-300:]}"
         )

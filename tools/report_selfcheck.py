@@ -15,7 +15,7 @@
      报「未验证」并点名，严禁因"本轮没动它"或"看起来没问题"判通过——那正是《软件工程》
      「不用分数代替证据」要消除的形态。
   2. **只报不判**：本工具不对可优化项做取舍，原样透传体检建议项；是否整改由人裁决。
-  3. **零写入**：纯只读装配，不落盘任何文件。报告是否落盘按《文件交付》第 1 节门禁另行决定。
+  3. **报告不落盘**：默认允许体检修正 CLAUDE.md；只读检查使用 --no-fix-claude-md。
 """
 
 from __future__ import annotations
@@ -50,8 +50,11 @@ AXIOM_COVERAGE = {
 
 
 def _run(argv: list[str], root: Path, timeout: int = 600) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True, cwd=str(root),
-                          timeout=timeout, check=False)
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, cwd=str(root),
+                              timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return subprocess.CompletedProcess(argv, 1, "", f"❌ 检查执行失败: {exc}\n👉 修复建议: 检查工作区路径、执行环境与超时后重跑。")
 
 
 def run_unittest(root: Path) -> dict:
@@ -66,31 +69,35 @@ def run_unittest(root: Path) -> dict:
     return {
         "tests": int(ran.group(1)) if ran else None,
         "seconds": float(ran.group(2)) if ran else None,
-        "ok": ok and proc.returncode == 0,
+        "ok": ok and proc.returncode == 0 and ran is not None and int(ran.group(1)) > 0,
         "failures": int(failures.group(1)) if failures else 0,
         "errors": int(errors.group(1)) if errors else 0,
         "exit_code": proc.returncode,
+        "output_tail": tail.strip()[-400:],
     }
 
 
+def _json_result(proc: subprocess.CompletedProcess) -> dict:
+    try:
+        result = json.loads(proc.stdout)
+        if not isinstance(result, dict):
+            raise ValueError("检查输出不是 JSON 对象")
+    except ValueError as exc:
+        result = {"error": (proc.stdout + proc.stderr).strip()[:400] or str(exc)}
+    if proc.returncode != 0:
+        result["error"] = result.get("error") or f"检查退出码 {proc.returncode}: {proc.stderr.strip()[:400]}"
+    return result
+
+
 def run_lint(root: Path, fix_claude_md: bool = True) -> dict:
-    argv = [sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/lint_workspace.py", "--json"]
+    argv = [sys.executable, str(root / paths.SYSTEM_DIRNAME / "tools/lint_workspace.py"), "--json"]
     if fix_claude_md:
         argv.append("--fix-claude-md")
-    proc = _run(argv, root)
-    try:
-        return json.loads(proc.stdout)
-    except ValueError:
-        return {"error": (proc.stdout + proc.stderr)[:400], "passed": False,
-                "blocking_count": None, "advisory_count": None, "checks": []}
+    return _json_result(_run(argv, root))
 
 
 def run_distribution(root: Path) -> dict:
-    proc = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/check_distribution.py", "--json"], root)
-    try:
-        return json.loads(proc.stdout)
-    except ValueError:
-        return {"error": (proc.stdout + proc.stderr)[:400], "exit_code": proc.returncode}
+    return _json_result(_run([sys.executable, str(root / paths.SYSTEM_DIRNAME / "tools/check_distribution.py"), "--json"], root))
 
 
 def _dist_counts(dist: dict) -> tuple[int | None, int | None, list[str]]:
@@ -113,19 +120,23 @@ def assemble(root: Path, fix_claude_md: bool = True) -> dict:
     lint = run_lint(root, fix_claude_md=fix_claude_md)
     dist = run_distribution(root)
 
-    covered = {a: c for a, c in AXIOM_COVERAGE.items() if c}
+    executed = {title.split(".", 1)[0] for title in lint.get("passed_checks", [])}
+    executed.update(chk["title"].split(".", 1)[0] for chk in lint.get("checks", []))
+    coverage_gaps = [f"[公理承接缺失] {a} 引用的体检项 {c} 未出现在本轮执行结果。"
+                     for a, ids in AXIOM_COVERAGE.items() for c in ids if c not in executed]
+    covered = {a: c for a, c in AXIOM_COVERAGE.items() if c and set(c) <= executed}
     uncovered = [a for a, c in AXIOM_COVERAGE.items() if not c]
 
     dist_block, dist_adv, dist_notes = _dist_counts(dist)
-    lint_ok = bool(lint.get("passed")) and "error" not in lint
-    dist_ok = ("error" not in dist) and (dist_block == 0 if dist_block is not None else False)
+    lint_ok = lint.get("passed") is True and lint.get("blocking_count") == 0 and "error" not in lint
+    dist_ok = "error" not in dist and dist_block == 0 and dist.get("status") != "fail"
 
     rows = [
         {
             "对象": "单元测试套件（.entropaxis/tests）",
             "证据": (f"Ran {tests['tests']} tests in {tests['seconds']}s · OK"
                      if tests["ok"] else
-                     f"退出码 {tests['exit_code']} · failures={tests['failures']} errors={tests['errors']}"),
+                     f"退出码 {tests['exit_code']} · tests={tests['tests']} failures={tests['failures']} errors={tests['errors']}"),
             "结论": "通过" if tests["ok"] else "阻断",
         },
         {
@@ -144,7 +155,7 @@ def assemble(root: Path, fix_claude_md: bool = True) -> dict:
             "对象": "元规则九条公理机械承接",
             "证据": f"{len(covered)}/9 条有体检项承接；第 "
                     + "、".join(a.split(".")[0] for a in uncovered) + " 条无机械检查器",
-            "结论": "部分未验证",
+            "结论": "阻断" if coverage_gaps else "未验证",
         },
         {
             "对象": "CLAUDE.md 薄壳纯净度自动改写",
@@ -162,8 +173,13 @@ def assemble(root: Path, fix_claude_md: bool = True) -> dict:
     for chk in lint.get("checks", []):
         if chk.get("blocking"):
             blocking += [f"[{chk['title']}] {i}" for i in chk["issues"]]
+    blocking += coverage_gaps
+    blocking += [f"[分发] {i}" for i in dist.get("blocking", [])] if isinstance(dist.get("blocking"), list) else []
+    for name, result, passed in (("单元测试", tests, tests["ok"]), ("体检", lint, lint_ok), ("分发", dist, dist_ok)):
+        if not passed:
+            blocking.append(f"[{name}] {result.get('error') or result.get('output_tail') or '检查未通过，请查看该项证据与明细。'}")
 
-    gates_passed = tests["ok"] and lint_ok and dist_ok
+    gates_passed = tests["ok"] and lint_ok and dist_ok and not coverage_gaps
     return {
         "passed": gates_passed,
         "rows": rows,
@@ -171,6 +187,9 @@ def assemble(root: Path, fix_claude_md: bool = True) -> dict:
         "advisories": advisories,
         "distribution_notes": dist_notes,
         "uncovered_axioms": uncovered,
+        "coverage_gaps": coverage_gaps,
+        "axiom_coverage": {a: {"declared": ids, "executed": [c for c in ids if c in executed]}
+                           for a, ids in AXIOM_COVERAGE.items()},
         "raw": {"tests": tests, "lint_summary": {k: lint.get(k) for k in
                 ("total_checks", "blocking_count", "advisory_count", "passed")}, "distribution": dist},
     }
@@ -185,17 +204,17 @@ def render_markdown(report: dict) -> str:
         f"第 {a.split('.', 1)[0]} 条（{a.split('. ', 1)[-1]}）" for a in report["uncovered_axioms"]
     )
     out += ["", f"**未覆盖范围**：元规则{uncovered}属价值判断，无机械检查器承接，本轮未验证；"
-                f"业务项目自身内容与 `.entropaxis/data/` 实例数据按机制定义不在自检范围。"]
-    if report["distribution_notes"]:
-        out.append(f"分发核验另有建议项 {len(report['distribution_notes'])} 类（不阻断）。")
+                f"有承接的公理仅验证所列机械检查，授权判断、实际打开闭环与规则语义仍需人工核验；"
+                f"业务内容与实例数据内容不在范围，实例声明的结构与来源仍受体检。"]
 
     out += ["", "## 可优化项", ""]
     if report["blocking"]:
         out += [f"- **[阻断]** {b}" for b in report["blocking"]]
     if report["advisories"]:
         out += [f"- {a}" for a in report["advisories"]]
-    if not report["blocking"] and not report["advisories"]:
-        out.append("本轮无待优化项，全项健康。")
+    out += [f"- {a}" for a in report["distribution_notes"]]
+    if not report["blocking"] and not report["advisories"] and not report["distribution_notes"]:
+        out.append("本轮无待优化项；已执行的机械门禁通过，未覆盖范围见上。")
     return "\n".join(out)
 
 
