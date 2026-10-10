@@ -1194,17 +1194,60 @@ def check_routing_integrity(root: Path) -> list[str]:
     return issues
 
 
-def check_deliverable_naming(root: Path) -> list[str]:
+def check_open_bypass(root: Path) -> list[str]:
+    """tools/ 与可分发 Skill 不得直接调用平台打开命令（《文件交付》4.4）。
+
+    只允许 open_file.py 构造 open / xdg-open / start 的 argv。配置里记下的默认命令
+    字符串、以及正文里提到这些命令，都不算调用。第 15d 项不证明本项。
+    """
+    system = root / paths.SYSTEM_DIRNAME
     issues = []
-    has_chinese_pattern = re.compile(r"[\u4e00-\u9fa5]")
-    for d in root.glob("**/20[2-3][0-9][0-1][0-9][0-3][0-9]_*"):
-        if not d.is_dir() or not _is_first_party(d, root):
-            continue
-        if not has_chinese_pattern.search(d.name):
-            issues.append(
-                f"[胶囊非中文命名] 交付物容器目录 {d.relative_to(root)} 缺少中文主题，违反《文件交付》第 2.1 节中文主命名铁律。"
-            )
+    tools = system / "tools"
+    if tools.is_dir():
+        for path in sorted(tools.glob("*.py")):
+            if path.name == "open_file.py":
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if _OPEN_ARGV.search(text):
+                issues.append(
+                    f"[打开命令旁路] {path.relative_to(root)} 直接构造了平台打开命令；"
+                    "改为调用 open_file.py，平台命令只允许出现在该文件的降级分支。"
+                )
+    tracked = _tracked_files(system)
+    skills = system / "skills"
+    if skills.is_dir():
+        for path in sorted(skills.glob("*/*")):
+            if path.suffix not in {".md", ".py", ".sh"} or not path.is_file():
+                continue
+            if tracked is not None and path not in tracked:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for lineno, line in _fenced_lines(text):
+                stripped = line.strip()
+                if _OPEN_FENCE.match(stripped):
+                    issues.append(
+                        f"[打开命令旁路] {path.relative_to(root)}:{lineno} 的代码块直接调用平台打开命令；"
+                        "改为 open_file.py，缺失时只回报绝对路径。"
+                    )
     return issues
+
+
+_OPEN_ARGV = re.compile(
+    r"""\[\s*["'](?:open|xdg-open)["']\s*,|\[\s*["']cmd["']\s*,\s*["']/c["']\s*,\s*["']start["']"""
+)
+_OPEN_FENCE = re.compile(r"^(?:\$\s*)?(?:open|xdg-open|start)\b")
+
+
+def _fenced_lines(text: str) -> list[tuple[int, str]]:
+    lines = []
+    in_fence = False
+    for index, line in enumerate(text.splitlines(), 1):
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            lines.append((index, line))
+    return lines
 
 # 存量卫生体检的遍历剪枝：隐藏目录（含 .venv）、依赖产物、归档、控制面本身，
 # 以及自带 .git 的上游仓库子目录（体检只覆盖第一方内容）。
@@ -1357,7 +1400,7 @@ def main() -> int:
         ("20. .entropaxis/data/ 路径与来源映射检查", check_data_source_mapping, False),
         ("21. 结构化契约 schema 校验", check_schema_conformance, True),
         ("22. .entropaxis/data/ 实例声明落地检查", check_data_declaration_links, False),
-        ("23. 交付物中文主命名检查", check_deliverable_naming, False),
+        ("31. 打开命令旁路检查", check_open_bypass, True),
         ("24. 语法税与 Token 经济性预算检查", check_syntax_tax_budget, True),
         ("25. 场景级联 Token 预算检查", check_scenario_cascade_budget, False),
         ("26. Skill 版本与 CHANGELOG 一致性检查", check_skill_metadata, True),

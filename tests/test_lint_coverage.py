@@ -98,11 +98,15 @@ class LintCoverageTests(unittest.TestCase):
         self.write(f"{base}/rules/example.md", "正文")
         self.assertEqual(len(lint.check_data_provenance(self.root)), 2)
 
-    def test_deliverable_naming_scope(self):
-        for rel in ("project/20261011_中文主题", "Archive/20261011_English", "project/plain"):
-            (self.root / rel).mkdir(parents=True)
-        self.assertEqual(lint.check_deliverable_naming(self.root), [])
-        (self.root / "project/20261011_English").mkdir()
-        issues = lint.check_deliverable_naming(self.root)
-        self.assertEqual(len(issues), 1)
-        self.assertIn("20261011_English", issues[0])
+    def test_open_bypass_flags_argv_and_fence_not_prose_or_opener(self):
+        base = paths.SYSTEM_DIRNAME
+        self.write(f"{base}/tools/open_file.py", 'return ["open", path]\nreturn ["xdg-open", path]\n')
+        self.write(f"{base}/tools/bootstrap.py", 'selected_cmd = "open"\nselected_cmd = "xdg-open"\n')
+        self.write(f"{base}/skills/demo/SKILL.md", "不要调用 `open` 或 xdg-open。\n```bash\npython3 open_file.py a.pdf\n```\n")
+        self.assertEqual(lint.check_open_bypass(self.root), [])
+        self.write(f"{base}/tools/evil.py", 'subprocess.run(["open", path])\n')
+        self.write(f"{base}/skills/demo/SKILL.md", "```bash\nopen a.pdf\nxdg-open a.pdf\n```\n")
+        issues = lint.check_open_bypass(self.root)
+        self.assertEqual(len(issues), 3, issues)
+        self.assertTrue(any("evil.py" in i for i in issues))
+        self.assertTrue(sum("SKILL.md" in i for i in issues) == 2)

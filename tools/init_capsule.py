@@ -19,7 +19,7 @@
      反解析，核对与原始输入等值。
 
 用法：
-  python3 .entropaxis/tools/init_capsule.py <父目录> <中文主题> --id Tech-N --mode full|light|research [--json]
+  python3 .entropaxis/tools/init_capsule.py <父目录> <主题> --id Tech-N --mode full|light|research [--json]
 """
 
 from __future__ import annotations
@@ -246,12 +246,9 @@ carrier: session-local
 
 
 def validate_inputs(topic: str, task_id: str) -> None:
-    """R2-m1：主题与 Task ID 的路径合法性强校验，先于任何目录操作。"""
+    """主题与 Task ID 的路径合法性强校验，先于任何目录操作。"""
     if not topic or not CHINESE_RE.search(topic):
-        raise _error(
-            "主题不含中文",
-            "改用符合《文件交付》§2.1 中文主命名铁律的主题重试（专有技术名词/代号可原样嵌入中文主题）。",
-        )
+        raise _error("主题不含中文", "新建胶囊主题须含中文；产品代号可原样嵌入。存量目录不追溯。")
     if topic != topic.strip():
         raise _error("主题含首尾空白", "去除主题首尾空格或制表符后重试。")
     if CONTROL_RE.search(topic):
@@ -383,7 +380,7 @@ def create_capsule(base_dir: Path, topic: str, task_id: str, mode: str) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description="初始化 Entropaxis 事务胶囊（原子、自检、no-clobber）")
     parser.add_argument("target_dir", type=Path, help="胶囊放置的父级目录")
-    parser.add_argument("topic", type=str, help="胶囊中文主题（如：智能质检）")
+    parser.add_argument("topic", type=str, help="胶囊主题（须含中文，产品代号可嵌入）")
     parser.add_argument("--id", default="Tech-1", help="Task ID（默认 Tech-1）")
     parser.add_argument(
         "--mode",
