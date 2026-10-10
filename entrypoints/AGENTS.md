@@ -36,7 +36,7 @@
 - 自然语言指令解析与追问边界：`.entropaxis/rules/指令解析.md`
 - 日常业务动作（事务/调研/同步/任务/沉淀/案例/复盘/初始化/自定义角色/报销）：`.entropaxis/rules/工作流指令.md`
 - 调研质量门禁与交付结构：`.entropaxis/rules/方案调研.md`
-- 审计/修正、系统自检、系统演进（规则/工具/Skill 增删改与形态判定）、Skill 分发：`.entropaxis/rules/治理指令.md`
+- 审计/修正、系统自检/自检补全、系统演进（规则/工具/Skill 增删改与形态判定）、Skill 分发：`.entropaxis/rules/治理指令.md`
 - 表达文风、可视化与规则瘦身：`.entropaxis/rules/表达文风.md`
 - 知识沉淀形态判定与知识库索引：`.entropaxis/rules/知识沉淀.md`
 - Tool 准入判据与接口契约：`.entropaxis/rules/工具设计.md`

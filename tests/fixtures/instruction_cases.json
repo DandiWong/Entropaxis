@@ -96,6 +96,14 @@
     },
     {
       "kind": "positive",
+      "instruction": "自检补全",
+      "expect": [
+        "系统自检"
+      ],
+      "note": "同一 self-check 技能的覆盖审查与补齐模式"
+    },
+    {
+      "kind": "positive",
       "instruction": "系统自检",
       "expect": [
         "系统自检"

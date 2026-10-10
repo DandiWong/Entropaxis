@@ -1,3 +1,5 @@
+import json
+import re
 from pathlib import Path
 from unittest import TestCase
 
@@ -6,6 +8,18 @@ WORKSPACE_ROOT = SYSTEM_ROOT.parent
 
 
 class RootGovernanceRuleTests(TestCase):
+    def test_selfcheck_completion_routes_to_existing_skill(self):
+        rule = (SYSTEM_ROOT / "rules/治理指令.md").read_text(encoding="utf-8")
+        section = rule.split("## 系统自检\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("`自检补全`", section.split("2. **执行**", 1)[0])
+        self.assertIn("`self-check` Skill", section)
+        skill = (SYSTEM_ROOT / "skills/self-check/SKILL.md").read_text(encoding="utf-8")
+        description = re.search(r"^description: (.+)$", skill, re.MULTILINE).group(1)
+        self.assertIn("自检补全", description)
+        self.assertIn("## 2.1 自检补全", skill)
+        cases = json.loads((SYSTEM_ROOT / "tests/fixtures/instruction_cases.json").read_text(encoding="utf-8"))["cases"]
+        self.assertEqual(next(c["expect"] for c in cases if c["instruction"] == "自检补全"), ["系统自检"])
+
     def test_root_governance_requires_dangling_declaration_check(self) -> None:
         rule_path = SYSTEM_ROOT / "rules" / "01_根系统治理.md"
         self.assertTrue(rule_path.exists(), "01_根系统治理.md must exist")
