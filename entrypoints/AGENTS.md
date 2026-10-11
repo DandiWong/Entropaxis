@@ -9,6 +9,7 @@
 - 事务/胶囊研讨与定位必先调 `find_capsule.py`，未命中才降级 `grep`/`glob`；项目解析用 `resolve_project.py`
 - 全局/代码搜索用 `grep`/`find`（多OR词用一次 `multi_grep`）；必须走 bash 时用 `rg`，不用 `grep`
 - 打开本地文件统一执行 `python3 .entropaxis/tools/open_file.py <path>`；定位后用 `read` 的 offset/limit 只读命中附近；工作区外已知文件直接 `read`
+- 调度角色/委派专业产出（让其它 Agent/模型出方案、审计、验收等）必先执行 `python3 .entropaxis/tools/dispatch_role.py resolve`，按返回的 tier 走 `dispatch_role.py run`；不得以子代理、MCP 或直接执行替代
 
 ## 安全边界
 
