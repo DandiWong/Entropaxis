@@ -2,9 +2,16 @@
 """按 .entropaxis/schemas/ 声明校验结构化契约 (Schema Validator).
 
 只支持 JSON Schema 的一个子集：type / required / properties / items / enum /
-pattern / minLength / minItems / minimum / maximum / uniqueItems / oneOf /
-additionalProperties / patternProperties / conditional_required。
+pattern / minLength / minItems / minimum / maximum / exclusiveMinimum /
+multipleOf / maxLength / uniqueItems / oneOf / additionalProperties /
+patternProperties / conditional_required。
 够用即可——引入完整 JSON Schema 库会违反纯标准库铁律。
+
+数值型关键字（exclusiveMinimum / multipleOf / maxLength）不是为将来预留的：
+`schemas/capsule.schema.json` 的 worklogs 条目直接用它们约束工时步长 0.25h、
+排除 0、限制摘要长度。此前校验器不执行这三个关键字，等于 schema 声明了
+契约而校验静默放行（Tech-120 审计 E-2 实测抓到：0、-1、0.3 三个非法
+spent 全部通过）。新增关键字只在本模块一处实现，所有 schema 共用。
 
 schema 用 .json 而非 .yaml：Python 标准库没有 YAML 解析器。YAML 实例（如 data/templates/roles.yaml）
 由已依赖 PyYAML 的消费方解析后调用本模块 validate()。
@@ -24,6 +31,12 @@ import sys
 import unicodedata
 from pathlib import Path
 
+try:
+    import yaml
+    def parse_yaml(content: str):
+        return yaml.safe_load(content)
+except ImportError:
+    parse_yaml = None
 try:
     from . import paths
 except ImportError:
@@ -124,12 +137,23 @@ def validate(data, schema: dict, path: str = "$", *, allow_schema_directives: bo
             errs.append(f"{path}: 取值 {data!r} 不匹配 /{schema['pattern']}/")
         if "minLength" in schema and len(data) < schema["minLength"]:
             errs.append(f"{path}: 长度 {len(data)} < 最小 {schema['minLength']}")
+        if "maxLength" in schema and len(data) > schema["maxLength"]:
+            errs.append(f"{path}: 长度 {len(data)} > 最大 {schema['maxLength']}")
 
     if isinstance(data, (int, float)) and not isinstance(data, bool):
+        if "exclusiveMinimum" in schema and data <= schema["exclusiveMinimum"]:
+            errs.append(f"{path}: 取值 {data} 未超过排他下限 {schema['exclusiveMinimum']}")
         if "minimum" in schema and data < schema["minimum"]:
             errs.append(f"{path}: 取值 {data} < 最小 {schema['minimum']}")
         if "maximum" in schema and data > schema["maximum"]:
             errs.append(f"{path}: 取值 {data} > 最大 {schema['maximum']}")
+        # 浮点取模对 0.25 这类步长可用：1.5 % 0.25 == 0.0，0.3 % 0.25 == 0.04999999999999999。
+        # 不引入 Fraction/decimal 归一——两者都只服务于同一个 0.25 步长，用浮点余数与
+        # 1e-9 容差即可判定，纯标准库零成本。
+        if "multipleOf" in schema:
+            step = schema["multipleOf"]
+            if step <= 0 or abs((data / step) - round(data / step)) > 1e-9:
+                errs.append(f"{path}: 取值 {data} 不是 {step} 的整数倍")
 
     if isinstance(data, dict):
         for key in schema.get("required", []):

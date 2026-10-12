@@ -1,0 +1,28 @@
+{
+  "$comment": "事务胶囊清单契约。物理宿主：各胶囊目录 capsule.yaml；写入方 init_capsule.py（模板）/ update_capsule.py（log_time 追加 worklogs）。消费方：tools/aggregate_worklog.py（条目校验与聚合）、tools/lint_workspace.py（胶囊检查项）。date 字段必须写成带双引号的 YAML 标量：未加引号的裸日期会被 PyYAML 解析为 datetime.date，直接违反本契约的 type: string。",
+  "title": "capsule",
+  "target": "**/capsule.yaml",
+  "type": "object",
+  "required": ["id", "topic", "mode", "lifecycle"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[A-Za-z]+-\\d+$" },
+    "topic": { "type": "string", "minLength": 1 },
+    "mode": { "type": "string", "minLength": 1 },
+    "lifecycle": { "enum": ["draft", "active", "delivered", "archived", "archived-unmeasured"] },
+    "worklogs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["date", "stage", "spent", "summary", "operator"],
+        "additionalProperties": false,
+        "properties": {
+          "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "stage": { "type": "string", "pattern": "^(\\d{2}_\\S+|misc)$" },
+          "spent": { "type": "number", "exclusiveMinimum": 0, "maximum": 24, "multipleOf": 0.25 },
+          "summary": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "operator": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

@@ -22,8 +22,11 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-
-
+try:
+    from . import update_capsule
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import update_capsule  # type: ignore
 class ToolError(Exception):
     """可恢复业务异常，包含行动导向修复指引。"""
 
@@ -64,7 +67,8 @@ def list_targets(repo: Path, remote: str) -> dict:
     return {"source": source, "targets": trunk + sorted(names - set(trunk))}
 
 
-def plan_finish(repo: Path, target: str, remote: str, message: str | None) -> dict:
+def plan_finish(repo: Path, target: str, remote: str, message: str | None,
+                task_id: str | None = None, time_hours: float | None = None) -> dict:
     """只读预检；任一前置条件不满足即抛 ToolError。"""
     repo, source = _repo_and_branch(repo)
     if target == source:
@@ -97,18 +101,26 @@ def plan_finish(repo: Path, target: str, remote: str, message: str | None) -> di
                 f"❌ 目标分支 {target} 已在另一个工作区检出。\n👉 修复建议: 在那个工作区切走 {target} 后重试。"
             )
     pending = _git(repo, "log", "--format=%h %s", f"{local_target or remote_target}..{source}").stdout.splitlines()
+    trailers: list[tuple[str, str]] = []
+    if task_id:
+        trailers.append(("Task-ID", task_id))
+        # 若有指定工时，先尝试登记胶囊或直接注入
+        if time_hours is not None:
+            trailers.append(("Time-Spent", f"{int(time_hours) if time_hours == int(time_hours) else time_hours}h"))
     return {"repo": repo, "source": source, "target": target, "remote": remote, "message": message,
+            "task_id": task_id, "time_hours": time_hours, "trailers": trailers,
             "staged": staged, "untracked": untracked, "pending": pending,
             "has_remote_source": bool(_rev(repo, f"refs/remotes/{remote}/{source}"))}
-
 
 def finish_branch(plan: dict, delete_remote: bool) -> dict:
     repo, source, target, remote = plan["repo"], plan["source"], plan["target"], plan["remote"]
     committed = None
     if plan["staged"]:
-        _git(repo, "commit", "-q", "-m", plan["message"])
+        cmd = ["commit", "-q", "-m", plan["message"]]
+        for k, v in plan.get("trailers", []):
+            cmd.extend(["--trailer", f"{k}: {v}"])
+        _git(repo, *cmd)
         committed = _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
-
     fetched = _git(repo, "fetch", "-q", remote, target, check=False).returncode == 0
     remote_ref = f"refs/remotes/{remote}/{target}"
     if _rev(repo, f"refs/heads/{target}"):
@@ -165,6 +177,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="收尾分支：提交已暂存改动 → 合入目标分支 → 推送 → 删除当前分支")
     parser.add_argument("--target", help="目标分支；未指定时先用 --list-targets 取候选")
     parser.add_argument("--message", help="提交信息（有已暂存改动时必填）")
+    parser.add_argument("--task-id", help="任务 ID，如 Tech-120（自动注入 Task-ID 与 Time-Spent Trailer）")
+    parser.add_argument("--time", type=float, metavar="HOURS", help="工时（小时），若有胶囊同步登记，并写入 Time-Spent Trailer")
     parser.add_argument("--repo", default=".", help="仓库路径，默认当前目录")
     parser.add_argument("--remote", default="origin", help="远端名，默认 origin")
     parser.add_argument("--delete-remote", action="store_true", help="同时删除远端同名分支")
@@ -182,15 +196,16 @@ def main() -> int:
             return 0
         if not args.target:
             raise ToolError("❌ 未指定目标分支。\n👉 修复建议: 先 --list-targets 取候选并由人选定，再加 --target。")
-        plan = plan_finish(repo, args.target, args.remote, args.message)
+        plan = plan_finish(repo, args.target, args.remote, args.message,
+                           task_id=args.task_id, time_hours=args.time)
         if args.dry_run:
             result = {"ok": True, "dry_run": True, "source": plan["source"], "target": plan["target"],
-                      "staged": plan["staged"], "untracked": plan["untracked"], "pending": plan["pending"]}
+                      "staged": plan["staged"], "trailers": plan["trailers"], "untracked": plan["untracked"], "pending": plan["pending"]}
+            trailer_desc = f"（注入 Trailer: {', '.join(f'{k}: {v}' for k, v in plan['trailers'])}）" if plan["trailers"] else ""
             print(json.dumps(result, ensure_ascii=False, indent=2) if args.json else
-                  f"✅ 预检通过: {plan['source']} → {plan['target']}，待提交 {len(plan['staged'])} 个文件、"
+                  f"✅ 预检通过: {plan['source']} → {plan['target']}，待提交 {len(plan['staged'])} 个文件{trailer_desc}、"
                   f"待合入 {len(plan['pending'])} 个提交；未跟踪 {len(plan['untracked'])} 个不提交")
             return 0
-        result = finish_branch(plan, args.delete_remote)
     except ToolError as err:
         print(str(err), file=sys.stderr)
         return 1

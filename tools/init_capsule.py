@@ -119,6 +119,8 @@ roles_manifest:
   assigned_by: init_capsule.py
   revision: 0
   assignments: []
+# 事务工时日志（唯一真源，契约 schemas/capsule.schema.json；由 tools/update_capsule.py 维护）
+worklogs: []
 """
 
 
@@ -334,7 +336,8 @@ def _self_check(tmp: Path, task_id: str, topic: str) -> None:
             break
     else:
         raise _error("capsule.yaml 缺 topic 字段", "脚本内部模板异常，请汇报至根系统治理流程。")
-
+    if "worklogs:" not in manifest.read_text(encoding="utf-8"):
+        raise _error("capsule.yaml 缺 worklogs 字段", "脚本内部模板异常，请汇报至根系统治理流程。")
 
 def create_capsule(base_dir: Path, topic: str, task_id: str, mode: str) -> Path:
     """原子创建胶囊：临时目录完整生成 + 自检通过后一次性改名落位（R2-m2）。"""

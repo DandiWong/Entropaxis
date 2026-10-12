@@ -27,6 +27,11 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+try:
+    from . import update_capsule
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import update_capsule  # type: ignore
 
 # 《软件工程》「Changelog 规范」6 大分类。中英互认，写入时跟随文件既有语种。
 CATEGORIES = {
@@ -34,8 +39,6 @@ CATEGORIES = {
     "移除": "Removed", "修复": "Fixed", "安全": "Security",
 }
 _EN_TO_ZH = {en: zh for zh, en in CATEGORIES.items()}
-
-
 class IterationError(Exception):
     """可恢复的业务异常，携带行动导向修复指引。"""
 
@@ -122,6 +125,11 @@ def add_changelog_entry(text: str, category: str, summary: str, task_id: str) ->
 
 def mark_task_done(text: str, task_id: str) -> tuple[str, bool, str]:
     """把 Tasks.md 中该 ID 所在行的复选框翻成 [x]。返回 (新正文, 是否改动, 说明)。"""
+    return update_task_entry(text, task_id, mark_done=True)
+
+
+def update_task_entry(text: str, task_id: str, *, mark_done: bool = False, hours: float | None = None) -> tuple[str, bool, str]:
+    """更新 Tasks.md 中对应 Task 所在行（状态翻转与 ⏱ 工时累计）。"""
     lines = text.splitlines()
     hits = [i for i, l in enumerate(lines) if re.search(rf"\*\*{re.escape(task_id)}\*\*|\b{re.escape(task_id)}\b", l)]
     if not hits:
@@ -136,11 +144,58 @@ def mark_task_done(text: str, task_id: str) -> tuple[str, bool, str]:
             "👉 修复建议: 该条目可能用了其他状态表达（如 `status:` 字段），请人工更新。"
         )
     idx = checkbox[0]
-    if re.match(r"^\s*-\s*\[[xX]\]", lines[idx]):
-        return text, False, f"{task_id} 已是完成态，未重复勾选"
-    lines[idx] = re.sub(r"^(\s*-\s*)\[ \]", r"\1[x]", lines[idx], count=1)
-    return "\n".join(lines) + ("\n" if text.endswith("\n") else ""), True, f"{task_id} 已勾选完成"
+    line = lines[idx]
+    orig_line = line
+    notes = []
+    if mark_done:
+        if re.match(r"^\s*-\s*\[ \]", line):
+            line = re.sub(r"^(\s*-\s*)\[ \]", r"\1[x]", line, count=1)
+            notes.append(f"{task_id} 已勾选完成")
+        else:
+            notes.append(f"{task_id} 已是完成态")
+    if hours is not None:
+        h_str = f"{int(hours) if hours == int(hours) else hours}h"
+        if re.search(r"⏱\d+(\.\d+)?h", line):
+            line = re.sub(r"⏱\d+(\.\d+)?h", f"⏱{h_str}", line)
+            notes.append(f"工时累计更新为 {h_str}")
+        else:
+            line = line.rstrip() + f" ⏱{h_str}"
+            notes.append(f"工时记为 {h_str}")
+    changed = line != orig_line
+    lines[idx] = line
+    return "\n".join(lines) + ("\n" if text.endswith("\n") else ""), changed, " · ".join(notes) or "无需变更"
 
+
+def find_capsule_for_task(root: Path, task_id: str, explicit: str | None = None) -> Path | None:
+    if explicit:
+        p = Path(explicit).expanduser().resolve()
+        if (p / "capsule.yaml").is_file():
+            return p
+        raise IterationError(f"❌ 指定的胶囊目录不存在 capsule.yaml: {explicit}")
+    ws_root = root
+    for p in [root, *root.parents]:
+        if (p / ".entropaxis").is_dir():
+            ws_root = p
+            break
+    candidates = []
+    search_dirs = [ws_root / ".entropaxis" / "data" / "docs"]
+    if (root / "docs").is_dir():
+        search_dirs.append(root / "docs")
+    for d in search_dirs:
+        if d.is_dir():
+            for cap in d.rglob("capsule.yaml"):
+                try:
+                    for l in cap.read_text(encoding="utf-8").splitlines():
+                        if l.startswith("id:") and l.split(":", 1)[1].strip() == task_id:
+                            candidates.append(cap.parent)
+                            break
+                except OSError:
+                    pass
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise IterationError(f"❌ 多个胶囊命中同一 Task ID {task_id}: {[str(c) for c in candidates]}\n👉 修复建议: 用 --capsule 显式指定。")
+    return None
 
 def atomic_write(path: Path, content: str) -> None:
     with tempfile.TemporaryDirectory(dir=path.parent) as tmp:
@@ -157,6 +212,9 @@ def main() -> int:
     parser.add_argument("--add", nargs=2, metavar=("CATEGORY", "SUMMARY"),
                         help="追加 Changelog 条目，如 --add 修复 \"修正跨租户越权\"")
     parser.add_argument("--mark-done", action="store_true", help="在 Tasks.md 中勾选该任务为完成")
+    parser.add_argument("--time", type=float, metavar="HOURS", help="登记工时并联动更新 Tasks 累计（步长 0.25h）")
+    parser.add_argument("--capsule", help="显式指定胶囊目录")
+    parser.add_argument("--stage", help="工时所属阶段名，缺省自动推导")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="项目根，默认当前目录")
     parser.add_argument("--changelog", help="显式指定 Changelog.md 路径")
     parser.add_argument("--tasks", help="显式指定 Tasks.md 路径")
@@ -164,9 +222,8 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="以结构化 JSON 输出")
     args = parser.parse_args()
 
-    if not args.add and not args.mark_done:
-        parser.error("至少指定 --add 或 --mark-done 之一")
-
+    if not args.add and not args.mark_done and args.time is None:
+        parser.error("至少指定 --add、--mark-done 或 --time 之一")
     root = args.root.expanduser().resolve()
     changes: list[dict] = []
     pending: list[tuple[Path, str]] = []
@@ -181,14 +238,33 @@ def main() -> int:
             changes.append({"file": str(path), "changed": changed,
                             "note": "已追加变更条目" if changed else "同条目已存在，未重复追加"})
 
-        if args.mark_done:
+        capsule_dir = None
+        total_hours = None
+        if args.time is not None:
+            capsule_dir = find_capsule_for_task(root, args.task_id, args.capsule)
+            if capsule_dir:
+                summary = args.add[1] if args.add else f"完成 {args.task_id}"
+                res = update_capsule.log_time(capsule_dir, spent=args.time, stage=args.stage,
+                                              summary=summary, dry_run=args.dry_run, idempotent=True)
+                total_hours = res["total"]
+                changes.append({"file": str(capsule_dir / "capsule.yaml"), "changed": res["status"] == "added",
+                                "note": f"胶囊已登记工时 {args.time}h (真源累计 {total_hours}h)" if res["status"] == "added" else f"胶囊工时已存在(幂等放行，真源累计 {total_hours}h)"})
+            else:
+                print("⚠️ 未找到胶囊，工时仅记入 Tasks", file=sys.stderr)
+
+        if args.mark_done or args.time is not None:
             path = _locate(args.tasks, root, "Tasks.md")
             text = path.read_text(encoding="utf-8")
-            new_text, changed, note = mark_task_done(text, args.task_id)
+            # 若无胶囊，从既有行累计
+            calc_hours = total_hours
+            if calc_hours is None and args.time is not None:
+                # 从当前行提取现有小时并累加
+                m = re.search(rf"\b{re.escape(args.task_id)}\b.*?⏱(\d+(?:\.\d+)?)h", text)
+                calc_hours = (float(m.group(1)) + args.time) if m else args.time
+            new_text, changed, note = update_task_entry(text, args.task_id, mark_done=args.mark_done, hours=calc_hours)
             if changed:
                 pending.append((path, new_text))
             changes.append({"file": str(path), "changed": changed, "note": note})
-
         if not args.dry_run:
             for path, content in pending:
                 atomic_write(path, content)
