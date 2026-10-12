@@ -91,6 +91,17 @@ OFFICE_EXTENSIONS = {
     ".pdf",
 }
 
+DELIVERY_AUTO_OPEN_EXTENSIONS = {
+    # 办公文档
+    ".docx", ".doc", ".xlsx", ".xls", ".csv", ".pptx", ".ppt", ".pdf",
+    # 视觉图表
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
+    # 文本与原型（排除 .md / .markdown）
+    ".asciidoc", ".adoc", ".html", ".htm",
+    # 结构化数据
+    ".yaml", ".yml", ".json",
+}
+
 
 def _close_if_already_open(path: Path, platform: str, closer=subprocess.run) -> bool:
     """若办公文档已在桌面办公应用中打开，则先关闭对应窗口以保证后续打开加载磁盘最新内容。"""
@@ -147,6 +158,7 @@ def _open_path(
     platform: str,
     runner,
     closer=subprocess.run,
+    on_deliver: bool = False,
 ) -> dict:
     path = Path(path_text).expanduser().resolve()
     result = {
@@ -162,6 +174,27 @@ def _open_path(
     if not path.exists():
         result["reason"] = f"目标不存在: {path}"
         return result
+
+    if on_deliver:
+        if path.is_dir():
+            result.update({
+                "ok": True,
+                "skipped": True,
+                "selected_app": "跳过（交付不自动打开目录）",
+                "reason": "交付场景不自动打开目录，已在回复中给出路径",
+                "returncode": 0,
+            })
+            return result
+        suffix = path.suffix.lower()
+        if suffix not in DELIVERY_AUTO_OPEN_EXTENSIONS:
+            result.update({
+                "ok": True,
+                "skipped": True,
+                "selected_app": "跳过（非交付自动打开格式）",
+                "reason": f"交付场景不自动打开该格式 ({suffix or '无扩展名'})，已在回复中给出路径",
+                "returncode": 0,
+            })
+            return result
 
     # 若文件已打开，先关闭已有窗口触发热刷新
     result["reloaded"] = _close_if_already_open(path, platform, closer=closer)
@@ -221,10 +254,11 @@ def open_paths(
     platform: str = sys.platform,
     runner=subprocess.run,
     closer=subprocess.run,
+    on_deliver: bool = False,
 ) -> list[dict]:
     """Open every path independently; return one observable result per path."""
     config, config_reason = _load_config(Path(config_path))
-    return [_open_path(path, config, config_reason, platform, runner, closer=closer) for path in paths]
+    return [_open_path(path, config, config_reason, platform, runner, closer=closer, on_deliver=on_deliver) for path in paths]
 
 
 def main() -> int:
@@ -234,15 +268,22 @@ def main() -> int:
     parser.add_argument("paths", nargs="+", help="要打开的文件或目录，可一次传入多个")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="打开器配置路径")
     parser.add_argument("--json", action="store_true", help="输出机器可读结果")
+    parser.add_argument(
+        "--on-deliver",
+        action="store_true",
+        help="交付落盘模式：仅对白名单格式（办公文档/图表/原型等）自动打开，.md 与目录静默跳过",
+    )
     args = parser.parse_args()
 
-    results = open_paths(args.paths, config_path=args.config)
+    results = open_paths(args.paths, config_path=args.config, on_deliver=args.on_deliver)
     if args.json:
         print(json.dumps(results, ensure_ascii=False, indent=2))
     else:
         for result in results:
             reload_hint = "（已刷新重新加载）" if result.get("reloaded") else ""
-            if result["ok"] and result["used_fallback"]:
+            if result.get("skipped"):
+                print(f"[SKIP] {result['path']}（{result['reason']}）")
+            elif result["ok"] and result["used_fallback"]:
                 print(f"[WARN] 已使用系统默认程序打开 {result['path']}{reload_hint}；原因: {result['reason']}")
             elif result["ok"]:
                 print(f"[OK] 已使用 {result['selected_app']} 打开 {result['path']}{reload_hint}")

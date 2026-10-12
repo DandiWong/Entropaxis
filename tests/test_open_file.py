@@ -193,6 +193,50 @@ class OpenFileTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertFalse(result["reloaded"])
         self.assertEqual(len(closer_calls), 0)
+
+    def test_on_deliver_skips_markdown_and_directory(self):
+        markdown = self.root / "01_调研.md"
+        markdown.write_text("# 调研\n", encoding="utf-8")
+        sub_dir = self.root / "capsule_dir"
+        sub_dir.mkdir()
+        runner = RecordingRunner([0])
+
+        results = open_paths(
+            [str(markdown), str(sub_dir)],
+            config_path=self.config,
+            platform="darwin",
+            runner=runner,
+            on_deliver=True,
+        )
+
+        self.assertTrue(all(r["ok"] and r.get("skipped") for r in results))
+        self.assertEqual(len(runner.calls), 0, "交付模式下不应触发外部程序调用")
+
+    def test_on_deliver_opens_whitelisted_office_and_images(self):
+        self._write_config({
+            "word": {
+                "name": "Word",
+                "extensions": [".docx"],
+                "selected_app": "WPS",
+                "command": "wps",
+                "arbitrated": True,
+            },
+        })
+        doc = self.root / "report.docx"
+        doc.write_bytes(b"docx")
+        runner = RecordingRunner([0])
+
+        results = open_paths(
+            [str(doc)],
+            config_path=self.config,
+            platform="darwin",
+            runner=runner,
+            on_deliver=True,
+        )
+
+        self.assertTrue(results[0]["ok"])
+        self.assertFalse(results[0].get("skipped", False))
+        self.assertEqual(len(runner.calls), 1, "白名单交付格式在交付模式下应正常打开")
 if __name__ == "__main__":
     unittest.main()
 
