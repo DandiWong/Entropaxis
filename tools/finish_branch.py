@@ -206,6 +206,7 @@ def main() -> int:
                   f"✅ 预检通过: {plan['source']} → {plan['target']}，待提交 {len(plan['staged'])} 个文件{trailer_desc}、"
                   f"待合入 {len(plan['pending'])} 个提交；未跟踪 {len(plan['untracked'])} 个不提交")
             return 0
+        result = finish_branch(plan, args.delete_remote)
     except ToolError as err:
         print(str(err), file=sys.stderr)
         return 1
