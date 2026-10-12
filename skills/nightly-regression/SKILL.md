@@ -1,9 +1,9 @@
 ---
 name: nightly-regression
-description: "v1.0.0. Entropaxis 控制面 nightly 回归编排执行体。当用户说「nightly」「夜间回归」「每晚跑测试」「定时跑 E2E」「把 E2E 放到夜里跑」「配置 nightly 构建」「本机定时测试」「launchd 定时」「过渡方案」等，或要把需要运行栈/外部账号/真实模型调用的验证从合入门禁移到夜间无人值守时触发。判定哪些验证该进 nightly、生成 launchd 或 CI 配置、装配只报不阻断的报告与失败通知。不替代合入前的分钟级门禁。"
+description: "v1.1.0. Entropaxis 控制面 nightly 回归编排执行体。当用户说「nightly」「夜间回归」「每晚跑测试」「定时跑 E2E」「把 E2E 放到夜里跑」「配置 nightly 构建」「本机定时测试」「launchd 定时」「有哪些 nightly」「nightly 状态」等，或要把需要运行栈/外部账号/真实模型调用的验证从合入门禁移到夜间无人值守时触发。判定哪些验证该进 nightly、经 tools/nightly_registry.py 登记与管理本地作业实例（哪些项目/什么路径/何时跑）、生成 launchd 或 CI 配置、装配只报不阻断的报告与失败通知。不替代合入前的分钟级门禁。"
 metadata:
   scope: control-plane
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Nightly 回归编排
@@ -54,6 +54,31 @@ nightly  <端到端/长时基准命令>              夜间无人值守    只�
 
 ---
 
+## 1.5 作业注册与管理（实例数据在 `data/`）
+
+**作业是工作区本地实例，不进 Skill 分发包。** 注册表单点真源是
+`data/templates/nightly.yaml`（契约 `schemas/nightly.schema.json`），
+读写统一经 `tools/nightly_registry.py`，不手改 YAML。
+
+| 要看/要做什么 | 命令 |
+|---|---|
+| 有哪些项目配了 nightly、何时跑 | `python3 .entropaxis/tools/nightly_registry.py list` |
+| 注册表 × 本机 launchd × 报告三方对齐 | `... nightly_registry.py status` |
+| 登记新作业 | `... nightly_registry.py add --id <id> --project <项目id> --label <label> --hour 2 --minute 0 --commands "<命令>" [...]` |
+| 停用 / 启用 / 移除 | `... nightly_registry.py disable <id>` / `enable <id>` / `remove <id>` |
+
+`status` 回答「配了但没生效」：`plist=无` 或 `loaded=否` 即登记了没注册；
+`enabled=off` 是主动停用；`最近报告` 为空说明还没跑过或报告目录不符。
+
+**登记纪律**：
+- `--project` 必须是 `registry.yaml` 里已存在的项目 id；`repo` 缺省取该项目 `code[0]`；
+- `--label` 全局唯一，建议 `com.<组织>.<项目>.nightly`；
+- `--hour` 默认避开工作时间（如 02:00），由用户确认；
+- **凭据不登记**：注册表只存命令原文，`.env`/环境变量由项目自己管；缺凭据的条目在 wrapper 里记 `SKIP` 不记 `FAIL`；
+- 一个项目多条 nightly 命令时，用多个 `--id`（如 `<proj>-e2e`、`<proj>-bench`），不要挤进一条 `commands` 里混报告。
+
+---
+
 ## 2. 两种承载形态
 
 按用户环境与已有基础设施选，**不重复造轮子**。
@@ -80,10 +105,12 @@ nightly  <端到端/长时基准命令>              夜间无人值守    只�
    - 全部跑完后生成汇总报告。
 4. wrapper 脚本放项目 `03_工程研发/<app>/scripts/`，**不放进控制面**（它是项目局部执行体）。
 5. 凭据不入 plist 也不入脚本：从项目既有 `.env` 或环境变量读，缺凭据的条目记 `SKIP` 不记 `FAIL`。
-6. 注册：`launchctl bootstrap gui/$(id -u) <plist>`；卸载：`launchctl bootout gui/$(id -u) <label>`。
-7. 交付时把「注册/卸载/查看日志」三条命令原文给用户，不代为静默安装。
+6. **先登记后注册**：`nightly_registry.py add` 把作业写进 `data/templates/nightly.yaml`，再 `launchctl bootstrap gui/$(id -u) <plist>`。二者顺序不可倒——先注册后登记会出现「在跑但查不到」。
+7. 注册：`launchctl bootstrap gui/$(id -u) <plist>`；卸载：`launchctl bootout gui/$(id -u) <label>`。
+8. 交付时把「注册/卸载/查看日志」三条命令原文给用户，不代为静默安装。
+9. 交付后用 `nightly_registry.py status` 复核：该作业须 `plist=有`、`loaded=是`、`enabled=on`，三者缺一即没生效。
 
-**A 就绪后 B 的退出**：删 plist 并 `bootout`，删 wrapper 脚本，在项目 `AGENTS.md` 标注 nightly 已由 CI 承载，防止两处同时跑。
+**A 就绪后 B 的退出**：`nightly_registry.py disable <id>` 停登记侧，删 plist 并 `bootout`，删 wrapper 脚本，在项目 `AGENTS.md` 标注 nightly 已由 CI 承载，防止两处同时跑。确认 CI 稳定后再 `nightly_registry.py remove <id>` 清登记。
 
 ---
 

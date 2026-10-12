@@ -1,0 +1,23 @@
+_meta:
+  source: .entropaxis/templates/instance/nightly.template.yaml
+  managed_by: tools/nightly_registry.py 增删改查 + Agent 按 nightly-regression Skill 登记
+  policy: merge-only
+  schema: .entropaxis/schemas/nightly.schema.json
+  note: >-
+    nightly 回归作业注册表。每条作业是一个本地定时实例（launchd 过渡或 CI 终态），
+    登记「哪些项目、跑什么、何时跑」，不登记任何凭据——凭据由项目自身 .env 或
+    环境变量提供。写入前先读 policy；enabled 为 false 的作业只登记不注册。
+    查看全部作业：python3 .entropaxis/tools/nightly_registry.py list。
+
+# 字段：
+#   id        作业标识，小写连字符，全局唯一
+#   project   registry.yaml 中的项目 id（必填）
+#   repo      代码真源目录（相对工作区根）；缺省取该项目 registry code[0]
+#   label     launchd label，如 com.org.proj.nightly（必填，全局唯一）
+#   carrier   承载形态：launchd（过渡）| ci（终态）
+#   schedule  {hour, minute, weekday?}；weekday 0/7 为周日，缺省每天
+#   commands  wrapper 内顺序执行的命令原文（至少一条）
+#   report_dir 报告目录，相对 repo，缺省 docs/05_reports/
+#   enabled   缺省 true；false 时只登记不注册
+#   note      备注
+jobs:

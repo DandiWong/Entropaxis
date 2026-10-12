@@ -1,0 +1,44 @@
+{
+  "$comment": "nightly 回归作业注册表。物理宿主：data/templates/nightly.yaml（merge-only；种子 templates/instance/nightly.template.yaml）。读写统一经 tools/nightly_registry.py；每条作业是一个本地 launchd（或 CI 定时）实例，凭证不在此登记。report_dir 相对项目根，缺省 docs/05_reports/。",
+  "title": "nightly",
+  "target": "data/templates/nightly.yaml",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["_meta", "jobs"],
+  "properties": {
+    "_meta": { "type": "object", "required": ["source", "managed_by", "policy"] },
+    "jobs": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "object",
+        "required": ["id", "project", "label", "schedule", "commands"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$", "description": "作业标识，小写连字符" },
+          "project": { "type": "string", "minLength": 1, "description": "registry.yaml 中的项目 id" },
+          "repo": { "type": "string", "minLength": 1, "description": "代码真源目录，相对工作区根；缺省取该项目 registry code[0]" },
+          "label": { "type": "string", "pattern": "^[a-zA-Z0-9._-]+$", "description": "launchd label，如 com.org.proj.nightly" },
+          "carrier": { "enum": ["launchd", "ci"], "description": "承载形态；launchd 为过渡，ci 为终态" },
+          "schedule": {
+            "type": "object",
+            "required": ["hour", "minute"],
+            "additionalProperties": false,
+            "properties": {
+              "hour": { "type": "integer", "minimum": 0, "maximum": 23 },
+              "minute": { "type": "integer", "minimum": 0, "maximum": 59 },
+              "weekday": { "type": "integer", "minimum": 0, "maximum": 7, "description": "0/7 为周日，缺省每天" }
+            }
+          },
+          "commands": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1, "description": "wrapper 内顺序执行的命令原文" }
+          },
+          "report_dir": { "type": "string", "minLength": 1, "description": "报告目录，相对 repo；缺省 docs/05_reports/" },
+          "enabled": { "type": "boolean", "description": "缺省 true；false 时工具只登记不注册 launchd" },
+          "note": { "type": "string" }
+        }
+      }
+    }
+  }
+}

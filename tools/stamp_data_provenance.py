@@ -54,6 +54,12 @@ KNOWN: dict[str, dict[str, str]] = {
         "managed_by": "init_project.py register_project 立项时追加项目 + 人工维护别名、排除规则与备注",
         "policy": "merge-only",
     },
+    "nightly.yaml": {
+        "source": ".entropaxis/templates/instance/nightly.template.yaml",
+        "managed_by": "tools/nightly_registry.py add/remove/enable + Agent 按 nightly-regression Skill 登记",
+        "policy": "merge-only",
+        "note": "nightly 作业实例（哪些项目/什么路径/何时跑）；凭据不在此登记，由项目 .env 提供",
+    },
     "tips.md": {
         "source": "人工创建",
         "managed_by": "Agent 按《工作流指令》生成或更新工作空间 Tips（须用户确认）",
