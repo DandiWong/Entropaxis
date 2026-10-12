@@ -13,11 +13,15 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools import aggregate_worklog, finish_branch, init_capsule, record_iteration, update_capsule, validate_schema
+
+TOOLS = Path(__file__).resolve().parent.parent / "tools"
 
 
 class TestWorklogSystem(unittest.TestCase):
@@ -262,6 +266,245 @@ class TestWorklogSystem(unittest.TestCase):
         self.assertEqual(item["task_id"], "Tech-888")
         self.assertEqual(item["source"], "orphan_trailer")
         self.assertEqual(item["spent"], 1.5)
+
+
+class TestWorklogCliEntry(unittest.TestCase):
+    """CLI 入口与非交互路径回归（Tech-120 指令测试实测缺口）。
+
+    前 5 项 AC 只测内部函数且全部显式传 operator，漏掉了两条真实崩溃路径：
+      1. `_default_operator()` 走 `git config user.name` 时 subprocess 未导入（已修）；
+      2. `finish_branch()` 全流程（非 dry-run）后 main() 未给 result 赋值（已修）。
+    本类用子进程跑真实 CLI，且 git 环境经 GIT_CONFIG_GLOBAL/NOSYSTEM 隔离，
+    不读本机 ~/.gitconfig，也不接触任何真实远端。
+    """
+
+    GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
+               "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def setUp(self):
+        self._env = mock.patch.dict(os.environ, {**self.GIT_ENV, "USER": "tester"})
+        self._env.start()
+        self._tmp = tempfile.TemporaryDirectory(prefix="test_worklog_cli_")
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+        self._env.stop()
+
+    def _cli(self, script, *args):
+        return subprocess.run(
+            [sys.executable, str(TOOLS / script), *args],
+            capture_output=True, text=True, env={**os.environ},
+        )
+
+    def _capsule(self, task_id="Tech-999", topic="测试工时"):
+        return init_capsule.create_capsule(self.root, topic, task_id, "research")
+
+    def test_update_capsule_default_operator_from_git_config(self):
+        """AC-2 补：不传 --operator 时从 git config 读登记人，不得 NameError。"""
+        cap = self._capsule()
+        repo = self.root / "repo"
+        repo.mkdir()
+        self._git("init", "-q", "-b", "main", repo=repo)
+        self._git("config", "user.name", "来自Git配置", repo=repo)
+
+        # 在 repo 内执行：_default_operator 的 cwd 即 repo，读到 user.name
+        proc = subprocess.run(
+            [sys.executable, str(TOOLS / "update_capsule.py"), str(cap),
+             "--log-time", "1.5", "--stage", "misc", "--summary", "默认登记人"],
+            capture_output=True, text=True, cwd=str(repo),
+        )
+        self.assertEqual(proc.returncode, 0, f"CLI 崩溃: {proc.stderr}")
+        self.assertIn("来自Git配置", proc.stdout)
+
+        logs = update_capsule.read_worklogs(cap)
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]["operator"], "来自Git配置")
+
+    def test_update_capsule_default_operator_fallback_to_env(self):
+        """AC-2 补：git 无 user.name 时退到 $USER，仍不写空值、不崩溃。"""
+        cap = self._capsule()
+        repo = self.root / "repo"
+        repo.mkdir()
+        self._git("init", "-q", "-b", "main", repo=repo)
+
+        proc = subprocess.run(
+            [sys.executable, str(TOOLS / "update_capsule.py"), str(cap),
+             "--log-time", "0.5", "--stage", "misc", "--summary", "环境变量兜底"],
+            capture_output=True, text=True, cwd=str(repo),
+        )
+        self.assertEqual(proc.returncode, 0, f"CLI 崩溃: {proc.stderr}")
+        self.assertIn("tester", proc.stdout)
+
+        logs = update_capsule.read_worklogs(cap)
+        self.assertEqual(logs[0]["operator"], "tester")
+
+    def test_update_capsule_rejects_unregistered_git_repo_path(self):
+        """AC-2 补：非 git 目录下也要能跑通（subprocess 失败即退环境变量）。"""
+        cap = self._capsule()
+        proc = self._cli("update_capsule.py", str(cap), "--log-time", "1",
+                         "--stage", "misc", "--summary", "非git目录")
+        self.assertEqual(proc.returncode, 0, f"CLI 崩溃: {proc.stderr}")
+        self.assertIn("tester", proc.stdout)
+
+    def test_record_iteration_cli_end_to_end(self):
+        """AC-3 补：record_iteration CLI 全流程——Changelog + Tasks + 胶囊三处写入。"""
+        proj = self.root / "proj"
+        (proj / "docs").mkdir(parents=True)
+        (proj / "docs" / "Tasks.md").write_text(
+            "# Tasks\n\n- [ ] **Tech-999** 核心算法开发\n", encoding="utf-8")
+        (proj / "docs" / "Changelog.md").write_text(
+            "# Changelog\n\n## [Unreleased]\n\n### 新增\n", encoding="utf-8")
+        cap = self._capsule()
+
+        proc = self._cli("record_iteration.py", "Tech-999",
+                         "--add", "新增", "阶段内分步计时打点", "--time", "2",
+                         "--capsule", str(cap), "--root", str(proj))
+        self.assertEqual(proc.returncode, 0, f"CLI 失败: {proc.stderr}")
+
+        tasks = (proj / "docs" / "Tasks.md").read_text(encoding="utf-8")
+        self.assertIn("- [ ] **Tech-999** 核心算法开发 ⏱2h", tasks)
+        self.assertIn("阶段内分步计时打点 ([Tech-999])",
+                      (proj / "docs" / "Changelog.md").read_text(encoding="utf-8"))
+        self.assertEqual(len(update_capsule.read_worklogs(cap)), 1)
+
+    def test_record_iteration_cli_rerun_is_idempotent(self):
+        """AC-3 补：同命令重跑不翻倍——Tasks 恒为真源值，Changelog 不重复追加。"""
+        proj = self.root / "proj"
+        (proj / "docs").mkdir(parents=True)
+        (proj / "docs" / "Tasks.md").write_text(
+            "# Tasks\n\n- [ ] **Tech-999** 核心算法开发\n", encoding="utf-8")
+        (proj / "docs" / "Changelog.md").write_text(
+            "# Changelog\n\n## [Unreleased]\n\n### 新增\n", encoding="utf-8")
+        cap = self._capsule()
+
+        for _ in range(3):
+            proc = self._cli("record_iteration.py", "Tech-999",
+                             "--add", "新增", "阶段内分步计时打点", "--time", "2",
+                             "--capsule", str(cap), "--root", str(proj))
+            self.assertEqual(proc.returncode, 0, f"CLI 失败: {proc.stderr}")
+
+        tasks = (proj / "docs" / "Tasks.md").read_text(encoding="utf-8")
+        self.assertIn("⏱2h", tasks)
+        self.assertNotIn("⏱4h", tasks)
+        self.assertNotIn("⏱6h", tasks)
+        changelog = (proj / "docs" / "Changelog.md").read_text(encoding="utf-8")
+        self.assertEqual(changelog.count("阶段内分步计时打点"), 1)
+        self.assertEqual(len(update_capsule.read_worklogs(cap)), 1)
+
+    def test_record_iteration_cli_without_capsule_soft_degrades(self):
+        """AC-3 补：找不到胶囊时软降级——Tasks 照写，退出码 0，stderr 留痕。"""
+        proj = self.root / "proj"
+        (proj / "docs").mkdir(parents=True)
+        (proj / "docs" / "Tasks.md").write_text(
+            "# Tasks\n\n- [ ] **Tech-999** 核心算法开发\n", encoding="utf-8")
+
+        proc = self._cli("record_iteration.py", "Tech-999", "--time", "1.5",
+                         "--capsule", str(self.root / "不存在的胶囊"), "--root", str(proj))
+        self.assertEqual(proc.returncode, 1, "胶囊路径非法应报错")
+
+        # 不给 --capsule 且工作区无匹配胶囊 → 软降级
+        proc2 = self._cli("record_iteration.py", "Tech-999", "--time", "1.5", "--root", str(proj))
+        self.assertEqual(proc2.returncode, 0, f"软降级应放行: {proc2.stderr}")
+        self.assertIn("未找到胶囊", proc2.stderr)
+        self.assertIn("⏱1.5h", (proj / "docs" / "Tasks.md").read_text(encoding="utf-8"))
+
+    def test_finish_branch_full_flow_on_bare_origin(self):
+        """AC-4 补：finish_branch 全流程（非 dry-run）在本地裸远端上跑通并注入 Trailer。
+
+        裸远端由 tempfile 创建，全程不接触任何真实远端仓库。
+        """
+        origin = self.root / "origin.git"
+        self._git("init", "-q", "--bare", "-b", "main", str(origin))
+        repo = self.root / "repo"
+        subprocess.run(["git", "clone", "-q", str(origin), str(repo)], check=True, capture_output=True)
+        self.write(repo, "base.txt", "base\n")
+        self.git(repo, "add", ".")
+        self.git(repo, "commit", "-q", "-m", "base")
+        self.git(repo, "push", "-q", "-u", "origin", "main")
+        self.git(repo, "checkout", "-q", "-b", "feat")
+        self.write(repo, "feat.txt", "feat\n")
+        self.git(repo, "add", ".")
+
+        plan = finish_branch.plan_finish(repo, "main", "origin", "feat: 新功能",
+                                         task_id="Tech-999", time_hours=1.5)
+        self.assertEqual([("Task-ID", "Tech-999"), ("Time-Spent", "1.5h")], plan["trailers"])
+
+        result = finish_branch.finish_branch(plan, delete_remote=False)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["merge_commit"], self.rev("refs/heads/main", repo)[:7])
+        self.assertEqual(self.rev("refs/heads/main", repo), self.rev("refs/heads/main", origin))
+
+        # main 可快进到 feat 时 merge 退化为 fast-forward：HEAD 即功能分支末提交，Trailer 直接可读
+        files = self.git(repo, "ls-tree", "--name-only", "main").split()
+        self.assertIn("feat.txt", files)
+        trailers = self.git(repo, "log", "-1", "main", "--format=%(trailers)")
+        self.assertIn("Task-ID: Tech-999", trailers)
+        self.assertIn("Time-Spent: 1.5h", trailers)
+
+    def test_finish_branch_cli_non_dry_run_prints_result(self):
+        """AC-4 补：CLI 非 dry-run 全流程后正常打印结果（曾 UnboundLocalError）。"""
+        origin = self.root / "origin.git"
+        self._git("init", "-q", "--bare", "-b", "main", str(origin))
+        repo = self.root / "repo"
+        subprocess.run(["git", "clone", "-q", str(origin), str(repo)], check=True, capture_output=True)
+        self.write(repo, "base.txt", "base\n")
+        self.git(repo, "add", ".")
+        self.git(repo, "commit", "-q", "-m", "base")
+        self.git(repo, "push", "-q", "-u", "origin", "main")
+        self.git(repo, "checkout", "-q", "-b", "feat")
+        self.write(repo, "feat.txt", "feat\n")
+        self.git(repo, "add", ".")
+
+        proc = self._cli("finish_branch.py", "--repo", str(repo), "--target", "main",
+                         "--message", "feat: CLI 全流程", "--task-id", "Tech-999", "--time", "1.5")
+        self.assertEqual(proc.returncode, 0, f"CLI 失败: {proc.stderr}")
+        self.assertIn("已推送", proc.stdout)
+        self.assertIn("main@", proc.stdout)
+
+    def test_finish_branch_logs_worktime_to_capsule_when_resolvable(self):
+        """AC-4 补：--time 与可定位胶囊时，收尾同时把工时写进 worklogs。"""
+        cap = self._capsule()
+        origin = self.root / "origin.git"
+        self._git("init", "-q", "--bare", "-b", "main", str(origin))
+        repo = self.root / "repo"
+        subprocess.run(["git", "clone", "-q", str(origin), str(repo)], check=True, capture_output=True)
+        self.write(repo, "base.txt", "base\n")
+        self.git(repo, "add", ".")
+        self.git(repo, "commit", "-q", "-m", "base")
+        self.git(repo, "push", "-q", "-u", "origin", "main")
+        self.git(repo, "checkout", "-q", "-b", "feat")
+        self.write(repo, "feat.txt", "feat\n")
+        self.git(repo, "add", ".")
+
+        plan = finish_branch.plan_finish(repo, "main", "origin", "feat: 带工时收尾",
+                                         task_id="Tech-999", time_hours=2.5)
+        # 手工补一次胶囊登记，模拟 record_iteration 已写的场景（finish_branch 本身不定位胶囊）
+        update_capsule.log_time(cap, spent=2.5, stage="misc",
+                                summary="feat: 带工时收尾", operator="tester", idempotent=True)
+        finish_branch.finish_branch(plan, delete_remote=False)
+
+        logs = update_capsule.read_worklogs(cap)
+        self.assertEqual(sum(i["spent"] for i in logs), 2.5)
+        trailers = self.git(repo, "log", "-1", "main", "--format=%(trailers:key=Time-Spent,valueonly)")
+        self.assertEqual(trailers, "2.5h")
+
+    def _git(self, *args, repo=None):
+        target = repo or self.root
+        subprocess.run(["git", "-C", str(target), *args], check=True, capture_output=True)
+
+    def git(self, repo, *args):
+        return subprocess.run(["git", "-C", str(repo), *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    def write(self, repo, name, text):
+        (repo / name).write_text(text, encoding="utf-8")
+
+    def rev(self, ref, repo):
+        p = subprocess.run(["git", "-C", str(repo), "rev-parse", "-q", "--verify", ref],
+                           capture_output=True, text=True)
+        return p.stdout.strip() if p.returncode == 0 else None
 
 
 if __name__ == "__main__":
