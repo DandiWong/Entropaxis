@@ -56,9 +56,9 @@ KNOWN: dict[str, dict[str, str]] = {
     },
     "stakeholders.yaml": {
         "source": ".entropaxis/templates/instance/stakeholders.template.yaml",
-        "managed_by": "bootstrap.py render_instance_configs（仅缺失时渲染）+ resolve_stakeholder.py + 人工维护",
+        "managed_by": "bootstrap.py render_instance_configs（仅缺失时渲染）+ 人工维护",
         "policy": "merge-only",
-        "note": "公司各板块/项目/产品干系人与人员主库映射真源",
+        "note": "公司各板块/项目/产品干系人与人员主库映射真源；读取统一经 tools/resolve_stakeholder.py，写入由人工维护（merge-only）",
     },
     "nightly.yaml": {
         "source": ".entropaxis/templates/instance/nightly.template.yaml",

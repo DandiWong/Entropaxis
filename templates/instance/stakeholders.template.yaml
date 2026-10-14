@@ -1,9 +1,9 @@
 _meta:
   source: .entropaxis/templates/instance/stakeholders.template.yaml
-  managed_by: tools/resolve_stakeholder.py + 人工维护
+  managed_by: bootstrap.py render_instance_configs（仅缺失时渲染）+ 人工维护
   policy: merge-only
   schema: .entropaxis/schemas/stakeholders.schema.json
-  note: 公司各板块/项目/产品干系人与人员主库映射真源。供会议纪要、汇报材料、双周报等按图索骥。读写统一经 tools/resolve_stakeholder.py。
+  note: 公司各板块/项目/产品干系人与人员主库映射真源。读取统一经 tools/resolve_stakeholder.py，写入由人工维护（merge-only）。
 
 # 人员主库：记录员工真实姓名、组织归属、规范职务以及会议转写/口语中可能出现的别名与昵称。
 # id 唯一且稳定，推荐小写拼音；name 必填真实姓名；aliases 用于转写消歧和纠偏。

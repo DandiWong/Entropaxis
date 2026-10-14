@@ -1,5 +1,7 @@
 """resolve_stakeholder 的干系人矩阵、人员消歧、层级继承与断链体检契约。"""
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -130,6 +132,60 @@ class ResolveStakeholderTests(unittest.TestCase):
         self.assertIn("决策人: 王浩", text)
         self.assertIn("PM: 王建春", text)
         self.assertIn("PO: 周嫄", text)
+
+    def test_main_list_json_includes_inherited_fields(self):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            result = RS.main(["--list", "--json", "--workspace-root", str(self.root)])
+        self.assertEqual(result, 0)
+        matrices = json.loads(stdout.getvalue())
+        child = matrices["medalkaid-paper"]
+        self.assertEqual(child["decision_maker"], "wanghao")
+        self.assertEqual(child["_inherited_from"]["decision_maker"], "medalkaid")
+        self.assertIn("王浩", child["decision_maker_display"])
+
+    def test_main_list_limit_and_unlimited_parameter(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = RS.main(["--list", "--json", "--limit", "1", "--workspace-root", str(self.root)])
+        self.assertEqual(result, 0)
+        self.assertEqual(len(json.loads(stdout.getvalue())), 1)
+        self.assertIn("--limit 0", stderr.getvalue())
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            result = RS.main(["--list", "--json", "--limit", "0", "--workspace-root", str(self.root)])
+        self.assertEqual(result, 0)
+        self.assertEqual(len(json.loads(stdout.getvalue())), 2)
+
+    def test_lint_missing_stakeholders_reports_baseline_absent(self):
+        (self.root / ".entropaxis" / "data" / "templates" / "stakeholders.yaml").unlink()
+        self.assertEqual(
+            RS.lint_stakeholders(self.root),
+            ["[底册缺失] 未找到 stakeholders.yaml，请运行 bootstrap 渲染"],
+        )
+
+    def test_main_damaged_yaml_exits_gracefully(self):
+        (self.root / ".entropaxis" / "data" / "templates" / "stakeholders.yaml").write_text(
+            "people: [\n", encoding="utf-8"
+        )
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            result = RS.main(["--list", "--workspace-root", str(self.root)])
+        self.assertEqual(result, 2)
+        self.assertIn("❌ 错误原因：解析 stakeholders.yaml 失败:", stderr.getvalue())
+        self.assertIn("👉 修复建议：", stderr.getvalue())
+
+    def test_main_missing_pyyaml_exits_gracefully(self):
+        original_yaml = RS.yaml
+        RS.yaml = None
+        self.addCleanup(setattr, RS, "yaml", original_yaml)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            result = RS.main(["--list", "--workspace-root", str(self.root)])
+        self.assertEqual(result, 2)
+        self.assertIn("pip install pyyaml", stderr.getvalue())
 
 
 if __name__ == "__main__":

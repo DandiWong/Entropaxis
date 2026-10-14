@@ -39,11 +39,13 @@ def load_stakeholders_raw(workspace_root: Path | None = None) -> dict:
     if not path.is_file():
         return {"people": [], "projects": {}}
     if yaml is None:
-        raise StakeholderError("缺少 PyYAML 库，无法解析 stakeholders.yaml")
+        raise StakeholderError("缺少 PyYAML 库，无法解析 stakeholders.yaml；请运行 pip install pyyaml")
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception as exc:
         raise StakeholderError(f"解析 stakeholders.yaml 失败: {exc}") from exc
+    if not isinstance(data, dict):
+        raise StakeholderError("stakeholders.yaml 顶层必须是对象")
     return data
 
 
@@ -241,10 +243,13 @@ def format_person_text(person: dict, roles: list[dict]) -> str:
 
 def lint_stakeholders(workspace_root: Path | None = None) -> list[str]:
     """静态检查 stakeholders.yaml 的完整性、引用有效性与孤立引用。"""
+    path = stakeholders_path(workspace_root)
+    if not path.is_file():
+        return ["[底册缺失] 未找到 stakeholders.yaml，请运行 bootstrap 渲染"]
     issues = []
     try:
         raw = load_stakeholders_raw(workspace_root)
-    except Exception as exc:
+    except StakeholderError as exc:
         return [f"[无法加载] {exc}"]
 
     people = raw.get("people", [])
@@ -298,18 +303,16 @@ def lint_stakeholders(workspace_root: Path | None = None) -> list[str]:
     return issues
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="按项目或人名别名精准解析干系人矩阵与人员主库")
-    parser.add_argument("query", nargs="?", default="", help="项目 ID、人名或别名查询词")
-    parser.add_argument("--project", "-p", dest="project_query", help="显式指定按项目查询")
-    parser.add_argument("--person", "-u", dest="person_query", help="显式指定按人名/别名查询")
-    parser.add_argument("--json", action="store_true", help="输出机器可读的 JSON 格式")
-    parser.add_argument("--list", action="store_true", help="列出全部项目的干系人矩阵")
-    parser.add_argument("--list-people", action="store_true", help="列出全部主库人员")
-    parser.add_argument("--lint", action="store_true", help="执行干系人完整性与断链检查")
-    parser.add_argument("--workspace-root", default=None, help="工作区根目录路径（可选）")
+def _truncate_list(items: list, limit: int, label: str) -> list:
+    """按 CLI 列表上限截断，并在 stderr 提示可显示全部。"""
+    if limit <= 0 or len(items) <= limit:
+        return items
+    print(f"⚠️ {label}共 {len(items)} 项，仅显示前 {limit} 项；使用 --limit 0 显示全部。", file=sys.stderr)
+    return items[:limit]
 
-    args = parser.parse_args(argv)
+
+def _run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """执行已解析的 CLI 请求。"""
     ws_root = Path(args.workspace_root).resolve() if args.workspace_root else None
 
     if args.lint:
@@ -324,19 +327,21 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list:
         raw = load_stakeholders_raw(ws_root)
-        projects = raw.get("projects", {})
+        project_ids = _truncate_list(list(raw.get("projects", {})), args.limit, "项目列表")
+        matrices = [
+            matrix for pid in project_ids
+            if (matrix := resolve_project_matrix(pid, ws_root, inherit=True))
+        ]
         if args.json:
-            print(json.dumps(projects, ensure_ascii=False, indent=2))
+            print(json.dumps({matrix["project_id"]: matrix for matrix in matrices}, ensure_ascii=False, indent=2))
         else:
-            for pid in projects:
-                matrix = resolve_project_matrix(pid, ws_root)
-                if matrix:
-                    print(format_matrix_text(matrix))
+            for matrix in matrices:
+                print(format_matrix_text(matrix))
         return 0
 
     if args.list_people:
         raw = load_stakeholders_raw(ws_root)
-        people = raw.get("people", [])
+        people = _truncate_list(raw.get("people", []), args.limit, "人员列表")
         if args.json:
             print(json.dumps(people, ensure_ascii=False, indent=2))
         else:
@@ -397,6 +402,26 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"❌ 错误原因：查询词 '{query}' 既未命中任何已登记项目，也未命中人员或别名。\n👉 修复建议：检查 .entropaxis/data/templates/stakeholders.yaml，确认项目 ID 或人员姓名/别名是否登记。", file=sys.stderr)
     return 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="按项目或人名别名精准解析干系人矩阵与人员主库")
+    parser.add_argument("query", nargs="?", default="", help="项目 ID、人名或别名查询词")
+    parser.add_argument("--project", "-p", dest="project_query", help="显式指定按项目查询")
+    parser.add_argument("--person", "-u", dest="person_query", help="显式指定按人名/别名查询")
+    parser.add_argument("--json", action="store_true", help="输出机器可读的 JSON 格式")
+    parser.add_argument("--list", action="store_true", help="列出全部项目的干系人矩阵")
+    parser.add_argument("--list-people", action="store_true", help="列出全部主库人员")
+    parser.add_argument("--limit", type=int, default=20, help="列表最多显示的条数（0 或负数不截断）")
+    parser.add_argument("--lint", action="store_true", help="执行干系人完整性与断链检查")
+    parser.add_argument("--workspace-root", default=None, help="工作区根目录路径（可选）")
+
+    args = parser.parse_args(argv)
+    try:
+        return _run_cli(args, parser)
+    except StakeholderError as exc:
+        print(f"❌ 错误原因：{exc}\n👉 修复建议：检查 stakeholders.yaml 的格式、路径与依赖后重试。", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
