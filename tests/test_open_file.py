@@ -225,18 +225,54 @@ class OpenFileTests(unittest.TestCase):
         doc = self.root / "report.docx"
         doc.write_bytes(b"docx")
         runner = RecordingRunner([0])
+        closer_calls = []
+        def fake_closer(argv, **kwargs):
+            closer_calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout="false", stderr="")
 
         results = open_paths(
             [str(doc)],
             config_path=self.config,
             platform="darwin",
             runner=runner,
+            closer=fake_closer,
             on_deliver=True,
         )
 
         self.assertTrue(results[0]["ok"])
         self.assertFalse(results[0].get("skipped", False))
         self.assertEqual(len(runner.calls), 1, "白名单交付格式在交付模式下应正常打开")
+        self.assertEqual(len(closer_calls), 1, "办公格式在交付时应通过 closer 钩子探测热刷新")
+
+    def test_non_desktop_office_opener_skips_closer(self):
+        """若已配置使用 Orca 等非桌面应用打开，无需触发 AX 窗口关闭探针。"""
+        self._write_config({
+            "pdf": {
+                "name": "PDF",
+                "extensions": [".pdf"],
+                "selected_app": "Orca",
+                "command": "orca file open",
+                "arbitrated": True,
+            },
+        })
+        pdf = self.root / "doc.pdf"
+        pdf.write_bytes(b"%PDF")
+        runner = RecordingRunner([0])
+        closer_calls = []
+        def fake_closer(argv, **kwargs):
+            closer_calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout="false", stderr="")
+
+        results = open_paths(
+            [str(pdf)],
+            config_path=self.config,
+            platform="darwin",
+            runner=runner,
+            closer=fake_closer,
+            on_deliver=True,
+        )
+        self.assertTrue(results[0]["ok"])
+        self.assertEqual(len(closer_calls), 0, "非桌面应用配置应直接跳过 AX 窗口探针")
 if __name__ == "__main__":
     unittest.main()
 

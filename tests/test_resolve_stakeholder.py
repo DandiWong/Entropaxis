@@ -22,22 +22,22 @@ _meta:
 people:
   - id: wangjianchun
     name: 王建春
-    org: 复星医药/AI数智部
+    org: 某集团/AI数智部
     default_title: 高级项目经理
     aliases: [建春, 建哥, Jason]
   - id: majunyi
     name: 马俊义
-    org: 复星医药/AI数智部
+    org: 某集团/AI数智部
     default_title: 部门负责人/总监
     aliases: [君一, Junyi Ma]
   - id: wanghao
     name: 王浩
-    org: 复星医药/管理层
+    org: 某集团/管理层
     default_title: 副总裁/分管领导
     aliases: [浩总]
   - id: zhouyuan
     name: 周嫄
-    org: 复星医药/临床研发部
+    org: 某集团/临床研发部
     default_title: 临床医学专家
     aliases: [周博]
 

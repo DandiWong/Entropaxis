@@ -103,20 +103,65 @@ DELIVERY_AUTO_OPEN_EXTENSIONS = {
 }
 
 
-def _close_if_already_open(path: Path, platform: str, closer=subprocess.run) -> bool:
+def _target_office_apps(suffix: str, target_cmd: str = "", selected_app: str = "") -> list[str]:
+    """根据文件格式及配置的目标打开程序，收敛可能承载旧窗口的办公进程列表。"""
+    combined = (target_cmd + " " + selected_app).lower()
+    # 明确为非原生桌面办公应用（如终端、编辑器、浏览器、Orca）时无需探测 AX 窗口
+    if any(k in combined for k in ("orca", "code", "cursor", "subl", "vim", "nano", "chrome", "safari")):
+        return []
+    if "wps" in combined:
+        return ["wpsoffice", "WPS Office"]
+    if "word" in combined:
+        return ["Microsoft Word", "wpsoffice", "WPS Office"]
+    if "excel" in combined:
+        return ["Microsoft Excel", "wpsoffice", "WPS Office"]
+    if "powerpoint" in combined or "wpp" in combined or "ppt" in combined:
+        return ["Microsoft PowerPoint", "wpsoffice", "WPS Office"]
+    if "preview" in combined:
+        return ["Preview"]
+
+    # 缺省按扩展名收敛相关办公套件
+    ext = suffix.lower()
+    if ext in {".docx", ".doc"}:
+        return ["wpsoffice", "WPS Office", "Microsoft Word"]
+    if ext in {".xlsx", ".xls", ".xlsm", ".csv"}:
+        return ["wpsoffice", "WPS Office", "Microsoft Excel"]
+    if ext in {".pptx", ".ppt"}:
+        return ["wpsoffice", "WPS Office", "Microsoft PowerPoint"]
+    if ext == ".pdf":
+        return ["Preview", "wpsoffice", "WPS Office"]
+    return []
+
+
+def _close_if_already_open(
+    path: Path,
+    platform: str,
+    closer=subprocess.run,
+    target_cmd: str = "",
+    selected_app: str = "",
+) -> bool:
     """若办公文档已在桌面办公应用中打开，则先关闭对应窗口以保证后续打开加载磁盘最新内容。"""
     if not path.is_file() or path.suffix.lower() not in OFFICE_EXTENSIONS:
         return False
-    # AppleScript 字符串字面量转义：文件名含 " 或 \ 时不转义会拼出语法错误的脚本，
-    # 而错误会被下方 except 吞掉，表现为「永远刷新不了」这种无声失效。
+    target_apps = _target_office_apps(path.suffix, target_cmd=target_cmd, selected_app=selected_app)
+    if not target_apps:
+        return False
+
     file_name = path.name.replace("\\", "\\\\").replace('"', '\\"')
+    apps_quoted = ", ".join(f'"{a}"' for a in target_apps)
+
     if platform == "darwin":
         # 必须先把目标进程激活到前台再枚举窗口：WPS 等 Qt/非原生应用只在 frontmost 时
         # 才惰性暴露 AX 窗口树，后台查询恒返回 0 个窗口，导致关闭逻辑静默空转。
+        # 防御机制：预先记录原前台应用；若未真正关闭任何匹配窗口，立即恢复焦点，绝不残留空前台。
         script = f'''
         tell application "System Events"
+            set origProc to missing value
+            try
+                set origProc to first application process whose frontmost is true
+            end try
             set procNames to name of every process
-            set officeApps to {{"wpsoffice", "WPS Office", "Microsoft Excel", "Microsoft Word", "Microsoft PowerPoint", "Preview"}}
+            set officeApps to {{{apps_quoted}}}
             set closedAny to false
             repeat with p in procNames
                 if p is in officeApps then
@@ -136,6 +181,12 @@ def _close_if_already_open(path: Path, platform: str, closer=subprocess.run) -> 
                             end repeat
                         end tell
                     end try
+                    -- 若未匹配到目标窗口，且原前台不是该应用，立即切回原应用
+                    if not closedAny and origProc is not missing value then
+                        try
+                            set frontmost of origProc to true
+                        end try
+                    end if
                 end if
             end repeat
             return closedAny
@@ -196,11 +247,14 @@ def _open_path(
             })
             return result
 
-    # 若文件已打开，先关闭已有窗口触发热刷新
-    result["reloaded"] = _close_if_already_open(path, platform, closer=closer)
-
     association = _association_for(path, config)
     command = association.get("command", "") if association else ""
+    selected_app = association.get("selected_app", "") if association else ""
+
+    # 若文件已打开，先关闭已有窗口触发热刷新（按配置目标应用精准收敛，未关闭时自动还原前台应用）
+    result["reloaded"] = _close_if_already_open(
+        path, platform, closer=closer, target_cmd=command, selected_app=selected_app
+    )
     if command:
         try:
             configured_argv = _configured_argv(command, path, platform)
