@@ -6,7 +6,7 @@
 
 ## 工具
 
-- 事务/胶囊研讨与定位必先调 `find_capsule.py`，未命中才降级 `grep`/`glob`；项目解析用 `resolve_project.py`
+- 事务/胶囊研讨与定位必先调 `find_capsule.py`，未命中才降级 `grep`/`glob`；项目解析用 `resolve_project.py`；干系人与人员消歧用 `resolve_stakeholder.py`
 - 全局/代码搜索用 `grep`/`find`（多OR词用一次 `multi_grep`）；必须走 bash 时用 `rg`，不用 `grep`
 - 打开本地文件统一执行 `python3 .entropaxis/tools/open_file.py <path>`（交付闭环加 `--on-deliver`，.md 默认不打开）；定位后用 `read` 的 offset/limit 只读命中附近；工作区外已知文件直接 `read`
 - 调度角色/委派专业产出（让其它 Agent/模型出方案、审计、验收等）必先执行 `python3 .entropaxis/tools/dispatch_role.py resolve`，按返回的 tier 走 `dispatch_role.py run`；不得以子代理、MCP 或直接执行替代
@@ -44,6 +44,6 @@
 - Tool 准入判据与接口契约：`.entropaxis/rules/工具设计.md`
 - Skill 设计、元数据与分发包：`.entropaxis/rules/技能设计.md`
 - Spec、任务状态与外部看板：`.entropaxis/rules/看板联动.md`
-- 项目注册表：`.entropaxis/data/templates/registry.yaml`；角色承载配置：`.entropaxis/data/templates/roles.yaml`
+- 项目注册表：`.entropaxis/data/templates/registry.yaml`；干系人底册：`.entropaxis/data/templates/stakeholders.yaml`；角色承载配置：`.entropaxis/data/templates/roles.yaml`
 
 进入具体项目后，先读最近的 `AGENTS.md`，再按其中路由读取 README、Spec 或操作文档。仅在任务涉及外部看板、联网、发布或特定工具时加载对应规则或 Skill。

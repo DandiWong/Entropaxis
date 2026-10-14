@@ -1,0 +1,73 @@
+{
+  "$comment": "工作区板块/项目/产品干系人与人员主库契约。物理宿主：data/templates/stakeholders.yaml（merge-only；种子 templates/instance/stakeholders.template.yaml）。读写统一经 tools/resolve_stakeholder.py。",
+  "title": "stakeholders",
+  "target": "data/templates/stakeholders.yaml",
+  "type": "object",
+  "required": ["_meta", "people", "projects"],
+  "additionalProperties": false,
+  "properties": {
+    "_meta": {
+      "type": "object",
+      "required": ["source", "managed_by", "policy"]
+    },
+    "people": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "org": { "type": "string" },
+          "default_title": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "email": { "type": "string" },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "projects": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-zA-Z0-9_-]+$": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "decision_maker": { "type": ["string", "null"] },
+            "business_owner": { "type": ["string", "null"] },
+            "project_manager": { "type": ["string", "null"] },
+            "product_manager": { "type": ["string", "null"] },
+            "rd_lead": { "type": ["string", "null"] },
+            "rd_engineers": { "type": "array", "items": { "type": "string" } },
+            "designer": { "type": ["string", "null"] },
+            "external_stakeholders": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["name"],
+                "additionalProperties": false,
+                "properties": {
+                  "name": { "type": "string" },
+                  "org": { "type": "string" },
+                  "role": { "type": "string" },
+                  "note": { "type": "string" }
+                }
+              }
+            },
+            "members": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "note": { "type": "string" }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

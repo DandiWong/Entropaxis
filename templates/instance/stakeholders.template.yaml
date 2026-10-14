@@ -1,0 +1,15 @@
+_meta:
+  source: .entropaxis/templates/instance/stakeholders.template.yaml
+  managed_by: tools/resolve_stakeholder.py + 人工维护
+  policy: merge-only
+  schema: .entropaxis/schemas/stakeholders.schema.json
+  note: 公司各板块/项目/产品干系人与人员主库映射真源。供会议纪要、汇报材料、双周报等按图索骥。读写统一经 tools/resolve_stakeholder.py。
+
+# 人员主库：记录员工真实姓名、组织归属、规范职务以及会议转写/口语中可能出现的别名与昵称。
+# id 唯一且稳定，推荐小写拼音；name 必填真实姓名；aliases 用于转写消歧和纠偏。
+people: []
+
+# 项目与产品干系人矩阵：键对应 registry.yaml 中的项目 id。
+# 支持层级继承：若未单独指定 decision_maker 等角色，工具将沿 registry.yaml 的 parent 向上继承母板块角色。
+# 字段规范（全称）：decision_maker, business_owner, project_manager, product_manager, rd_lead, rd_engineers, designer, external_stakeholders
+projects: {}

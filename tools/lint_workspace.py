@@ -401,6 +401,14 @@ def check_schema_conformance(root: Path) -> list[str]:
         except yaml.YAMLError as exc:
             return issues + [f"[违反 schema] registry.yaml 无法解析: {exc}"]
         issues += [f"[违反 schema] registry.yaml {e}" for e in vs.validate(data, vs.load_schema("registry"))]
+    stakeholders_file = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "stakeholders.yaml"
+    if stakeholders_file.is_file():
+        import yaml  # noqa: PLC0415
+        try:
+            data = yaml.safe_load(stakeholders_file.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            return issues + [f"[违反 schema] stakeholders.yaml 无法解析: {exc}"]
+        issues += [f"[违反 schema] stakeholders.yaml {e}" for e in vs.validate(data, vs.load_schema("stakeholders"))]
     return issues
 
 
