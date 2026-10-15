@@ -9,6 +9,35 @@
     "topic": { "type": "string", "minLength": 1 },
     "mode": { "type": "string", "minLength": 1 },
     "lifecycle": { "enum": ["draft", "active", "delivered", "archived", "archived-unmeasured"] },
+    "seq_next": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "胶囊内段与工时条目单调递增序号计数器"
+    },
+    "task_segments": {
+      "type": "array",
+      "description": "会话事件时间戳驱动的任务段事实集合",
+      "items": {
+        "type": "object",
+        "required": ["seq", "seg_id", "name", "startAt", "lastActivityAt", "state"],
+        "additionalProperties": false,
+        "properties": {
+          "seq": { "type": "integer", "minimum": 1 },
+          "seg_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+#\\d+$" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "taskId": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+          "stage": { "type": "string", "pattern": "^(\\d{2}_\\S+|misc)$" },
+          "startAt": { "type": "string", "format": "date-time" },
+          "endAt": { "type": "string", "format": "date-time" },
+          "lastActivityAt": { "type": "string", "format": "date-time" },
+          "trigger": { "type": "string", "enum": ["deliver", "delivered", "uat", "verbal", "switch", "inferred"] },
+          "inferred": { "type": "boolean" },
+          "evidence": { "type": "string" },
+          "state": { "type": "string", "enum": ["open", "pending_approval", "logged", "unmeasured"] },
+          "note": { "type": "string" }
+        }
+      }
+    },
     "worklogs": {
       "type": "array",
       "items": {
@@ -20,7 +49,11 @@
           "stage": { "type": "string", "pattern": "^(\\d{2}_\\S+|misc)$" },
           "spent": { "type": "number", "exclusiveMinimum": 0, "maximum": 24, "multipleOf": 0.25 },
           "summary": { "type": "string", "minLength": 1, "maxLength": 120 },
-          "operator": { "type": "string", "minLength": 1 }
+          "operator": { "type": "string", "minLength": 1 },
+          "ref": { "type": "string", "pattern": "^[A-Za-z0-9_-]+#\\d+$" },
+          "overridden": { "type": "boolean" },
+          "original_spent": { "type": "number", "exclusiveMinimum": 0, "maximum": 24, "multipleOf": 0.25 },
+          "original_summary": { "type": "string" }
         }
       }
     }

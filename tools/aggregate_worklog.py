@@ -91,11 +91,16 @@ def parse_capsule_file(path: Path) -> dict[str, Any] | None:
                             "summary": str(item.get("summary") or ""),
                             "operator": str(item.get("operator") or ""),
                         })
+                seg_task_ids = []
+                for seg in data.get("task_segments") or []:
+                    if isinstance(seg, dict) and seg.get("taskId"):
+                        seg_task_ids.append(str(seg["taskId"]))
                 return {
                     "id": str(data.get("id") or ""),
                     "topic": str(data.get("topic") or path.parent.name),
                     "lifecycle": str(data.get("lifecycle") or "draft"),
                     "worklogs": clean_logs,
+                    "task_ids": seg_task_ids,
                     "path": path.parent,
                 }
         except Exception:
@@ -225,6 +230,10 @@ def aggregate(
     # 阶段一：全域扫描建立 Known_Task_IDs
     capsules = scan_capsules(root, projects, excludes)
     known_task_ids: set[str] = {c["id"] for c in capsules if c.get("id")}
+    for c in capsules:
+        for tid in c.get("task_ids", []):
+            if tid:
+                known_task_ids.add(tid)
     task_to_capsule: dict[str, dict[str, Any]] = {c["id"]: c for c in capsules if c.get("id")}
 
     warnings: list[str] = []

@@ -126,6 +126,82 @@ class UpdateCapsuleTests(unittest.TestCase):
         self.assertEqual(bad.returncode, 1)
         self.assertIn("👉", bad.stderr)
 
+    def test_task_segment_lifecycle_and_rounding(self) -> None:
+        # 1. 验证取整算法 q_minutes
+        self.assertEqual(uc.q_minutes(7.0), 0.25)
+        self.assertEqual(uc.q_minutes(7.5), 0.25)
+        self.assertEqual(uc.q_minutes(8.0), 0.25)
+        self.assertEqual(uc.q_minutes(22.5), 0.5)
+        self.assertEqual(uc.q_minutes(479.0), 8.0)
+        self.assertEqual(uc.q_minutes(480.0), 8.0)
+        self.assertEqual(uc.q_minutes(481.0), 8.0)
+
+        # 2. 开段 --start-task
+        res_start = uc.start_task(self.cap, name="功能开发", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
+        self.assertEqual(res_start["status"], "started")
+        seg = res_start["segment"]
+        self.assertEqual(seg["seq"], 1)
+        self.assertEqual(seg["seg_id"], "Tech-1#1")
+        self.assertEqual(seg["state"], "open")
+
+        # 阻止并发开段
+        with self.assertRaises(uc.ToolError):
+            uc.start_task(self.cap, name="冲突段")
+
+        # 刷新活跃时间
+        uc.touch_task(self.cap, at="2026-10-15T09:30:00+08:00")
+        segs = uc.read_segments(self.cap)
+        self.assertIn("09:30:00", segs[0]["lastActivityAt"])
+
+        # 3. 收尾入账 (<= 8h, 75分钟 -> 1.25h)
+        res_end = uc.end_task(self.cap, at="2026-10-15T10:15:00+08:00", trigger="deliver")
+        self.assertEqual(res_end["status"], "ended")
+        self.assertEqual(res_end["segment"]["state"], "logged")
+        self.assertEqual(res_end["entry"]["spent"], 1.25)
+        self.assertEqual(res_end["worklog_refs"], ["Tech-1#1"])
+        self.assertEqual(uc.worklog_total(self.cap), 1.25)
+
+        # 4. 人工覆盖 --override
+        res_ov = uc.override_worklog(self.cap, ref="Tech-1#1", spent=2.0, summary="修正工时")
+        self.assertEqual(res_ov["status"], "overridden")
+        self.assertEqual(res_ov["entry"]["spent"], 2.0)
+        self.assertEqual(res_ov["entry"]["original_spent"], 1.25)
+        self.assertTrue(res_ov["entry"]["overridden"])
+        self.assertEqual(uc.worklog_total(self.cap), 2.0)
+
+    def test_segment_over_8h_requires_approval(self) -> None:
+        # 开段并经过 9 小时 (540 分钟)
+        uc.start_task(self.cap, name="长任务", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
+        res_end = uc.end_task(self.cap, at="2026-10-15T18:00:00+08:00")
+        self.assertEqual(res_end["segment"]["state"], "pending_approval")
+        self.assertEqual(res_end["worklog_refs"], [])
+        self.assertEqual(uc.worklog_total(self.cap), 0.0)
+
+        # 批准入账
+        res_app = uc.approve_segment(self.cap, seg_id="Tech-1#1")
+        self.assertEqual(res_app["status"], "approved")
+        self.assertEqual(res_app["entry"]["spent"], 9.0)
+        self.assertEqual(uc.worklog_total(self.cap), 9.0)
+
+    def test_archive_gate_blocks_open_or_pending_segments(self) -> None:
+        self.manifest(lifecycle="delivered")
+        (self.cap / "07_验收报告.md").write_text(ACCEPTANCE.format(data="2026-11-05", unmeasured="待回填"), encoding="utf-8")
+
+        # 存在 open 段拦截归档
+        uc.start_task(self.cap, name="遗留段", task_id="Tech-1")
+        with self.assertRaises(uc.ToolError):
+            uc.update_capsule(str(self.cap))
+
+        # 收尾成为 pending_approval 仍然拦截
+        uc.end_task(self.cap, at="2026-10-16T18:00:00+08:00")  # >8h
+        with self.assertRaises(uc.ToolError):
+            uc.update_capsule(str(self.cap))
+
+        # 标记为 unmeasured 后放行归档
+        uc.unmeasure_segment(self.cap, seg_id="Tech-1#1", reason="测试忽略")
+        res = uc.update_capsule(str(self.cap))
+        self.assertEqual(res["to"], "archived")
+
 
 if __name__ == "__main__":
     unittest.main()

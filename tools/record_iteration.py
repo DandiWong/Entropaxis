@@ -213,6 +213,7 @@ def main() -> int:
                         help="追加 Changelog 条目，如 --add 修复 \"修正跨租户越权\"")
     parser.add_argument("--mark-done", action="store_true", help="在 Tasks.md 中勾选该任务为完成")
     parser.add_argument("--time", type=float, metavar="HOURS", help="登记工时并联动更新 Tasks 累计（步长 0.25h）")
+    parser.add_argument("--from-segments", action="store_true", help="按该 taskId 下全部有效任务段重算并写入 Tasks.md（方案 B 契约）")
     parser.add_argument("--capsule", help="显式指定胶囊目录")
     parser.add_argument("--stage", help="工时所属阶段名，缺省自动推导")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="项目根，默认当前目录")
@@ -222,11 +223,14 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="以结构化 JSON 输出")
     args = parser.parse_args()
 
-    if not args.add and not args.mark_done and args.time is None:
-        parser.error("至少指定 --add、--mark-done 或 --time 之一")
+    if not args.add and not args.mark_done and args.time is None and not args.from_segments:
+        parser.error("至少指定 --add、--mark-done、--time 或 --from-segments 之一")
+    if args.time is not None and args.from_segments:
+        parser.error("--time 与 --from-segments 互斥：有任务段的任务禁止使用 --time")
     root = args.root.expanduser().resolve()
     changes: list[dict] = []
     pending: list[tuple[Path, str]] = []
+    worklog_refs: list[str] = []
 
     try:
         if args.add:
@@ -240,19 +244,49 @@ def main() -> int:
 
         capsule_dir = None
         total_hours = None
-        if args.time is not None:
+        if args.time is not None or args.from_segments:
             capsule_dir = find_capsule_for_task(root, args.task_id, args.capsule)
+
+        if args.from_segments:
+            if not capsule_dir:
+                raise IterationError(f"❌ 无法执行 --from-segments: 未找到任务 {args.task_id} 对应的胶囊。")
+            segs = update_capsule.read_segments(capsule_dir)
+            matched_segs = [s for s in segs if s.get("taskId") == args.task_id]
+            # 校验 open 段
+            open_s = [s for s in matched_segs if s.get("state") == "open"]
+            if open_s:
+                raise IterationError(
+                    f"❌ 任务 {args.task_id} 存在未收尾的 open 任务段: {[s['seg_id'] for s in open_s]}\n"
+                    "👉 修复建议: 请先收尾任务段（update_capsule.py --end-task），再执行收尾汇总。"
+                )
+            # 告警 pending_approval 段
+            pending_s = [s for s in matched_segs if s.get("state") == "pending_approval"]
+            if pending_s:
+                print(f"⚠️ 警告: 任务 {args.task_id} 存在待审批任务段: {[s['seg_id'] for s in pending_s]}，暂不计入本次汇总", file=sys.stderr)
+
+            # 按 logged 段关联 worklogs 的有效 spent 求和
+            logged_ids = {s["seg_id"] for s in matched_segs if s.get("state") == "logged"}
+            worklogs = update_capsule.read_worklogs(capsule_dir)
+            total_hours = sum(float(w.get("spent", 0)) for w in worklogs if w.get("ref") in logged_ids)
+
+        if args.time is not None:
             if capsule_dir:
+                # 检查该任务是否已有任务段，若有则拦截 --time
+                segs = update_capsule.read_segments(capsule_dir)
+                if any(s.get("taskId") == args.task_id for s in segs):
+                    raise IterationError(f"❌ 任务 {args.task_id} 已包含任务段，禁止使用 --time；请使用 --from-segments 进行收尾汇总。")
+
                 summary = args.add[1] if args.add else f"完成 {args.task_id}"
                 res = update_capsule.log_time(capsule_dir, spent=args.time, stage=args.stage,
                                               summary=summary, dry_run=args.dry_run, idempotent=True)
                 total_hours = res["total"]
+                worklog_refs = res.get("worklog_refs", [])
                 changes.append({"file": str(capsule_dir / "capsule.yaml"), "changed": res["status"] == "added",
                                 "note": f"胶囊已登记工时 {args.time}h (真源累计 {total_hours}h)" if res["status"] == "added" else f"胶囊工时已存在(幂等放行，真源累计 {total_hours}h)"})
             else:
                 print("⚠️ 未找到胶囊，工时仅记入 Tasks", file=sys.stderr)
 
-        if args.mark_done or args.time is not None:
+        if args.mark_done or args.time is not None or args.from_segments:
             path = _locate(args.tasks, root, "Tasks.md")
             text = path.read_text(encoding="utf-8")
             # 若无胶囊，从既有行累计
@@ -269,7 +303,8 @@ def main() -> int:
             for path, content in pending:
                 atomic_write(path, content)
 
-        result = {"ok": True, "task_id": args.task_id, "dry_run": args.dry_run, "changes": changes}
+        result = {"ok": True, "task_id": args.task_id, "dry_run": args.dry_run,
+                  "worklog_refs": worklog_refs, "changes": changes}
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:

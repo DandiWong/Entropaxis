@@ -1,9 +1,13 @@
 """record_iteration 的分节插入、幂等与语种跟随核验。"""
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from tools import record_iteration as ri
+from tools import update_capsule
 
 CHANGELOG = """# 变更日志（Changelog）
 
@@ -128,6 +132,39 @@ class LocateAndAtomicTests(unittest.TestCase):
             path.write_text("old", encoding="utf-8")
             ri.atomic_write(path, "new")
             self.assertEqual(path.read_text(encoding="utf-8"), "new")
+
+    def test_from_segments_and_time_mutex(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cap_dir = root / ".entropaxis" / "data" / "docs" / "20261015_测试"
+            cap_dir.mkdir(parents=True)
+            (cap_dir / "capsule.yaml").write_text("id: Tech-92\nlifecycle: active\nworklogs: []\n", encoding="utf-8")
+            docs_dir = root / "docs"
+            docs_dir.mkdir(parents=True)
+            (docs_dir / "Tasks.md").write_text("- [ ] **Tech-92**: 任务内容\n", encoding="utf-8")
+
+            # 1. 开段并收尾生成 1.5h
+            update_capsule.start_task(cap_dir, name="段1", task_id="Tech-92", at="2026-10-15T09:00:00+08:00")
+            update_capsule.end_task(cap_dir, at="2026-10-15T10:30:00+08:00")
+
+            # 2. 存在任务段时，--time 应被拦截
+            cmd_time = [sys.executable, str(Path(ri.__file__)), "Tech-92", "--time", "1.0", "--root", str(root)]
+            p_time = subprocess.run(cmd_time, capture_output=True, text=True)
+            self.assertEqual(p_time.returncode, 1)
+            self.assertIn("已包含任务段，禁止使用 --time", p_time.stderr)
+
+            # 3. --from-segments 成功写入 Tasks ⏱ 1.5h
+            cmd_from = [sys.executable, str(Path(ri.__file__)), "Tech-92", "--from-segments", "--root", str(root), "--json"]
+            p_from = subprocess.run(cmd_from, capture_output=True, text=True)
+            self.assertEqual(p_from.returncode, 0, p_from.stderr)
+            tasks_content = (docs_dir / "Tasks.md").read_text(encoding="utf-8")
+            self.assertIn("⏱1.5h", tasks_content)
+
+            # 4. 再次执行 --from-segments 幂等无变更
+            p_from_again = subprocess.run(cmd_from, capture_output=True, text=True)
+            self.assertEqual(p_from_again.returncode, 0)
+            data = json.loads(p_from_again.stdout)
+            self.assertFalse(data["changes"][-1]["changed"])
 
 
 if __name__ == "__main__":
