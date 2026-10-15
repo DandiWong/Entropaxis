@@ -12,6 +12,17 @@
 只改 capsule.yaml 中对应的顶层键值，保留注释与其余内容；写入走临时文件后原子替换。
 调用方：update_audit_state.py 写报告后自动同步；《软件工程》「收尾分支」合入后显式 --delivered；
 lint_workspace.py 用 derive() 检查状态落后。
+
+段计量（Tech-121，方案 §3.2～3.4、Spec §二）：
+  任务段是事实层，worklogs 是唯一计量真源；一次 CLI 调用内的段变化、worklogs 追加与
+  lifecycle 推进在同一份数据对象上完成，最终只做一次原子写入（IMP-C1：不再用旧全文
+  覆盖已落盘的段结算）。
+  >24h 异常段只能修正结束时间（--fix-segment）或按时刻拆段（--split-segment），
+  不提供直接批准路径（IMP-M1）。
+  logged 是终态：--unmeasure-segment 只接受 open / pending_approval 源状态（IMP-C3，
+  维护 I-3「logged 段与 worklogs.ref 一一对应」）。
+  每次写盘前统一执行全局契约与不变量校验：seq_next、logged 段与 ref 一一对应、ref 唯一、
+  段状态与 endAt/worklog 的对应关系（IMP-M6）。
 """
 
 from __future__ import annotations
@@ -40,6 +51,14 @@ WORKLOG_STAGE_RE = re.compile(r"^(\d{2}_\S+|misc)$")
 WORKLOG_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 WORKLOG_ITEM_RE = re.compile(r"^\s*-\s")
 WORKLOG_DEFAULT_INDENT = "  "
+
+# 段状态机（schemas/capsule.schema.json 的 task_segments 条目）。
+SEGMENT_STATES = ("open", "pending_approval", "logged", "unmeasured")
+# 允许显式标记为不计量的源状态（IMP-C3）：logged 已有 worklog，撤段会破坏 I-3。
+UNMEASURABLE_SOURCES = ("open", "pending_approval")
+# 时长门槛按原始分钟判定，先判门槛再取整（方案 §3.3）。
+AUTO_LIMIT_MIN = 480.0      # ≤8h 自动入账
+APPROVAL_LIMIT_MIN = 1440.0  # 8h～24h 待人工批准；>24h 只能修正或拆段
 
 
 class ToolError(Exception):
@@ -75,38 +94,34 @@ def q_minutes(m: float) -> float:
     return max(0.25, steps / 4.0)
 
 
-def _validate_entry(entry: dict) -> list[str]:
-    """用 capsule.schema.json 的 worklogs 条目契约校验单条记录；空列表表示通过。"""
+def _import_validate_schema():
     try:
-        try:
-            from . import validate_schema
-        except ImportError:
-            sys.path.insert(0, str(Path(__file__).resolve().parent))
-            import validate_schema
-        schema = validate_schema.load_schema("capsule")
-    except (ImportError, OSError, ValueError) as exc:
-        raise ToolError(
-            f"❌ 无法读取工时契约 schemas/capsule.schema.json: {exc}\n"
-            "👉 修复建议: 确认 .entropaxis/schemas/capsule.schema.json 存在且为合法 JSON。"
-        ) from exc
-    return validate_schema.validate(entry, schema["properties"]["worklogs"]["items"])
+        from . import validate_schema
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import validate_schema
+    return validate_schema
 
 
-def _validate_segment(segment: dict) -> list[str]:
-    """用 capsule.schema.json 的 task_segments 条目契约校验单条记录；空列表表示通过。"""
+def _capsule_schema() -> dict:
     try:
-        try:
-            from . import validate_schema
-        except ImportError:
-            sys.path.insert(0, str(Path(__file__).resolve().parent))
-            import validate_schema
-        schema = validate_schema.load_schema("capsule")
+        validate_schema = _import_validate_schema()
+        return validate_schema.load_schema("capsule")
     except (ImportError, OSError, ValueError) as exc:
         raise ToolError(
             f"❌ 无法读取契约 schemas/capsule.schema.json: {exc}\n"
             "👉 修复建议: 确认 .entropaxis/schemas/capsule.schema.json 存在且为合法 JSON。"
         ) from exc
-    return validate_schema.validate(segment, schema["properties"]["task_segments"]["items"])
+
+
+def _validate_entry(entry: dict) -> list[str]:
+    """用 capsule.schema.json 的 worklogs 条目契约校验单条记录；空列表表示通过。"""
+    return _import_validate_schema().validate(entry, _capsule_schema()["properties"]["worklogs"]["items"])
+
+
+def _validate_segment(segment: dict) -> list[str]:
+    """用 capsule.schema.json 的 task_segments 条目契约校验单条记录；空列表表示通过。"""
+    return _import_validate_schema().validate(segment, _capsule_schema()["properties"]["task_segments"]["items"])
 
 
 def _default_operator() -> str:
@@ -259,7 +274,155 @@ def derive(capsule: Path, current: str) -> str:
     return target
 
 
+# ---------------------------------------------------------------------------
+# 写前全局契约与不变量校验（IMP-M6）
+# ---------------------------------------------------------------------------
+
+def _invariant_errors(data: dict[str, Any]) -> list[str]:
+    """写盘前统一校验跨集合不变量；空列表表示通过。
+
+    覆盖 I-3（logged 段与 worklogs.ref 一一对应）、ref 唯一性、seq_next 单调性、
+    段状态与 endAt / worklog 的对应关系。schema 只能表达单条目契约，这些跨集合
+    条件必须在这里拦，否则手改或半成品状态会被后续写入继承。
+    """
+    errs: list[str] = []
+    segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
+    worklogs = [w for w in (data.get("worklogs") or []) if isinstance(w, dict)]
+
+    # 1) seq_next 必须大于所有已用序号（段 seq 与 worklog ref 尾部序号共用同一计数器）。
+    used: set[int] = set()
+    for s in segments:
+        try:
+            used.add(int(s.get("seq")))
+        except (TypeError, ValueError):
+            errs.append(f"段 {s.get('seg_id')} 的 seq 非法: {s.get('seq')!r}")
+    for w in worklogs:
+        ref = str(w.get("ref") or "")
+        m = re.search(r"#(\d+)$", ref)
+        if m:
+            used.add(int(m.group(1)))
+    seq_next = data.get("seq_next", 1)
+    if not isinstance(seq_next, int) or isinstance(seq_next, bool) or seq_next < 1:
+        errs.append(f"seq_next 非法: {seq_next!r}（须为 ≥1 的整数）")
+    elif used and seq_next <= max(used):
+        errs.append(
+            f"seq_next ({seq_next}) 小于等于已用最大序号 ({max(used)})；"
+            "检查 capsule.yaml 是否被手工篡改"
+        )
+
+    # 2) ref 唯一。
+    seen_refs: set[str] = set()
+    for w in worklogs:
+        ref = str(w.get("ref") or "")
+        if not ref:
+            continue
+        if ref in seen_refs:
+            errs.append(f"worklog ref 重复: {ref}")
+        seen_refs.add(ref)
+
+    # 3) I-3：logged 段与 worklogs.ref 的映射关系。
+    # 方案 §3.1 I-3/I-4：
+    #   - 每一个 logged 段恰有一条 worklog 的 ref 等于该段 seg_id；
+    #   - 人工补登（--log-time）生成的条目有自己的 ref，但没有对应段（I-4）。
+    logged_ids = [str(s.get("seg_id")) for s in segments if s.get("state") == "logged"]
+    dup_logged = {i for i in logged_ids if logged_ids.count(i) > 1}
+    for seg_id in sorted(dup_logged):
+        errs.append(f"logged 段 seg_id 重复: {seg_id}")
+    for seg_id in logged_ids:
+        if seg_id not in seen_refs:
+            errs.append(f"logged 段 {seg_id} 缺少对应 worklog（I-3 不变量被破坏）")
+
+    # 4) 段状态与 endAt 对应：logged 必须已收尾。
+    for s in segments:
+        if s.get("state") == "logged" and not s.get("endAt"):
+            errs.append(f"logged 段 {s.get('seg_id')} 缺少 endAt")
+    return errs
+
+
+def _check_invariants(data: dict[str, Any]) -> None:
+    """IMP-M6：任一不变量违规即阻断写入，磁盘字节不变。"""
+    errs = _invariant_errors(data)
+    if errs:
+        raise ToolError(
+            "❌ 胶囊数据违反全局不变量，拒绝写入:\n  - " + "\n  - ".join(errs) + "\n"
+            "👉 修复建议: 修正 capsule.yaml 中对应字段（seq_next / task_segments / worklogs）后重试。"
+        )
+
+
+def _now_iso() -> str:
+    return dt.datetime.now(TZ_CST).isoformat()
+
+
+def _find_open_segment(segments: list[dict]) -> dict | None:
+    return next((s for s in segments if s.get("state") == "open"), None)
+
+
+def _touch_open_segment(data: dict[str, Any], at: str | None = None) -> None:
+    """统一活动刷新路径（方案 §3.2 活动生产者）：只改当前 open 段的 lastActivityAt。"""
+    seg = _find_open_segment([s for s in (data.get("task_segments") or []) if isinstance(s, dict)])
+    if seg is not None:
+        seg["lastActivityAt"] = normalize_to_cst(at).isoformat() if at else _now_iso()
+
+
+def _segment_duration_minutes(seg: dict, *, default_end: dt.datetime | None = None) -> float:
+    start_dt = normalize_to_cst(seg["startAt"])
+    if seg.get("endAt"):
+        end_dt = normalize_to_cst(seg["endAt"])
+    elif default_end is not None:
+        end_dt = default_end
+    else:
+        end_dt = dt.datetime.now(TZ_CST)
+    minutes = (end_dt - start_dt).total_seconds() / 60.0
+    if minutes <= 0:
+        raise ToolError(
+            f"❌ 结束时间早于或等于开始时间: start={start_dt.isoformat()}, end={end_dt.isoformat()}"
+        )
+    return minutes
+
+
+def _close_segment(capsule: Path, data: dict[str, Any], seg: dict, end_dt: dt.datetime,
+                   trigger: str) -> dict | None:
+    """给未收尾段补 endAt/lastActivityAt 并按 §3.3 结算，返回新 worklog（若有）。"""
+    start_dt = normalize_to_cst(seg["startAt"])
+    seg["endAt"] = end_dt.isoformat()
+    seg["lastActivityAt"] = end_dt.isoformat()
+    seg["trigger"] = trigger
+    return _settle_segment(capsule, data, seg, (end_dt - start_dt).total_seconds() / 60.0)
+
+
+def _settle_segment(capsule: Path, data: dict[str, Any], seg: dict, minutes: float) -> dict | None:
+    """按原始时长把已收尾段结算为 logged / pending_approval，返回新 worklog（若有）。
+
+    门槛按原始分钟判定，先判门槛再取整（方案 §3.3）：481 分钟不能因取整成 8h 而绕过待批。
+    """
+    if minutes <= AUTO_LIMIT_MIN:
+        seg["state"] = "logged"
+        spent = q_minutes(minutes)
+        stage = seg.get("stage") or _default_stage(capsule)[0]
+        operator = _default_operator()
+        entry = {
+            "date": normalize_to_cst(seg["startAt"]).strftime("%Y-%m-%d"),
+            "stage": stage,
+            "spent": spent,
+            "summary": f"{seg['name']}（自动计量入账）"[:120],
+            "operator": operator,
+            "ref": seg["seg_id"],
+        }
+        worklogs = data.get("worklogs") or []
+        worklogs.append(entry)
+        data["worklogs"] = worklogs
+        return entry
+    if minutes <= APPROVAL_LIMIT_MIN:
+        seg["state"] = "pending_approval"
+        seg["note"] = (seg.get("note") or "") + " 超过 8h"
+        return None
+    seg["state"] = "pending_approval"
+    seg["note"] = (seg.get("note") or "") + " 超过 24h，须拆段"
+    return None
+
+
 def update_capsule(capsule_dir: str, *, delivered: str | None = None, dry_run: bool = False) -> dict:
+    """推进 lifecycle。段结算、worklogs 追加与 lifecycle 变化在同一数据对象上完成后一次原子写入（IMP-C1）。"""
     capsule = Path(capsule_dir).expanduser().resolve()
     manifest = capsule / "capsule.yaml"
     if not manifest.is_file():
@@ -283,9 +446,11 @@ def update_capsule(capsule_dir: str, *, delivered: str | None = None, dry_run: b
                        review_due_at=(day + timedelta(days=REVIEW_DAYS)).isoformat(),
                        closure_deadline=(day + timedelta(days=CLOSURE_DAYS)).isoformat())
 
+    data, orig_text = _load_capsule_data(capsule)
+
     # 方案 3.4 归档门禁检查: 进入 archived 前，胶囊不得有 open 或 pending_approval 段
     if target == "archived":
-        segs = read_segments(capsule)
+        segs = data.get("task_segments") or []
         blockers = [s["seg_id"] for s in segs if s.get("state") in ("open", "pending_approval")]
         if blockers:
             raise ToolError(
@@ -293,35 +458,48 @@ def update_capsule(capsule_dir: str, *, delivered: str | None = None, dry_run: b
                 "👉 修复建议: 请先收尾 open 段，并对待批段执行 --approve-segment 或 --unmeasure-segment 后再归档。"
             )
 
+    worklog_refs: list[str] = []
+    # 本调用是否改动了段/worklog：有改动时必须连同 lifecycle 一起写整份数据对象，
+    # 绝不能用旧全文覆盖已落盘的段结算（IMP-C1）。
+    mutated = False
+
+    # --delivered 是一个收尾信号：在同一数据对象内自动收尾 open 段（IMP-C1）。
+    if delivered is not None:
+        open_seg = _find_open_segment([s for s in (data.get("task_segments") or []) if isinstance(s, dict)])
+        if open_seg is not None:
+            end_dt = normalize_to_cst(open_seg["endAt"]) if open_seg.get("endAt") else dt.datetime.now(TZ_CST)
+            entry = _close_segment(capsule, data, open_seg, end_dt, "delivered")
+            if entry is not None:
+                worklog_refs.append(open_seg["seg_id"])
+            mutated = True
+
     # 方案 3.4 archived-unmeasured 自动结转: 遗留的 open / pending_approval 段自动转为 unmeasured
-    data, orig_text = _load_capsule_data(capsule)
     if target == "archived-unmeasured":
-        segs = data.get("task_segments") or []
-        mutated_segs = False
-        for s in segs:
+        for s in data.get("task_segments") or []:
             if s.get("state") in ("open", "pending_approval"):
                 s["state"] = "unmeasured"
                 s["note"] = (s.get("note") or "") + " 随 archived-unmeasured 不计量"
-                mutated_segs = True
-        if mutated_segs and not dry_run:
-            data["task_segments"] = segs
-            _save_capsule_yaml(capsule, data, orig_text)
-
-    # 如果有由 delivered 触发自动收尾 open 段
-    if delivered is not None:
-        segs = data.get("task_segments") or []
-        for s in segs:
-            if s.get("state") == "open":
-                # 自动收尾
-                end_task(capsule, trigger="delivered", dry_run=dry_run)
-                break
+                mutated = True
 
     if target != current:
         changes["lifecycle"] = target
 
-    result = {"capsule": str(capsule), "from": current, "to": target, "changes": changes, "dry_run": dry_run}
+    result = {"capsule": str(capsule), "from": current, "to": target, "changes": changes,
+              "dry_run": dry_run, "worklog_refs": worklog_refs}
     if not changes or dry_run:
         return result
+
+    if mutated:
+        # 唯一一次写盘：段变化、worklogs 与 lifecycle 一并原子落盘。
+        data["lifecycle"] = target
+        for key, value in changes.items():
+            if key != "lifecycle":
+                data[key] = value
+        _check_invariants(data)
+        _save_capsule_yaml(capsule, data, orig_text)
+        return result
+
+    # 纯 lifecycle 推进：保留注释与其余内容的定点替换。
     new = text
     for k, v in changes.items():
         new = _set_key(new, k, v)
@@ -369,7 +547,10 @@ def start_task(capsule_dir: str | Path, name: str, task_id: str | None = None, s
     if current in TERMINAL:
         raise ToolError(f"❌ 胶囊已是终态 {current}，不能再开启任务段。")
 
-    segments = data.get("task_segments") or []
+    # IMP-M6：写前全局不变量校验，手改/损坏状态不得被新写入继承。
+    _check_invariants(data)
+
+    segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
     open_segs = [s for s in segments if s.get("state") == "open"]
     if open_segs:
         raise ToolError(
@@ -408,6 +589,7 @@ def start_task(capsule_dir: str | Path, name: str, task_id: str | None = None, s
     data["task_segments"] = segments
 
     if not dry_run:
+        _check_invariants(data)
         _save_capsule_yaml(capsule, data, text)
 
     return {
@@ -423,8 +605,8 @@ def touch_task(capsule_dir: str | Path, at: str | None = None, dry_run: bool = F
     """刷新进行中任务段的 lastActivityAt。"""
     capsule = Path(capsule_dir).expanduser().resolve()
     data, text = _load_capsule_data(capsule)
-    segments = data.get("task_segments") or []
-    open_seg = next((s for s in segments if s.get("state") == "open"), None)
+    segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
+    open_seg = _find_open_segment(segments)
     if not open_seg:
         return {"capsule": str(capsule), "status": "no_open_segment", "dry_run": dry_run}
 
@@ -445,10 +627,19 @@ def end_task(capsule_dir: str | Path, trigger: str = "deliver", at: str | None =
     if current in TERMINAL:
         raise ToolError(f"❌ 胶囊已是终态 {current}，不能再收尾任务段。")
 
-    segments = data.get("task_segments") or []
-    open_seg = next((s for s in segments if s.get("state") == "open"), None)
+    _check_invariants(data)
+
+    segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
+    open_seg = _find_open_segment(segments)
     if not open_seg:
         raise ToolError("❌ 胶囊当前没有进行中的 open 任务段，无需收尾。")
+
+    # IMP-M2：中断回填必须说明证据，否则可用过期 lastActivityAt 冒充事实。
+    if inferred and not (evidence and str(evidence).strip()):
+        raise ToolError(
+            "❌ --inferred 中断回填必须附 --evidence <说明>\n"
+            "👉 修复建议: 补一条可核实的证据（如「会话中断于 10-15 18:00，提交 3f2a91c」）后重试。"
+        )
 
     start_dt = normalize_to_cst(open_seg["startAt"])
     if inferred and not at:
@@ -462,49 +653,21 @@ def end_task(capsule_dir: str | Path, trigger: str = "deliver", at: str | None =
     if duration_m <= 0:
         raise ToolError(f"❌ 结束时间早于或等于开始时间: start={start_dt.isoformat()}, end={end_dt.isoformat()}")
 
-    work_date = start_dt.strftime("%Y-%m-%d")
     open_seg["endAt"] = end_dt.isoformat()
     open_seg["lastActivityAt"] = end_dt.isoformat()
     open_seg["trigger"] = trigger
     if inferred:
         open_seg["inferred"] = True
     if evidence:
-        open_seg["evidence"] = evidence
+        open_seg["evidence"] = str(evidence).strip()
     if note:
         open_seg["note"] = note
 
-    worklog_refs = []
-    new_worklog = None
-
-    if duration_m <= 480.0:
-        # ≤ 8h 自动入账
-        open_seg["state"] = "logged"
-        spent = q_minutes(duration_m)
-        stage = open_seg.get("stage") or _default_stage(capsule)[0]
-        operator = _default_operator()
-        summary = f"{open_seg['name']}（自动计量入账）"
-        new_worklog = {
-            "date": work_date,
-            "stage": stage,
-            "spent": spent,
-            "summary": summary[:120],
-            "operator": operator,
-            "ref": open_seg["seg_id"],
-        }
-        worklogs = data.get("worklogs") or []
-        worklogs.append(new_worklog)
-        data["worklogs"] = worklogs
-        worklog_refs.append(open_seg["seg_id"])
-    elif duration_m <= 1440.0:
-        # 8h ~ 24h: 待批准
-        open_seg["state"] = "pending_approval"
-        open_seg["note"] = (open_seg.get("note") or "") + " 超过 8h"
-    else:
-        # > 24h: 异常，不可直接批准
-        open_seg["state"] = "pending_approval"
-        open_seg["note"] = (open_seg.get("note") or "") + " 超过 24h，须拆段"
+    new_worklog = _settle_segment(capsule, data, open_seg, duration_m)
+    worklog_refs = [open_seg["seg_id"]] if new_worklog is not None else []
 
     if not dry_run:
+        _check_invariants(data)
         _save_capsule_yaml(capsule, data, text)
 
     return {
@@ -525,31 +688,33 @@ def approve_segment(capsule_dir: str | Path, seg_id: str, dry_run: bool = False)
     if current in TERMINAL:
         raise ToolError(f"❌ 胶囊已是终态 {current}，不能再批准任务段。")
 
-    segments = data.get("task_segments") or []
+    _check_invariants(data)
+
+    segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
     target_seg = next((s for s in segments if s.get("seg_id") == seg_id), None)
     if not target_seg:
         raise ToolError(f"❌ 未找到任务段: {seg_id}")
     if target_seg.get("state") != "pending_approval":
         raise ToolError(f"❌ 任务段 {seg_id} 状态为 {target_seg.get('state')}，不是 pending_approval，无需批准。")
 
-    start_dt = normalize_to_cst(target_seg["startAt"])
-    end_dt = normalize_to_cst(target_seg["endAt"])
-    duration_m = (end_dt - start_dt).total_seconds() / 60.0
-    if duration_m > 1440.0:
-        raise ToolError(f"❌ 任务段 {seg_id} 原始时长 > 24h ({duration_m:.1f}m)，禁止直接批准；须修正时间或拆段。")
+    duration_m = _segment_duration_minutes(target_seg)
+    if duration_m > APPROVAL_LIMIT_MIN:
+        raise ToolError(
+            f"❌ 任务段 {seg_id} 原始时长 > 24h ({duration_m:.1f}m)，禁止直接批准；\n"
+            "👉 修复建议: 用 --fix-segment 修正结束时间，或用 --split-segment --at <iso> 按时刻拆段。"
+        )
 
     target_seg["state"] = "logged"
     spent = q_minutes(duration_m)
     stage = target_seg.get("stage") or _default_stage(capsule)[0]
     operator = _default_operator()
-    summary = f"{target_seg['name']}（人工批准入账）"
-    work_date = start_dt.strftime("%Y-%m-%d")
+    work_date = normalize_to_cst(target_seg["startAt"]).strftime("%Y-%m-%d")
 
     entry = {
         "date": work_date,
         "stage": stage,
         "spent": spent,
-        "summary": summary[:120],
+        "summary": f"{target_seg['name']}（人工批准入账）"[:120],
         "operator": operator,
         "ref": target_seg["seg_id"],
     }
@@ -558,6 +723,7 @@ def approve_segment(capsule_dir: str | Path, seg_id: str, dry_run: bool = False)
     data["worklogs"] = worklogs
 
     if not dry_run:
+        _check_invariants(data)
         _save_capsule_yaml(capsule, data, text)
 
     return {
@@ -571,18 +737,177 @@ def approve_segment(capsule_dir: str | Path, seg_id: str, dry_run: bool = False)
 
 
 def unmeasure_segment(capsule_dir: str | Path, seg_id: str, reason: str, dry_run: bool = False) -> dict:
-    """显式将待批段标记为不计量。"""
+    """显式将待批段标记为不计量。
+
+    IMP-C3：只接受 open / pending_approval 源状态。logged 是终态且已有对应 worklog，
+    撤段会破坏 I-3（logged 段与 worklogs.ref 一一对应）；已入账调整走 --override。
+    """
     capsule = Path(capsule_dir).expanduser().resolve()
     data, text = _load_capsule_data(capsule)
-    segments = data.get("task_segments") or []
+    current = _read_key(text, "lifecycle") or "draft"
+    if current in TERMINAL:
+        raise ToolError(f"❌ 胶囊已是终态 {current}，不能再修改任务段。")
+
+    segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
     target_seg = next((s for s in segments if s.get("seg_id") == seg_id), None)
     if not target_seg:
         raise ToolError(f"❌ 未找到任务段: {seg_id}")
+    state = target_seg.get("state")
+    if state not in UNMEASURABLE_SOURCES:
+        raise ToolError(
+            f"❌ 任务段 {seg_id} 状态为 {state}，不能标记为不计量"
+            f"（只接受 {' / '.join(UNMEASURABLE_SOURCES)}）\n"
+            "👉 修复建议: 已入账（logged）段请用 --override 调整工时，不改段状态；unmeasured 已是终态。"
+        )
     target_seg["state"] = "unmeasured"
     target_seg["note"] = f"不计量: {reason}"
     if not dry_run:
+        _check_invariants(data)
         _save_capsule_yaml(capsule, data, text)
     return {"capsule": str(capsule), "status": "unmeasured", "segment": target_seg, "dry_run": dry_run}
+
+
+def fix_segment(capsule_dir: str | Path, seg_id: str, end_at: str, dry_run: bool = False) -> dict:
+    """IMP-M1：修正 >24h 异常段的结束时间，随后按新时长重新结算。
+
+    段必须处于 open / pending_approval；logged / unmeasured 是终态，改结束时间会与
+    已落账事实冲突。
+    """
+    capsule = Path(capsule_dir).expanduser().resolve()
+    data, text = _load_capsule_data(capsule)
+    current = _read_key(text, "lifecycle") or "draft"
+    if current in TERMINAL:
+        raise ToolError(f"❌ 胶囊已是终态 {current}，不能再修正任务段。")
+
+    _check_invariants(data)
+
+    segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
+    target_seg = next((s for s in segments if s.get("seg_id") == seg_id), None)
+    if not target_seg:
+        raise ToolError(f"❌ 未找到任务段: {seg_id}")
+    if target_seg.get("state") not in ("open", "pending_approval"):
+        raise ToolError(
+            f"❌ 任务段 {seg_id} 状态为 {target_seg.get('state')}，不能修正结束时间\n"
+            "👉 修复建议: 只接受 open / pending_approval；已入账段请用 --override 调整工时。"
+        )
+
+    end_dt = normalize_to_cst(end_at)
+    start_dt = normalize_to_cst(target_seg["startAt"])
+    if end_dt <= start_dt:
+        raise ToolError(
+            f"❌ 修正后的结束时间必须晚于开始时间: start={start_dt.isoformat()}, end={end_dt.isoformat()}\n"
+            "👉 修复建议: 结束时间须落在段开始之后；要按时刻拆段请用 --split-segment。"
+        )
+
+    target_seg["endAt"] = end_dt.isoformat()
+    target_seg["lastActivityAt"] = end_dt.isoformat()
+    target_seg["note"] = (target_seg.get("note") or "").strip()
+    entry = _settle_segment(capsule, data, target_seg, (end_dt - start_dt).total_seconds() / 60.0)
+
+    if not dry_run:
+        _check_invariants(data)
+        _save_capsule_yaml(capsule, data, text)
+
+    return {
+        "capsule": str(capsule),
+        "status": "fixed",
+        "segment": target_seg,
+        "entry": entry,
+        "worklog_refs": [seg_id] if entry is not None else [],
+        "dry_run": dry_run,
+    }
+
+
+def split_segment(capsule_dir: str | Path, seg_id: str, at: list[str], dry_run: bool = False) -> dict:
+    """IMP-M1：把 >24h 异常段按给定时刻拆成连续子段。
+
+    原段保留事实并转 unmeasured（note 记录去向），每个子段从同一 seq_next 分配新 seq，
+    逐个按 §3.3 规则结算（≤8h 自动入账 / 8～24h 待批 / >24h 仍待拆）。
+    """
+    capsule = Path(capsule_dir).expanduser().resolve()
+    data, text = _load_capsule_data(capsule)
+    current = _read_key(text, "lifecycle") or "draft"
+    if current in TERMINAL:
+        raise ToolError(f"❌ 胶囊已是终态 {current}，不能再拆分任务段。")
+
+    _check_invariants(data)
+
+    if not at:
+        raise ToolError("❌ --split-segment 必须至少给一个 --at <ISO 时刻>")
+
+    segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
+    target_seg = next((s for s in segments if s.get("seg_id") == seg_id), None)
+    if not target_seg:
+        raise ToolError(f"❌ 未找到任务段: {seg_id}")
+    if target_seg.get("state") not in ("open", "pending_approval"):
+        raise ToolError(
+            f"❌ 任务段 {seg_id} 状态为 {target_seg.get('state')}，不能拆分\n"
+            "👉 修复建议: 只接受 open / pending_approval；已入账段请用 --override 调整工时。"
+        )
+
+    start_dt = normalize_to_cst(target_seg["startAt"])
+    end_dt = normalize_to_cst(target_seg["endAt"]) if target_seg.get("endAt") else dt.datetime.now(TZ_CST)
+    if end_dt <= start_dt:
+        raise ToolError(f"❌ 任务段 {seg_id} 结束时间不晚于开始时间，无法拆分")
+
+    cuts = sorted({normalize_to_cst(x) for x in at})
+    if len({c.isoformat() for c in cuts}) != len(cuts):
+        raise ToolError("❌ --at 时刻重复，请给互不相同的拆分点")
+    bounds = [start_dt, *cuts, end_dt]
+    for prev, nxt in zip(bounds, bounds[1:]):
+        if nxt <= prev:
+            raise ToolError(
+                f"❌ 拆分时刻必须严格位于段内且递增: {prev.isoformat()} → {nxt.isoformat()}\n"
+                "👉 修复建议: 所有 --at 须落在 startAt 与 endAt 之间。"
+            )
+
+    cid = _capsule_id(capsule, text)
+    new_segments: list[dict] = []
+    new_entries: list[dict] = []
+    for i, (seg_start, seg_end) in enumerate(zip(bounds, bounds[1:]), start=1):
+        allocated_seq, _ = _alloc_seq(data)
+        part = {
+            "seq": allocated_seq,
+            "seg_id": f"{cid}#{allocated_seq}",
+            "name": f"{target_seg['name']}（拆分 {i}/{len(bounds) - 1}）",
+            "startAt": seg_start.isoformat(),
+            "lastActivityAt": seg_end.isoformat(),
+            "endAt": seg_end.isoformat(),
+            "state": "open",
+            "trigger": "switch",
+            "note": f"由 {seg_id} 于 {seg_start.isoformat()} 拆分而来",
+        }
+        for key in ("taskId", "stage"):
+            if target_seg.get(key):
+                part[key] = target_seg[key]
+        entry = _settle_segment(capsule, data, part, (seg_end - seg_start).total_seconds() / 60.0)
+        errs = _validate_segment(part)
+        if errs:
+            raise ToolError(f"❌ 拆分段数据契约校验失败: {'；'.join(errs)}")
+        new_segments.append(part)
+        if entry is not None:
+            new_entries.append(entry)
+
+    # 原段保留事实并显式留痕去向（方案 §3.4：拆段后的原段为 unmeasured 终态）。
+    target_seg["state"] = "unmeasured"
+    target_seg["note"] = (f"不计量: 超过 24h 已拆分为 "
+                          + ", ".join(s["seg_id"] for s in new_segments))
+
+    data["task_segments"] = [*segments, *new_segments]
+
+    if not dry_run:
+        _check_invariants(data)
+        _save_capsule_yaml(capsule, data, text)
+
+    return {
+        "capsule": str(capsule),
+        "status": "split",
+        "segment": target_seg,
+        "segments": new_segments,
+        "entries": new_entries,
+        "worklog_refs": [e["ref"] for e in new_entries],
+        "dry_run": dry_run,
+    }
 
 
 def override_worklog(capsule_dir: str | Path, ref: str, spent: float | None = None,
@@ -594,7 +919,9 @@ def override_worklog(capsule_dir: str | Path, ref: str, spent: float | None = No
     if current in TERMINAL:
         raise ToolError(f"❌ 胶囊已是终态 {current}，不能再覆盖工时。")
 
-    worklogs = data.get("worklogs") or []
+    _check_invariants(data)
+
+    worklogs = [w for w in (data.get("worklogs") or []) if isinstance(w, dict)]
     target_log = next((w for w in worklogs if w.get("ref") == ref), None)
     if not target_log:
         raise ToolError(f"❌ 未找到 ref 为 {ref} 的工时条目。")
@@ -622,7 +949,12 @@ def override_worklog(capsule_dir: str | Path, ref: str, spent: float | None = No
     if errs:
         raise ToolError(f"❌ 覆盖后工时条目不合法: {'；'.join(errs)}")
 
+    # IMP-M2：覆盖是活动事件，同步刷新当前 open 段的 lastActivityAt。
+    _touch_open_segment(data)
+
+    data["worklogs"] = worklogs
     if not dry_run:
+        _check_invariants(data)
         _save_capsule_yaml(capsule, data, text)
 
     return {
@@ -647,6 +979,8 @@ def log_time(capsule_dir: str | Path, spent: float, stage: str | None = None, su
             f"❌ 胶囊已是终态 {current}，不能再登记工时\n"
             f"👉 修复建议: 工时只记进行中的事务；如需补记请先把 lifecycle 改回 active。"
         )
+
+    _check_invariants(data)
 
     stage_from = "arg"
     if stage is None:
@@ -693,7 +1027,7 @@ def log_time(capsule_dir: str | Path, spent: float, stage: str | None = None, su
     if errs:
         raise ToolError(f"❌ 工时条目不符合 schemas/capsule.schema.json: {'；'.join(errs)}")
 
-    existing = data.get("worklogs") or []
+    existing = [w for w in (data.get("worklogs") or []) if isinstance(w, dict)]
     for item in existing:
         match = (
             item.get("date") == entry["date"]
@@ -720,12 +1054,10 @@ def log_time(capsule_dir: str | Path, spent: float, stage: str | None = None, su
     data["worklogs"] = existing
 
     # 同时刷新当前 open 段的 lastActivityAt（活动事件）
-    for s in (data.get("task_segments") or []):
-        if s.get("state") == "open":
-            s["lastActivityAt"] = dt.datetime.now(TZ_CST).isoformat()
-            break
+    _touch_open_segment(data)
 
     if not dry_run:
+        _check_invariants(data)
         _save_capsule_yaml(capsule, data, text)
 
     return {
@@ -777,6 +1109,9 @@ def main() -> int:
     parser.add_argument("--approve-segment", metavar="SEG_ID", help="人工批准 >8h 且 ≤24h 的任务段入账")
     parser.add_argument("--unmeasure-segment", metavar="SEG_ID", help="将待批段标记为不计量")
     parser.add_argument("--reason", help="不计量原因")
+    parser.add_argument("--fix-segment", metavar="SEG_ID", help="修正任务段结束时间（须配 --end-at）")
+    parser.add_argument("--end-at", metavar="ISO", help="--fix-segment 使用的修正结束时间")
+    parser.add_argument("--split-segment", metavar="SEG_ID", help="按 --at 时刻拆分任务段（可多次）")
     parser.add_argument("--override", metavar="REF", help="人工覆盖指定 ref 的工时条目")
     parser.add_argument("--spent", type=float, help="覆盖后的工时数")
 
@@ -802,6 +1137,14 @@ def main() -> int:
             if not args.reason:
                 raise ToolError("❌ --unmeasure-segment 必须指定 --reason <原因>")
             res = unmeasure_segment(args.capsule, seg_id=args.unmeasure_segment, reason=args.reason, dry_run=args.dry_run)
+        elif args.fix_segment:
+            if not args.end_at:
+                raise ToolError("❌ --fix-segment 必须指定 --end-at <ISO 时刻>")
+            res = fix_segment(args.capsule, seg_id=args.fix_segment, end_at=args.end_at, dry_run=args.dry_run)
+        elif args.split_segment:
+            if not args.at:
+                raise ToolError("❌ --split-segment 必须指定至少一个 --at <ISO 时刻>")
+            res = split_segment(args.capsule, seg_id=args.split_segment, at=[args.at], dry_run=args.dry_run)
         elif args.override:
             res = override_worklog(args.capsule, ref=args.override, spent=args.spent, summary=args.summary, dry_run=args.dry_run)
         elif args.log_time is not None:
@@ -829,6 +1172,16 @@ def main() -> int:
                 print(f"{prefix}任务段收尾: {seg['seg_id']} [{seg['state']}] ({seg.get('note') or '待审批'})")
         elif status == "approved":
             print(f"{prefix}任务段批准入账: {res['segment']['seg_id']} -> {res['entry']['spent']}h")
+        elif status == "fixed":
+            seg = res["segment"]
+            ent = res.get("entry")
+            if ent:
+                print(f"{prefix}任务段时间已修正并入账: {seg['seg_id']} [{seg['state']}] {ent['spent']}h")
+            else:
+                print(f"{prefix}任务段时间已修正: {seg['seg_id']} [{seg['state']}] ({seg.get('note') or '待审批'})")
+        elif status == "split":
+            parts = ", ".join(f"{s['seg_id']}[{s['state']}]" for s in res["segments"])
+            print(f"{prefix}任务段已拆分: {res['segment']['seg_id']} -> {parts}")
         elif status == "overridden":
             print(f"{prefix}已覆盖工时: {res['entry']['ref']} -> {res['entry']['spent']}h")
         elif status == "touched":

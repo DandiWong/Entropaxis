@@ -167,35 +167,86 @@ def update_task_entry(text: str, task_id: str, *, mark_done: bool = False, hours
 
 
 def find_capsule_for_task(root: Path, task_id: str, explicit: str | None = None) -> Path | None:
+    """定位写入用工时胶囊（显式目录优先，否则唯一顶层 id 命中的胶囊）。
+
+    注意：这只回答「工时记到哪个胶囊」。一个工程任务的段可以跨多个胶囊，
+    收尾汇总必须用 collect_task_segments() 做全域扫描，不能用本函数的单点结果。
+    """
     if explicit:
         p = Path(explicit).expanduser().resolve()
         if (p / "capsule.yaml").is_file():
             return p
         raise IterationError(f"❌ 指定的胶囊目录不存在 capsule.yaml: {explicit}")
+    capsules = scan_capsules(root)
+    candidates = [c for c in capsules if (c.get("id") or "") == task_id]
+    if len(candidates) == 1:
+        return candidates[0]["dir"]
+    if len(candidates) > 1:
+        raise IterationError(
+            f"❌ 多个胶囊命中同一 Task ID {task_id}: {[str(c['dir']) for c in candidates]}\n"
+            "👉 修复建议: 用 --capsule 显式指定。"
+        )
+    return None
+
+
+def scan_capsules(root: Path) -> list[dict]:
+    """枚举项目范围内全部胶囊（控制面 data/docs + 各项目 docs），不分 lifecycle。
+
+    IMP-C2：收尾汇总的事实来源必须是全域胶囊，不是顶层 id 相同的单个胶囊。
+    """
     ws_root = root
     for p in [root, *root.parents]:
         if (p / ".entropaxis").is_dir():
             ws_root = p
             break
-    candidates = []
     search_dirs = [ws_root / ".entropaxis" / "data" / "docs"]
     if (root / "docs").is_dir():
         search_dirs.append(root / "docs")
+    # 注册表内项目的自有 docs（含嵌套子项目），与控制面 docs 并成同一扫描全集。
+    try:
+        import project_registry
+        for proj in project_registry.load_projects(ws_root):
+            docs = ws_root / str(proj.get("path", "")).strip("/") / "docs"
+            if docs.is_dir() and docs not in search_dirs:
+                search_dirs.append(docs)
+    except Exception:  # noqa: BLE001 - 注册表缺失/不可读时退回控制面 + 当前项目两级
+        pass
+    capsules: list[dict] = []
+    seen: set[Path] = set()
     for d in search_dirs:
-        if d.is_dir():
-            for cap in d.rglob("capsule.yaml"):
-                try:
-                    for l in cap.read_text(encoding="utf-8").splitlines():
-                        if l.startswith("id:") and l.split(":", 1)[1].strip() == task_id:
-                            candidates.append(cap.parent)
-                            break
-                except OSError:
-                    pass
-    if len(candidates) == 1:
-        return candidates[0]
-    if len(candidates) > 1:
-        raise IterationError(f"❌ 多个胶囊命中同一 Task ID {task_id}: {[str(c) for c in candidates]}\n👉 修复建议: 用 --capsule 显式指定。")
-    return None
+        if not d.is_dir():
+            continue
+        for manifest in sorted(d.rglob("capsule.yaml")):
+            cap_dir = manifest.parent
+            if cap_dir in seen:
+                continue
+            seen.add(cap_dir)
+            data: dict = {}
+            try:
+                import yaml
+                data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+            except Exception:  # noqa: BLE001 - 单份损坏清单不阻断其余胶囊扫描
+                data = {}
+            capsules.append({"dir": cap_dir, "data": data})
+    return capsules
+
+
+def collect_task_segments(root: Path, task_id: str) -> list[dict]:
+    """全域收集挂在 task_id 下的任务段（IMP-C2）。
+
+    返回元素含 segment、capsule_dir、capsule_id；同一 taskId 可跨多个胶囊。
+    """
+    found: list[dict] = []
+    for cap in scan_capsules(root):
+        cid = cap["data"].get("id") or cap["dir"].name
+        for seg in cap["data"].get("task_segments") or []:
+            if isinstance(seg, dict) and seg.get("taskId") == task_id:
+                found.append({
+                    "segment": seg,
+                    "capsule_dir": cap["dir"],
+                    "capsule_id": cid,
+                })
+    return found
 
 def atomic_write(path: Path, content: str) -> None:
     with tempfile.TemporaryDirectory(dir=path.parent) as tmp:
@@ -244,38 +295,55 @@ def main() -> int:
 
         capsule_dir = None
         total_hours = None
-        if args.time is not None or args.from_segments:
+        if args.time is not None:
             capsule_dir = find_capsule_for_task(root, args.task_id, args.capsule)
 
         if args.from_segments:
-            if not capsule_dir:
-                raise IterationError(f"❌ 无法执行 --from-segments: 未找到任务 {args.task_id} 对应的胶囊。")
-            segs = update_capsule.read_segments(capsule_dir)
-            matched_segs = [s for s in segs if s.get("taskId") == args.task_id]
-            # 校验 open 段
-            open_s = [s for s in matched_segs if s.get("state") == "open"]
+            # IMP-C2：先收齐全域胶囊中挂在 task_id 下的所有段，再做判定与求和。
+            matched = collect_task_segments(root, args.task_id)
+            if not matched:
+                raise IterationError(
+                    f"❌ 无法执行 --from-segments: 未找到任务 {args.task_id} 对应的任务段。\n"
+                    "👉 修复建议: 确认已用 update_capsule.py --start-task --task-id "
+                    f"{args.task_id} 开段；或该任务没有段，改用 --time 登记。"
+                )
+            # open 段拦截：任一胶囊存在该 taskId 的 open 段即拒绝收尾汇总。
+            open_s = [m["segment"] for m in matched if m["segment"].get("state") == "open"]
             if open_s:
                 raise IterationError(
                     f"❌ 任务 {args.task_id} 存在未收尾的 open 任务段: {[s['seg_id'] for s in open_s]}\n"
                     "👉 修复建议: 请先收尾任务段（update_capsule.py --end-task），再执行收尾汇总。"
                 )
-            # 告警 pending_approval 段
-            pending_s = [s for s in matched_segs if s.get("state") == "pending_approval"]
+            # pending_approval 段告警且不计入。
+            pending_s = [m["segment"] for m in matched if m["segment"].get("state") == "pending_approval"]
             if pending_s:
                 print(f"⚠️ 警告: 任务 {args.task_id} 存在待审批任务段: {[s['seg_id'] for s in pending_s]}，暂不计入本次汇总", file=sys.stderr)
 
-            # 按 logged 段关联 worklogs 的有效 spent 求和
-            logged_ids = {s["seg_id"] for s in matched_segs if s.get("state") == "logged"}
-            worklogs = update_capsule.read_worklogs(capsule_dir)
-            total_hours = sum(float(w.get("spent", 0)) for w in worklogs if w.get("ref") in logged_ids)
+            # 跨胶囊求和：logged 段 seg_id → 所属胶囊 worklogs 的当前有效 spent。
+            logged_by_capsule: dict[Path, set[str]] = {}
+            for m in matched:
+                if m["segment"].get("state") == "logged":
+                    logged_by_capsule.setdefault(m["capsule_dir"], set()).add(m["segment"]["seg_id"])
+            total_hours = 0.0
+            for cap_dir, seg_ids in logged_by_capsule.items():
+                for w in update_capsule.read_worklogs(cap_dir):
+                    if w.get("ref") in seg_ids:
+                        try:
+                            total_hours += float(w.get("spent", 0))
+                        except (TypeError, ValueError):
+                            continue
+            changes.append({"file": "跨胶囊全域扫描", "changed": True,
+                            "note": (f"汇总 {len(matched)} 个任务段（logged {sum(len(v) for v in logged_by_capsule.values())}）"
+                                     f"，有效工时 {total_hours}h")})
 
         if args.time is not None:
+            # IMP-C2：跨胶囊已有该 taskId 的段时，--time 同样拦截，防止双计。
+            existing_segments = collect_task_segments(root, args.task_id)
+            if existing_segments:
+                raise IterationError(
+                    f"❌ 任务 {args.task_id} 已包含任务段，禁止使用 --time；请使用 --from-segments 进行收尾汇总。"
+                )
             if capsule_dir:
-                # 检查该任务是否已有任务段，若有则拦截 --time
-                segs = update_capsule.read_segments(capsule_dir)
-                if any(s.get("taskId") == args.task_id for s in segs):
-                    raise IterationError(f"❌ 任务 {args.task_id} 已包含任务段，禁止使用 --time；请使用 --from-segments 进行收尾汇总。")
-
                 summary = args.add[1] if args.add else f"完成 {args.task_id}"
                 res = update_capsule.log_time(capsule_dir, spent=args.time, stage=args.stage,
                                               summary=summary, dry_run=args.dry_run, idempotent=True)
