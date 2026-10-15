@@ -1,9 +1,9 @@
 ---
 name: token-optimizer
-description: "v1.0.0. Analyzes, audits, and refactors rules, skills, tools, and prompts for token efficiency, minimum syntax tax, and high information density. Used when optimizing context overhead, restructuring verbose markdown tables into compact key-values, slimming down system rules, evaluating token ROI, or reducing prompt costs across the workspace."
+description: "v1.0.1. 审计并压缩规则、Skill、工具与提示词的 Token 开销：语法税扫描、表格改键值行、规则瘦身、Token ROI 评估。触发词：token 经济性检查、token 优化、语法税、规则瘦身、降低上下文开销。"
 metadata:
   scope: control-plane
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Token 经济性与语法税优化套件 (Token Optimizer)

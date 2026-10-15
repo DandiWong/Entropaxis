@@ -2,6 +2,11 @@
 
 本文件记录 `invoice-collector` Skill 的所有显著变更，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.1.2] - 2026-10-16
+### Changed
+- 压缩 description 至 ≤250 字符，只保留能力一句与触发词，降低常驻元数据开销。
+- 正文表格改为键值行，去除表格语法税。
+
 ## [2.1.1] - 2026-10-06
 
 ### Changed

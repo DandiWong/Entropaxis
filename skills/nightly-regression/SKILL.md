@@ -1,9 +1,9 @@
 ---
 name: nightly-regression
-description: "v1.1.0. Entropaxis 控制面 nightly 回归编排执行体。当用户说「nightly」「夜间回归」「每晚跑测试」「定时跑 E2E」「把 E2E 放到夜里跑」「配置 nightly 构建」「本机定时测试」「launchd 定时」「有哪些 nightly」「nightly 状态」等，或要把需要运行栈/外部账号/真实模型调用的验证从合入门禁移到夜间无人值守时触发。判定哪些验证该进 nightly、经 tools/nightly_registry.py 登记与管理本地作业实例（哪些项目/什么路径/何时跑）、生成 launchd 或 CI 配置、装配只报不阻断的报告与失败通知。不替代合入前的分钟级门禁。"
+description: "v1.1.1. 编排 Entropaxis nightly 回归：判定哪些验证移到夜间、登记作业、生成 launchd/CI 配置、装配只报不阻断的报告与失败通知；不替代合入门禁。触发词：nightly、夜间回归、每晚跑测试、定时跑 E2E、launchd 定时、nightly 状态。"
 metadata:
   scope: control-plane
-  version: "1.1.0"
+  version: "1.1.1"
 ---
 
 # Nightly 回归编排

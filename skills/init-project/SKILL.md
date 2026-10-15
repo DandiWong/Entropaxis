@@ -1,9 +1,9 @@
 ---
 name: init-project
-description: "v1.4.0. 通过简短访谈安全初始化时间线驱动的通用业务/综合项目（4 域 + 2 契约 + RawInput，二级目录懒创建）；需要代码工程时，改在 03_工程研发/<app>/ 以独立软件应用脚手架初始化 PRODUCT、tasks、src、test 与 docs。用户要求新建、初始化或 init 项目/应用工作区时使用；拒绝覆盖已有目录；已有代码仓库可只补 AGENTS.md / CLAUDE.md 入口。"
+description: "v1.4.1. 访谈后安全初始化业务/综合项目（4 域 + 2 契约 + RawInput），或在 03_工程研发/<app>/ 初始化软件应用脚手架；已有仓库可只补 AGENTS.md/CLAUDE.md。用户要新建、初始化、init 项目或应用时使用；不覆盖已有目录。"
 metadata:
   scope: control-plane
-  version: "1.4.0"
+  version: "1.4.1"
 ---
 
 # 初始化项目

@@ -1,5 +1,9 @@
 # Changelog - nightly-regression Skill
 
+## [1.1.1] - 2026-10-16
+### Changed
+- 压缩 description 至 ≤250 字符，只保留能力一句与触发词，降低常驻元数据开销。
+
 ## [1.1.0] - 2026-10-12
 ### Added
 - 作业注册与管理节（1.5）：本地作业实例经 `tools/nightly_registry.py` 登记到

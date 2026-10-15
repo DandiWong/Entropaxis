@@ -1,4 +1,4 @@
-"""体检第 26 项（Skill 版本与 CHANGELOG 一致性）与第 27 项（工具路由存在性）。"""
+"""体检第 26 项（Skill 版本与 CHANGELOG 一致性）、第 27 项（工具路由存在性）与第 32 项（Skill 描述长度）。"""
 import sys
 import tempfile
 import unittest
@@ -33,6 +33,13 @@ class SkillMetadataTests(unittest.TestCase):
     def test_description_mismatch(self):
         self._write(desc_v="1.2.0")
         self.assertTrue(any("description 写 v1.2.0" in i for i in lw.check_skill_metadata(self.root)))
+
+    def test_description_budget(self):
+        self._write()
+        self.assertEqual(lw.check_skill_description_budget(self.root), [])
+        (self.skill / "SKILL.md").write_text(
+            f'---\nname: demo\ndescription: "{"长" * (lw.SKILL_DESC_MAX_CHARS + 1)}"\n---\n', encoding="utf-8")
+        self.assertTrue(any("Skill 描述超长" in i for i in lw.check_skill_description_budget(self.root)))
 
     def test_changelog_behind(self):
         self._write(changelog_v="1.0.0")

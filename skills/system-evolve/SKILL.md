@@ -1,9 +1,9 @@
 ---
 name: system-evolve
-description: "v2.1.0. Entropaxis 控制面演进统一入口：对规则、工具、Skill 做任何设计级的新增、修改、删除或盘点时，先读现场并用几句人话问答补齐信息，判定它该落成 Rule、Tool、Skill（或 Schema、数据声明、局部脚本）还是拆成组合，经用户确认后按对应分支实现、测试、体检与交付。当用户说「新增规则」「改规则」「删掉这个工具」「这个该做成什么」「系统演进」「机制转工具」「制作工具」「创建工具」「机制工具化」「toolify」「落成skill」「做成skill」「封装成skill」「做成技能」「system-evolve」「tool-crafter」，或要把重复手工操作自动化时触发。只改错字、链接、数字等不涉及设计的修正不触发。"
+description: "v2.1.1. 控制面演进入口：对规则、工具、Skill 做设计级增删改或盘点时，读现场、问答补齐，判定落成 Rule/Tool/Skill 或组合，确认后实现、测试、体检、交付。触发词：新增/修改规则、删掉工具、该做成什么、系统演进、工具化、做成 skill、toolify。错字链接类修正不触发。"
 metadata:
   scope: control-plane
-  version: "2.1.0"
+  version: "2.1.1"
 ---
 
 # System Evolve — 判形态 → 落地 → 体检

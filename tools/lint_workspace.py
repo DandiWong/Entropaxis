@@ -36,6 +36,8 @@ MAX_CURRENT_STATE_LINES = 120
 # 按需层预算：单个规则文件行数建议线。不设 rules/ 目录总量上限——规则数量随业务自然增长，
 # 总量封顶会逼迫把不相关内容塞进同一文件，反而破坏正交收敛。
 RULE_MAX_LINES = 120
+# Skill description 每轮会话常驻；宿主按总量裁剪列表，超长描述会挤掉其他 Skill 的触发词。
+SKILL_DESC_MAX_CHARS = 250
 # 跨规则文件连续文本重复检测（字符级窗口比对，不理解语义）：归一化后连续重复字符数达该窗口即判定为复述（应改为引用）。
 # 25 字约合一个完整分句：实测该阈值召回全部真实复述且零误报；再收紧会把中英双写等
 # 非复述形态一并命中（那属于《表达文风》L1 的处理范围，不应在此告警）。
@@ -884,6 +886,21 @@ def check_system_skills(root: Path) -> list[str]:
     return issues
 
 
+def check_skill_description_budget(root: Path) -> list[str]:
+    """Skill description 超长时报建议项（《技能设计》1.1）。私有 Skill 同样常驻，一并检查。"""
+    skills = root / paths.SYSTEM_DIRNAME / "skills"
+    issues = []
+    for skill_file in sorted(skills.glob("*/SKILL.md")) if skills.is_dir() else []:
+        m = re.search(r"^description:\s*(.+)$", skill_file.read_text(encoding="utf-8"), re.MULTILINE)
+        desc = m.group(1).strip().strip("\"'") if m else ""
+        if len(desc) > SKILL_DESC_MAX_CHARS:
+            issues.append(
+                f"[Skill 描述超长] {skill_file.relative_to(root)} description {len(desc)} 字符 > {SKILL_DESC_MAX_CHARS}；"
+                "只留一句能力与触发词，细节移入正文。"
+            )
+    return issues
+
+
 # Skill 正文里对根系统的硬依赖形态：`.entropaxis/tools/x.py` 是跨 Skill 的控制面工具，
 # 独立安装的机器上必然不存在，写成无条件前置即跑不起来。
 # 只匹配 tools/：`.entropaxis/skills/<自身名>/…` 属自身路径写法，Skill 常以它作为
@@ -1412,6 +1429,7 @@ def main() -> int:
         ("24. 语法税与 Token 经济性预算检查", check_syntax_tax_budget, True),
         ("25. 场景级联 Token 预算检查", check_scenario_cascade_budget, False),
         ("26. Skill 版本与 CHANGELOG 一致性检查", check_skill_metadata, True),
+        ("32. Skill 描述长度预算检查", check_skill_description_budget, False),
         ("27. 工具路由存在性检查", check_tool_routing, False),
         ("28. 项目入口待填项检查", check_project_entry_placeholders, False),
         ("29. 工作区存量卫生检查", check_workspace_hygiene, False),

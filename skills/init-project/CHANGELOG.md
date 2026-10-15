@@ -1,5 +1,9 @@
 # Changelog - init-project Skill
 
+## [1.4.1] - 2026-10-16
+### Changed
+- 压缩 description 至 ≤250 字符，只保留能力一句与触发词，降低常驻元数据开销。
+
 ## [1.4.0] - 2026-10-06
 ### Changed
 - 初始化改为懒创建：只建四个顶层域、`RawInput/` 与契约文件；二级目录、`Archive/`、`_知识库/项目资料/` 有材料时再建，README 目录树与代码口径一致。
