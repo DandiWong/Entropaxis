@@ -202,13 +202,17 @@ def scan_capsules(root: Path) -> list[dict]:
     search_dirs = [ws_root / ".entropaxis" / "data" / "docs"]
     if (root / "docs").is_dir():
         search_dirs.append(root / "docs")
-    # 注册表内项目的自有 docs（含嵌套子项目），与控制面 docs 并成同一扫描全集。
+    # 注册表内项目的自有 docs（含嵌套子项目）及代码库 code[0]/docs，与控制面 docs 并成同一扫描全集。
     try:
         import project_registry
         for proj in project_registry.load_projects(ws_root):
             docs = ws_root / str(proj.get("path", "")).strip("/") / "docs"
             if docs.is_dir() and docs not in search_dirs:
                 search_dirs.append(docs)
+            for c_path in proj.get("code") or []:
+                c_docs = ws_root / str(c_path).strip("/") / "docs"
+                if c_docs.is_dir() and c_docs not in search_dirs:
+                    search_dirs.append(c_docs)
     except Exception:  # noqa: BLE001 - 注册表缺失/不可读时退回控制面 + 当前项目两级
         pass
     capsules: list[dict] = []
