@@ -178,7 +178,7 @@ def find_capsule_for_task(root: Path, task_id: str, explicit: str | None = None)
             return p
         raise IterationError(f"❌ 指定的胶囊目录不存在 capsule.yaml: {explicit}")
     capsules = scan_capsules(root)
-    candidates = [c for c in capsules if (c.get("id") or "") == task_id]
+    candidates = [c for c in capsules if (c.get("data", {}).get("id") or "") == task_id]
     if len(candidates) == 1:
         return candidates[0]["dir"]
     if len(candidates) > 1:
