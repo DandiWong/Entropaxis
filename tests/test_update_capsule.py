@@ -188,12 +188,12 @@ class UpdateCapsuleTests(unittest.TestCase):
         (self.cap / "07_验收报告.md").write_text(ACCEPTANCE.format(data="2026-11-05", unmeasured="待回填"), encoding="utf-8")
 
         # 存在 open 段拦截归档
-        uc.start_task(self.cap, name="遗留段", task_id="Tech-1")
+        uc.start_task(self.cap, name="遗留段", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
         with self.assertRaises(uc.ToolError):
             uc.update_capsule(str(self.cap))
 
-        # 收尾成为 pending_approval 仍然拦截
-        uc.end_task(self.cap, at="2026-10-16T18:00:00+08:00")  # >8h
+        # 收尾成为 pending_approval 仍然拦截 (9h, >8h)
+        uc.end_task(self.cap, at="2026-10-15T18:00:00+08:00")
         with self.assertRaises(uc.ToolError):
             uc.update_capsule(str(self.cap))
 

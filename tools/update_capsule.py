@@ -323,6 +323,7 @@ def _invariant_errors(data: dict[str, Any]) -> list[str]:
     # 3) I-3：logged 段与 worklogs.ref 的映射关系。
     # 方案 §3.1 I-3/I-4：
     #   - 每一个 logged 段恰有一条 worklog 的 ref 等于该段 seg_id；
+    #   - 非 logged 段（open/pending_approval/unmeasured）严禁存在对应 worklog（反向 I-3 校验）；
     #   - 人工补登（--log-time）生成的条目有自己的 ref，但没有对应段（I-4）。
     logged_ids = [str(s.get("seg_id")) for s in segments if s.get("state") == "logged"]
     dup_logged = {i for i in logged_ids if logged_ids.count(i) > 1}
@@ -331,6 +332,11 @@ def _invariant_errors(data: dict[str, Any]) -> list[str]:
     for seg_id in logged_ids:
         if seg_id not in seen_refs:
             errs.append(f"logged 段 {seg_id} 缺少对应 worklog（I-3 不变量被破坏）")
+
+    non_logged_ids = {str(s.get("seg_id")) for s in segments if s.get("state") != "logged"}
+    for ref in sorted(seen_refs):
+        if ref in non_logged_ids:
+            errs.append(f"非 logged 段 {ref} 存在对应 worklog（反向 I-3 不变量被破坏）")
 
     # 4) 段状态与 endAt 对应：logged 必须已收尾。
     for s in segments:
@@ -639,10 +645,11 @@ def end_task(capsule_dir: str | Path, trigger: str = "deliver", at: str | None =
     if not open_seg:
         raise ToolError("❌ 胶囊当前没有进行中的 open 任务段，无需收尾。")
 
-    # IMP-M2：中断回填必须说明证据，否则可用过期 lastActivityAt 冒充事实。
-    if inferred and not (evidence and str(evidence).strip()):
+    # IMP-M2：使用显式 --at 回填或更正时必须提供 --evidence；
+    # 若未传 --at 而仅以 Tool 记录的 lastActivityAt 中断回填，允许省略证据（恢复 AC-5(b)）。
+    if inferred and at and not (evidence and str(evidence).strip()):
         raise ToolError(
-            "❌ --inferred 中断回填必须附 --evidence <说明>\n"
+            "❌ 显式 --at 覆盖推断时间时必须附 --evidence <说明>\n"
             "👉 修复建议: 补一条可核实的证据（如「会话中断于 10-15 18:00，提交 3f2a91c」）后重试。"
         )
 
