@@ -500,6 +500,8 @@ def update_capsule(capsule_dir: str, *, delivered: str | None = None, dry_run: b
         return result
 
     # 纯 lifecycle 推进：保留注释与其余内容的定点替换。
+    # IMP-M6：写前全局不变量校验，手改/损坏状态不得被新写入继承。
+    _check_invariants(data)
     new = text
     for k, v in changes.items():
         new = _set_key(new, k, v)
@@ -610,9 +612,12 @@ def touch_task(capsule_dir: str | Path, at: str | None = None, dry_run: bool = F
     if not open_seg:
         return {"capsule": str(capsule), "status": "no_open_segment", "dry_run": dry_run}
 
+    # IMP-M6：写前全局不变量校验。
+    _check_invariants(data)
     act_dt = normalize_to_cst(at) if at else dt.datetime.now(TZ_CST)
     open_seg["lastActivityAt"] = act_dt.isoformat()
     if not dry_run:
+        _check_invariants(data)
         _save_capsule_yaml(capsule, data, text)
     return {"capsule": str(capsule), "status": "touched", "segment": open_seg, "dry_run": dry_run}
 
