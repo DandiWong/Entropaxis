@@ -7,13 +7,13 @@ _meta:
 default_dispatch_mode: strict
 default_timeout_s: 900
 roles:
-  Architecture: {duty: 顶层架构/技术选型/方案设计, timeout_s: 900, preferences: [architecture-1], profile: null}
-  Researcher: {duty: 调研（强制联网）/文献综述/竞品查新, timeout_s: 900, preferences: [researcher-1, researcher-2], profile: null}
-  Designer: {duty: 视觉美学/UI交互原型/排版呈现, timeout_s: 900, preferences: [designer-1], profile: null}
+  Architecture: {duty: 顶层架构/技术与业务方案/项目计划, timeout_s: 900, preferences: [architecture-1], profile: null}
+  Researcher: {duty: 调研（强制联网）/文献综述/竞品查新/专题学习, timeout_s: 900, preferences: [researcher-1, researcher-2], profile: null}
+  Designer: {duty: 视觉美学/UI交互原型/排版呈现/PPT配图, timeout_s: 900, preferences: [designer-1], profile: null}
   Builder: {duty: 方案实施/核心编码/重构, timeout_s: 3600, preferences: [builder-1, builder-2], profile: null}
   Reviewer: {duty: 方案审计/对抗评审/架构合规, timeout_s: 1800, preferences: [reviewer-1, reviewer-2, reviewer-3], profile: null}
   Maintainer: {duty: 全流程验收/守门落盘/证据核验, timeout_s: 900, preferences: [maintainer-1], profile: null}
-  Reporter: {duty: 汇报材料提炼/交付总结, timeout_s: 900, preferences: [reporter-1, reporter-2], profile: null}
+  Reporter: {duty: 文稿与报告：汇报/周报/纪要/论文专利/翻译/数据分析, timeout_s: 900, preferences: [reporter-1, reporter-2], profile: null}
 command_profiles:
   architecture-1: {agent: claude, model: claude-opus-5.5}
   researcher-1: {agent: omp, model: google-antigravity/gemini-3.8-flash}
