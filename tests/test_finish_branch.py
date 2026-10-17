@@ -70,6 +70,22 @@ class FinishBranchTests(unittest.TestCase):
         self.assertNotIn("scratch.txt", files, "未跟踪文件不得被提交")
         self.assertIn("scratch.txt", result["warning"])
 
+    def test_squash_lands_one_commit_with_trailers(self):
+        self.write("feat2.txt", "x\n")
+        self.git("add", ".")
+        self.git("commit", "-q", "-m", "feat second")
+        before = self.rev("refs/heads/uat")
+        plan = fb.plan_finish(self.repo, "uat", "origin", None, task_id="Tech-1", time_hours=2)
+        result = fb.finish_branch(plan, False)
+        self.assertEqual(result["merged_commits"], 2)
+        self.assertEqual(self.git("rev-list", "--count", f"{before}..uat"), "1", "两个提交应 squash 为一个")
+        self.assertEqual(self.git("rev-list", "--parents", "-n1", "uat").split()[1:], [before], "squash 提交不得是合并提交")
+        body = self.git("log", "-1", "--format=%B", "uat")
+        self.assertIn("- feat second", body)
+        self.assertIn("Task-ID: Tech-1", body)
+        self.assertIn("Time-Spent: 2h", body)
+        self.assertIsNone(self.rev("refs/heads/feat"))
+
     def test_unstaged_tracked_change_refused_without_writes(self):
         self.write("feat.txt", "changed\n")
         before = self.rev("refs/heads/feat")

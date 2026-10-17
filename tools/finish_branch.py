@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""收尾分支：提交已暂存改动 → 合入目标分支 → 推送远端 → 删除当前分支。
+"""收尾分支：提交已暂存改动 → squash 合入目标分支 → 推送远端 → 删除当前分支。
 
 真源定义: rules/软件工程.md「发版与迭代边界」的「收尾分支」。
 
@@ -10,9 +10,11 @@
 设计不变量:
   1. **只提交已暂存内容**：已跟踪文件有未暂存改动即拒绝（由调用方先精确 git add）；未跟踪文件不提交、只报告。
   2. **先同步再合并**：远端有目标分支时，本地目标分支须能快进到远端，分叉即中止。
-  3. **冲突即回滚**：合并冲突时 merge --abort 并切回原分支，目标分支不动。
-  4. **推送成功才删分支**：推送失败时原分支保留；删本地分支用 `branch -d`（未合入即拒绝）。
-  5. **远端分支默认不删**：远端同名分支仅在 --delete-remote 时删除。
+  3. **冲突即回滚**：squash 冲突时 reset --hard 回目标原提交并切回原分支，目标分支不动。
+  4. **一个分支一个提交**：源分支全部改动 squash 为目标上的一个提交，Task-ID / Time-Spent Trailer 写在这个提交上。
+  5. **核验并入才删分支**：squash 后用 merge-tree 核验源分支已无未并入改动，否则回滚不推送；
+     推送失败时原分支保留；squash 后 `branch -d` 认不出已合入，核验通过才用 `branch -D`。
+  6. **远端分支默认不删**：远端同名分支仅在 --delete-remote 时删除。
 """
 
 from __future__ import annotations
@@ -116,10 +118,7 @@ def finish_branch(plan: dict, delete_remote: bool) -> dict:
     repo, source, target, remote = plan["repo"], plan["source"], plan["target"], plan["remote"]
     committed = None
     if plan["staged"]:
-        cmd = ["commit", "-q", "-m", plan["message"]]
-        for k, v in plan.get("trailers", []):
-            cmd.extend(["--trailer", f"{k}: {v}"])
-        _git(repo, *cmd)
+        _git(repo, "commit", "-q", "-m", plan["message"])
         committed = _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
     fetched = _git(repo, "fetch", "-q", remote, target, check=False).returncode == 0
     remote_ref = f"refs/remotes/{remote}/{target}"
@@ -136,14 +135,32 @@ def finish_branch(plan: dict, delete_remote: bool) -> dict:
     else:
         _git(repo, "checkout", "-q", "-b", target, "--track", f"{remote}/{target}")
 
-    merged_commits = int(_git(repo, "rev-list", "--count", f"HEAD..{source}").stdout.strip())
-    merge = _git(repo, "merge", "--no-edit", source, check=False)
+    base = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    subjects = _git(repo, "log", "--reverse", "--format=%s", f"HEAD..{source}").stdout.splitlines()
+    merged_commits = len(subjects)
+    merge = _git(repo, "merge", "--squash", source, check=False)
     if merge.returncode != 0:
-        _git(repo, "merge", "--abort", check=False)
+        _git(repo, "reset", "-q", "--hard", base, check=False)
         _git(repo, "checkout", "-q", source, check=False)
         raise ToolError(
             f"❌ {source} 合入 {target} 有冲突，已中止合并并切回 {source}: {merge.stdout.strip()[-300:]}\n"
             f"👉 修复建议: 在 {source} 上先合并 {target} 并解决冲突、验证通过后再收尾。"
+        )
+    if _git(repo, "diff", "--cached", "--quiet", check=False).returncode != 0:
+        message = plan["message"] or (subjects[0] if len(subjects) == 1 else f"squash: {source}")
+        cmd = ["commit", "-q", "-m", message]
+        if len(subjects) > 1:
+            cmd.extend(["-m", "\n".join(f"- {s}" for s in subjects)])
+        for k, v in plan.get("trailers", []):
+            cmd.extend(["--trailer", f"{k}: {v}"])
+        _git(repo, *cmd)
+    check = _git(repo, "merge-tree", "--write-tree", "HEAD", source, check=False)
+    if check.returncode != 0 or check.stdout.split()[0] != _git(repo, "rev-parse", "HEAD^{tree}").stdout.strip():
+        _git(repo, "reset", "-q", "--hard", base, check=False)
+        _git(repo, "checkout", "-q", source, check=False)
+        raise ToolError(
+            f"❌ squash 后 {source} 仍有未并入 {target} 的改动，已回滚 {target} 并切回 {source}；未推送。\n"
+            f"👉 修复建议: 在 {source} 上先合并 {target} 并解决差异后再收尾。"
         )
     merged = _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
 
@@ -155,7 +172,7 @@ def finish_branch(plan: dict, delete_remote: bool) -> dict:
             "解决推送问题（权限、保护分支、远端已前进）后 git push，再删除分支。"
         )
 
-    _git(repo, "branch", "-d", source)
+    _git(repo, "branch", "-D", source)  # ponytail: squash 后 -d 认不出已合入，上方 merge-tree 已核验
     warning = None
     remote_deleted = False
     if delete_remote and plan["has_remote_source"]:
@@ -174,7 +191,7 @@ def finish_branch(plan: dict, delete_remote: bool) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="收尾分支：提交已暂存改动 → 合入目标分支 → 推送 → 删除当前分支")
+    parser = argparse.ArgumentParser(description="收尾分支：提交已暂存改动 → squash 合入目标分支 → 推送 → 删除当前分支")
     parser.add_argument("--target", help="目标分支；未指定时先用 --list-targets 取候选")
     parser.add_argument("--message", help="提交信息（有已暂存改动时必填）")
     parser.add_argument("--task-id", help="任务 ID，如 Tech-120（自动注入 Task-ID 与 Time-Spent Trailer）")

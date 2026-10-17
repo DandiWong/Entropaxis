@@ -436,7 +436,7 @@ class TestWorklogCliEntry(unittest.TestCase):
         self.assertEqual(result["merge_commit"], self.rev("refs/heads/main", repo)[:7])
         self.assertEqual(self.rev("refs/heads/main", repo), self.rev("refs/heads/main", origin))
 
-        # main 可快进到 feat 时 merge 退化为 fast-forward：HEAD 即功能分支末提交，Trailer 直接可读
+        # squash 后 main 上只多一个提交，Trailer 写在这个提交上
         files = self.git(repo, "ls-tree", "--name-only", "main").split()
         self.assertIn("feat.txt", files)
         trailers = self.git(repo, "log", "-1", "main", "--format=%(trailers)")
