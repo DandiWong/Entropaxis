@@ -1287,3 +1287,16 @@ class ReviewRound2RegressionTests(DispatchRoleTestBase):
                 mock.patch.object(rcpt, "load_key", return_value=b"k"):
             rec = rcpt.issue("Reviewer", "a" * 64, None, target, "p")
         self.assertEqual(rec["target_sha256"], rcpt.target_sha256(target))
+
+
+class BindPromptTests(TestCase):
+    def test_existing_deliverable_is_updated_in_place_not_copied(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "05_审计报告.md"
+            fresh = dr._bind_prompt("p", "Reviewer", out, None, Path(d))
+            self.assertNotIn("原地更新", fresh)
+            out.write_text("---\n---\n", encoding="utf-8")
+            again = dr._bind_prompt("p", "Reviewer", out, None, Path(d))
+            self.assertIn("原地更新", again)
+            self.assertIn("不得另存副本", again)
+            self.assertNotIn("覆盖写", again)

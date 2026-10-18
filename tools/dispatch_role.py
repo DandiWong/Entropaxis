@@ -1140,8 +1140,12 @@ def _bind_prompt(prompt: str, role: str, deliverable: Path | None, target: Path 
     parts = [prompt, ""]
     if target is not None:
         parts.append(f"[输入依据] 先读取并严格依据该文件：{target}")
-    if deliverable is not None:
-        parts.append(f"[交付约定] 将本次产出写入：{deliverable}（覆盖写，保留原 Front Matter 字段）。")
+    if deliverable is not None and deliverable.is_file():
+        # 曾写"覆盖写"：外置 Reviewer 为保历史先 cp 出 `_首轮/_二轮` 副本再覆盖，同一事件裂成多份报告
+        parts.append(f"[交付约定] 将本次产出写入：{deliverable}（在既有文件上原地更新，保留原 Front Matter 字段与"
+                     "历史内容，审计报告在轮次记录末尾追加本轮；不得另存副本或归档件，如 _首轮、_二轮、_v2）。")
+    elif deliverable is not None:
+        parts.append(f"[交付约定] 将本次产出写入：{deliverable}（新建文件）。")
     else:
         parts.append(f"[交付约定] 在工作目录 {cwd} 内直接改写代码与测试文件；不要只输出到终端。")
     # 判据要求什么，提示词就得说什么——否则角色因不知情而失败，看起来像模型不行
