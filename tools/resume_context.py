@@ -223,8 +223,10 @@ def scan_tree(root: Path, since: float) -> dict:
             if max(mtimes) >= since:
                 stages = sorted(f for f in files if re.match(r"^\d{2}_", f))
                 cap = {"path": str(p), "stages": stages}
-                if "05_审计报告.md" in files:
-                    cap["open_issues"] = _open_issues(p / "05_审计报告.md")
+                audits = [f for f in ("03_方案审计报告.md", "05_实施审计报告.md", "05_审计报告.md") if f in files]
+                if audits:
+                    counts = [n for n in (_open_issues(p / f) for f in audits) if n is not None]
+                    cap["open_issues"] = sum(counts) if counts else None
                 caps.append(cap)
         if p.name == "docs" and "Tasks.md" in files:
             active = _active_tasks(p / "Tasks.md")

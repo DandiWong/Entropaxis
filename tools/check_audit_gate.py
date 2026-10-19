@@ -617,7 +617,8 @@ def _v4_admission_issues(fm: dict, raw_issues: list) -> list[str]:
                 and not str(item.get("repro") or "").strip()):
             out.append(f"[{iid}] 实施主审的 open {level} 须附 repro（失败测试或复现命令）。")
     if fm.get("status") == "completed":
-        left = blocking_ids(raw_issues, "impl")
+        # 方案轻审与实施主审各自冻结：方案报告残留的 gate: impl 问题由实施主审首轮接手
+        left = blocking_ids(raw_issues, phase if phase in GATE_ORDER else "impl")
         if left:
             out.append(f"status=completed 但仍有阻断问题 {left}；冻结前须全部 closed / withdrawn / waived_by_user。")
     return out

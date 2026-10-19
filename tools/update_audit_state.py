@@ -183,7 +183,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="审计报告 audit-state 围栏的字段级读写（Critical 关闭判据仍归 check_audit_gate.py）",
     )
-    parser.add_argument("report", help="审计报告路径（05_审计报告.md / Audit_<ID>_*.md）")
+    parser.add_argument("report", help="审计报告路径（03_方案审计报告.md / 05_实施审计报告.md / Audit_<ID>_*.md）")
     parser.add_argument("--list", action="store_true", help="只读列出现有问题条目")
     parser.add_argument("--add-issue", metavar="ID:LEVEL", help="登记新问题，如 C-2:Critical")
     parser.add_argument("--status", default="open", help="配合 --add-issue 的初始状态，默认 open")

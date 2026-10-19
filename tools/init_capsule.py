@@ -8,7 +8,7 @@
 
 设计要点（对应审计 R2-C1/M1/M2/M4/M5/m1~m6、R3-m1、R4-M1、R5-M1/m1）：
   1. 只生成 Schema 合法的阶段文档：文档级 status 一律 `draft`，交付/验收字段一律「待回填」占位；
-  2. 不预生成 05_审计报告.md——审计报告由「审计」指令在审计时创建并写入受审文件真实 SHA-256；
+  2. 不预生成审计报告（03_方案审计报告.md / 05_实施审计报告.md）——审计报告由「审计」指令在审计时创建并写入受审文件真实 SHA-256；
   3. 胶囊级生命周期（draft/active/delivered/archived/archived-unmeasured）唯一真源为 capsule.yaml，
      不与文档级 Front Matter 状态（draft/active/revised/completed）混用；
   4. 不预建任何空目录（00_原始素材/、assets/ 按需创建，由 capsule.yaml 的 optional_stages 声明）；
@@ -417,7 +417,7 @@ def main() -> int:
         ))
     else:
         print(f"✨ 事务胶囊初始化成功（lifecycle: draft）: {created}")
-        print("   下一步：编写 01/02 → 触发「审计」出具 05_审计报告（真实指纹）→ 定稿后进入实施")
+        print("   下一步：编写 01/02 → 触发「审计」出具 03_方案审计报告（真实指纹）→ 定稿后进入实施")
     return 0
 
 

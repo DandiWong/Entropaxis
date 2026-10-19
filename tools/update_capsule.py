@@ -3,7 +3,7 @@
 胶囊生命周期推进：按胶囊内已有证据把 capsule.yaml 的 lifecycle 及交付日期往前推。
 
 状态只进不退，终态（archived / archived-unmeasured）不再改动：
-  draft    → active               05_审计报告.md 无 open 的 Critical/Major，或已有 04_Spec_*
+  draft    → active               03_方案审计报告.md（旧名 05_审计报告.md）无 open 的 Critical/Major，或已有 04_Spec_*
   active   → delivered            仅显式 --delivered [YYYY-MM-DD]（"合入主干且全量测试通过"无法从胶囊文件推断）
                                   同时写 delivered_at，派生 review_due_at = +30 天、closure_deadline = +60 天
   delivered→ archived             07_验收报告.md「数据回收日期」已回填
@@ -262,7 +262,10 @@ def _filled(text: str, label: str) -> bool:
 def derive(capsule: Path, current: str) -> str:
     """按证据推导应处状态（不含需显式声明的 delivered），只进不退。"""
     target = current
-    if current == "draft" and (_audit_passed(capsule / "05_审计报告.md") or any(capsule.glob("04_Spec_*"))):
+    plan_audit = capsule / "03_方案审计报告.md"
+    if not plan_audit.is_file():
+        plan_audit = capsule / "05_审计报告.md"  # 旧胶囊：方案与实施合在一份报告
+    if current == "draft" and (_audit_passed(plan_audit) or any(capsule.glob("04_Spec_*"))):
         target = "active"
     acceptance = capsule / "07_验收报告.md"
     if current == "delivered" and acceptance.is_file():

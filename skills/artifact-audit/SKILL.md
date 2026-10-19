@@ -1,9 +1,9 @@
 ---
 name: artifact-audit
-description: "v2.1.1. 对方案、文档或代码等可迭代工件做可追溯审计；连续复审时原地维护同一份报告，逐轮核验旧问题、发现新问题，终审通过后冻结。用户要求审计、评审、复审、重新检查工件或记录问题闭环时使用。"
+description: "v2.2.0. 对方案、文档或代码等可迭代工件做可追溯审计；连续复审时原地维护同一份报告，逐轮核验旧问题、发现新问题，终审通过后冻结。用户要求审计、评审、复审、重新检查工件或记录问题闭环时使用。"
 metadata:
   scope: control-plane
-  version: "2.1.1"
+  version: "2.2.0"
 ---
 
 # Artifact Audit
@@ -70,7 +70,7 @@ python3 .entropaxis/tools/check_audit_gate.py --fingerprint <受审文件或目�
 - **附条件通过**：本阶段无阻断，但仍有 `open` 的 Minor，或待实施、上线前提、另立事项；
 - **通过**：无任何 `open` 问题（或指定 Critical 记 `waived_by_user`）。
 
-不得用"基本通过""应该没问题"等模糊措辞替代结论。方案轻审通过后，下一轮把 `audit_phase` 改为 `impl`、`target_path` 改指胶囊内的实施 diff 文件（见《治理指令》「审计」第 2 条），沿用同一报告；实施主审通过（无阻断）后把 Front Matter `status` 改为 `completed` 并冻结，门禁会拒绝残留阻断的冻结。
+不得用"基本通过""应该没问题"等模糊措辞替代结论。方案轻审与实施主审各是一个事件、各一份报告（`03_方案审计报告.md` / `05_实施审计报告.md`）。本阶段无阻断即把 Front Matter `status` 改为 `completed` 冻结，门禁按报告的 `audit_phase` 拒绝残留阻断的冻结。实施主审首轮新建报告：`target_path` 指胶囊内的实施 diff 文件（见《治理指令》「审计」第 2 条），引用方案审计报告，其中 open 的 `gate: impl` 问题沿用原 ID 登记。
 
 ### 5. 维护报告
 

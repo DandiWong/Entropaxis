@@ -10,6 +10,7 @@ Manager 填好 `{{…}}` 后经 stdin 交给 `dispatch_role.py run --role Review
 - 审计阶段：{{plan | impl}}
 - 审计基准：受审对象的「审计基准」节（G/NG/AC/D 编号与影响面）
 - 本轮类型：{{首审 | 复核：上轮 open 问题见报告围栏；本轮 diff 用 `{{diff_cmd}}` 取得}}
+- 实施主审首轮：先读方案审计报告 {{plan_report}}，其中 open 的 `gate: impl` 问题沿用原 ID 登记到本报告
 - 报告：{{out}}；契约为 `.entropaxis/schemas/audit_report.schema.json` 的 schema_version 4。写完运行 `python3 .entropaxis/tools/check_audit_gate.py {{out}}`：回执与承载类报错由调度器盖章后消除，其余必须清零。
 
 ## 只审这些

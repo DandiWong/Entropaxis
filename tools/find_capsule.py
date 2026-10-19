@@ -37,7 +37,7 @@ CAPSULE_RE = re.compile(r"^\d{8}_")
 ARTIFACT_PATTERNS = {
     "proposal": ("02_方案.md", "*_方案.md"),
     "spec": ("04_Spec_*.md", "*-[0-9]*_*.md"),
-    "audit": ("05_审计报告.md", "Audit_*.md"),
+    "audit": ("03_方案审计报告.md", "05_实施审计报告.md", "05_审计报告.md", "Audit_*.md"),
 }
 _ARTIFACT_SKIP = {".git", "node_modules", "__pycache__", ".pytest_cache", "Archive"}
 

@@ -942,7 +942,13 @@ class CheckAuditGateV4Tests(unittest.TestCase):
 
     def test_completed_requires_no_blocking(self) -> None:
         major = self._issue(id="M-1", level="Major", gate="impl")
-        self.assertTrue(any("status=completed" in i for i in self._check(self._v4([major], status="completed"))))
+        self.assertTrue(any("status=completed" in i
+                            for i in self._check(self._v4([major], phase="impl", status="completed"))))
+        # 方案轻审单独冻结：gate: impl 问题交实施主审接手，不阻断方案报告冻结
+        self.assertEqual(self._check(self._v4([major], phase="plan", status="completed")), [])
+        plan_major = self._issue(id="M-4", level="Major", gate="plan")
+        self.assertTrue(any("status=completed" in i
+                            for i in self._check(self._v4([plan_major], phase="plan", status="completed"))))
         rest = [self._issue(id="M-2", level="Major", gate="release"),
                 self._issue(id="m-1", level="Minor", gate="impl"), self._issue(id="M-3", level="Major", gate="none")]
         self.assertEqual(self._check(self._v4(rest, status="completed")), [])

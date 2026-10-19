@@ -41,13 +41,13 @@ class UpdateCapsuleTests(unittest.TestCase):
     def manifest(self, **kw) -> None:
         (self.cap / "capsule.yaml").write_text(MANIFEST.format(**kw), encoding="utf-8")
 
-    def report(self, issues: str) -> Path:
+    def report(self, issues: str, name: str = "03_方案审计报告.md") -> Path:
         target = self.cap / "02_方案.md"
         target.write_text("方案\n", encoding="utf-8")
         sha = hashlib.sha256(target.read_bytes()).hexdigest()
         text = REPORT_TEMPLATE.format(mode="external", target=target.name, sha=sha, extra="")
         start, end = text.index('"issues": [') + len('"issues": ['), text.index("],\n  \"critical_acks\"")
-        path = self.cap / "05_审计报告.md"
+        path = self.cap / name
         path.write_text(text[:start] + issues + text[end:], encoding="utf-8")
         return path
 
@@ -60,6 +60,10 @@ class UpdateCapsuleTests(unittest.TestCase):
         text = report.read_text(encoding="utf-8")
         uas.commit(report, uas.dump_state(text, uas.set_field(uas.load_state(text), "M-1", "status", "closed")))
         self.assertEqual(self.lifecycle(), "active", "关闭最后一个阻断问题应由 update_audit_state 顺带推进胶囊")
+
+    def test_legacy_combined_report_name_still_gates(self) -> None:
+        self.report('{"id": "M-1", "level": "Major", "status": "open"}', name="05_审计报告.md")
+        self.assertEqual(uc.update_capsule(str(self.cap))["to"], "draft")
 
     def test_open_minor_does_not_block(self) -> None:
         self.report('{"id": "m-1", "level": "Minor", "status": "open"}')

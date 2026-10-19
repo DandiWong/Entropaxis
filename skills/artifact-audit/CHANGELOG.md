@@ -5,6 +5,11 @@ All notable changes to the `artifact-audit` skill will be documented in this fil
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-10-19
+### Changed
+- 方案轻审与实施主审拆成两个事件、两份报告（`03_方案审计报告.md` / `05_实施审计报告.md`），各自通过即冻结；实施主审首轮沿用方案报告中 open 的 `gate: impl` 问题 ID。
+- 任务书复核轮要求原地更新，禁止另存轮次副本。
+
 ## [2.1.1] - 2026-10-16
 ### Changed
 - 压缩 description 至 ≤250 字符，只保留能力一句与触发词，降低常驻元数据开销。
