@@ -83,6 +83,18 @@ class AssemblyTests(unittest.TestCase):
         self.assertFalse(report["passed"])
         self.assertTrue(any("缺目录" in b for b in report["blocking"]))
 
+    def test_parsed_lint_failure_keeps_blocking_counts(self):
+        """体检 JSON 已给出阻断数时，退出码带来的 error 不得把证据写成解析失败。"""
+        lint = {**GREEN_LINT, "passed": False, "blocking_count": 1, "advisory_count": 1,
+                "checks": [{"title": "7. 路由完整性与胶囊容器检查", "blocking": True, "issues": ["回链无效"]}],
+                "error": "检查退出码 1: "}
+        report = _assemble(lint=lint)
+        self.assertEqual(report["rows"][1]["结论"], "阻断")
+        self.assertEqual(report["rows"][1]["证据"], "阻断 1 项 · 建议 1 项")
+        self.assertNotIn("解析失败", report["rows"][1]["证据"])
+        self.assertTrue(any("回链无效" in b for b in report["blocking"]))
+        self.assertFalse(any("检查退出码" in b or "解析失败" in b for b in report["blocking"]))
+
     def test_distribution_blocking_blocks(self):
         red = {"status": "fail", "blocking": ["[缺文件] x"], "advisory": []}
         report = _assemble(dist=red)
@@ -175,6 +187,16 @@ class ExecutionTests(unittest.TestCase):
         for output, code in (("garbled", 0), ("[]", 0), ('{"passed": true, "blocking_count": 0}', 1)):
             with self.subTest(output=output, code=code):
                 self.assertIn("error", rs._json_result(subprocess.CompletedProcess([], code, output, "")))
+
+    def test_self_reported_lint_failure_is_not_relabeled_parse_error(self):
+        payload = json.dumps({
+            "passed": False, "total_checks": 30, "blocking_count": 1, "advisory_count": 1,
+            "checks": [{"title": "7. 路由完整性与胶囊容器检查", "blocking": True, "issues": ["回链无效"]}],
+            "passed_checks": [], "fixed_claude_md": [],
+        }, ensure_ascii=False)
+        parsed = rs._json_result(subprocess.CompletedProcess([], 1, payload, ""))
+        self.assertNotIn("error", parsed)
+        self.assertEqual(parsed["blocking_count"], 1)
 
     def test_alternate_root_selects_its_own_checkers(self):
         with tempfile.TemporaryDirectory() as td:

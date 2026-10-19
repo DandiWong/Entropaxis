@@ -77,6 +77,19 @@ def run_unittest(root: Path) -> dict:
     }
 
 
+def _self_reported_failure(result: dict) -> bool:
+    """JSON 已自报未通过时，非 0 退出码是同一事实，不得再标成解析失败。"""
+    if result.get("passed") is False:
+        return True
+    blocking_count = result.get("blocking_count")
+    if isinstance(blocking_count, int) and blocking_count > 0:
+        return True
+    if result.get("status") == "fail":
+        return True
+    blocking = result.get("blocking")
+    return isinstance(blocking, list) and len(blocking) > 0
+
+
 def _json_result(proc: subprocess.CompletedProcess) -> dict:
     try:
         result = json.loads(proc.stdout)
@@ -84,9 +97,31 @@ def _json_result(proc: subprocess.CompletedProcess) -> dict:
             raise ValueError("检查输出不是 JSON 对象")
     except ValueError as exc:
         result = {"error": (proc.stdout + proc.stderr).strip()[:400] or str(exc)}
-    if proc.returncode != 0:
+    if proc.returncode != 0 and not _self_reported_failure(result):
         result["error"] = result.get("error") or f"检查退出码 {proc.returncode}: {proc.stderr.strip()[:400]}"
     return result
+
+
+def _lint_evidence(lint: dict) -> str:
+    blocking = lint.get("blocking_count")
+    advisory = lint.get("advisory_count")
+    if isinstance(blocking, int) and isinstance(advisory, int):
+        return f"阻断 {blocking} 项 · 建议 {advisory} 项"
+    error = lint.get("error") or "缺少阻断计数"
+    return f"体检输出解析失败: {str(error)[:120]}"
+
+
+def _gate_failure_line(name: str, result: dict) -> str | None:
+    """明细已列入时，不再把退出码重复写成一条阻断。"""
+    detail = result.get("error") or result.get("output_tail")
+    checks = result.get("checks") or []
+    itemized = (
+        (name == "体检" and any(isinstance(c, dict) and c.get("blocking") for c in checks))
+        or (name == "分发" and isinstance(result.get("blocking"), list) and bool(result["blocking"]))
+    )
+    if itemized and (not detail or str(detail).startswith("检查退出码")):
+        return None
+    return f"[{name}] {detail or '检查未通过，请查看该项证据与明细。'}"
 
 
 def run_lint(root: Path, fix_claude_md: bool = True) -> dict:
@@ -141,8 +176,7 @@ def assemble(root: Path, fix_claude_md: bool = True) -> dict:
         },
         {
             "对象": f"工作区体检（{lint.get('total_checks', '?')} 项）",
-            "证据": (f"阻断 {lint.get('blocking_count')} 项 · 建议 {lint.get('advisory_count')} 项"
-                     if "error" not in lint else f"体检输出解析失败: {lint['error'][:120]}"),
+            "证据": _lint_evidence(lint),
             "结论": "通过" if lint_ok else "阻断",
         },
         {
@@ -177,7 +211,9 @@ def assemble(root: Path, fix_claude_md: bool = True) -> dict:
     blocking += [f"[分发] {i}" for i in dist.get("blocking", [])] if isinstance(dist.get("blocking"), list) else []
     for name, result, passed in (("单元测试", tests, tests["ok"]), ("体检", lint, lint_ok), ("分发", dist, dist_ok)):
         if not passed:
-            blocking.append(f"[{name}] {result.get('error') or result.get('output_tail') or '检查未通过，请查看该项证据与明细。'}")
+            line = _gate_failure_line(name, result)
+            if line:
+                blocking.append(line)
 
     gates_passed = tests["ok"] and lint_ok and dist_ok and not coverage_gaps
     return {
