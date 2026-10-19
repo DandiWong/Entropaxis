@@ -305,3 +305,9 @@ class DirectoryAssociationTests(unittest.TestCase):
                 td, {"associations": {}}, "", "darwin",
                 lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "", ""), closer=lambda *a, **k: None)
             self.assertTrue(res["used_fallback"])
+
+    def test_url_opens_in_default_browser(self) -> None:
+        runner = RecordingRunner()
+        results = open_paths(["https://example.com/orders"], config_path=Path("/nonexistent.json"), platform="darwin", runner=runner)
+        self.assertTrue(results[0]["ok"])
+        self.assertEqual(runner.calls[0][0], ["open", "https://example.com/orders"])

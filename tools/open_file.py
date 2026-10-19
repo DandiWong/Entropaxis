@@ -211,6 +211,22 @@ def _open_path(
     closer=subprocess.run,
     on_deliver: bool = False,
 ) -> dict:
+    if path_text.startswith(("http://", "https://")):
+        # 本地 dev 页面预览：URL 无扩展名映射，直接交给系统默认浏览器
+        argv = {"darwin": ["open", path_text], "win32": ["cmd", "/c", "start", "", path_text]}.get(
+            platform, ["xdg-open", path_text]
+        )
+        returncode, detail = _run(argv, runner)
+        return {
+            "path": path_text,
+            "ok": returncode == 0,
+            "selected_app": "系统默认浏览器",
+            "command": argv,
+            "used_fallback": False,
+            "reloaded": False,
+            "reason": detail if returncode else "",
+            "returncode": returncode,
+        }
     path = Path(path_text).expanduser().resolve()
     result = {
         "path": str(path),
