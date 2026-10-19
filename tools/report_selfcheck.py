@@ -14,7 +14,8 @@
   1. **三态不凑数**：结论只取 通过 / 阻断 / 未验证。没有机械检查器承接的元规则公理一律
      报「未验证」并点名，严禁因"本轮没动它"或"看起来没问题"判通过——那正是《软件工程》
      「不用分数代替证据」要消除的形态。
-  2. **只报不判**：本工具不对可优化项做取舍，原样透传体检建议项；是否整改由人裁决。
+  2. **只报不判**：本机体检建议原样进入可优化项。新克隆第 13、15c、22 项的合法初始态
+     留痕完整写入验证结论，不升格为待整改项——那是「还没开始用」，不是缺陷。
   3. **报告不落盘**：默认允许体检修正 CLAUDE.md；只读检查使用 --no-fix-claude-md。
 """
 
@@ -32,6 +33,21 @@ try:
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import paths
+
+# 新克隆缺这些声明时必须留痕，静默即阻断。留痕证明降级可见，不构成待整改项。
+INITIAL_STATE_MARKERS = ("实体词表未声明", "注册表待登记", "实例声明待落地")
+
+
+def split_distribution_notes(notes: list[str]) -> tuple[list[str], list[str]]:
+    """把分发建议拆成合法初始态留痕与其余待整改项。"""
+    traces, actionable = [], []
+    for note in notes:
+        if any(marker in note for marker in INITIAL_STATE_MARKERS):
+            traces.append(note)
+        else:
+            actionable.append(note)
+    return traces, actionable
+
 
 # 元规则九条公理 → 机械承接它的体检项编号。
 # 真源是 rules/00_元规则.md；此处只记「谁在机械地守它」，不复述公理正文。
@@ -163,6 +179,7 @@ def assemble(root: Path, fix_claude_md: bool = True) -> dict:
     uncovered = [a for a, c in AXIOM_COVERAGE.items() if not c]
 
     dist_block, dist_adv, dist_notes = _dist_counts(dist)
+    initial_traces, dist_actionable = split_distribution_notes(dist_notes)
     lint_ok = lint.get("passed") is True and lint.get("blocking_count") == 0 and "error" not in lint
     dist_ok = "error" not in dist and dist_block == 0 and dist.get("status") != "fail"
 
@@ -183,6 +200,7 @@ def assemble(root: Path, fix_claude_md: bool = True) -> dict:
             "对象": "收件方视角分发求值（新克隆工作区）",
             "证据": (f"阻断 {dist_block} 项 · 建议 {dist_adv if dist_adv is not None else '?'} 项"
                      + (f"；已扫描 {'、'.join(dist['scans'])}" if dist.get("scans") else "")
+                     + (f"；合法初始态留痕 {len(initial_traces)} 项" if initial_traces else "")
                      if "error" not in dist else f"分发核验失败: {dist['error'][:120]}"),
             "结论": "通过" if dist_ok else "阻断",
         },
@@ -227,6 +245,8 @@ def assemble(root: Path, fix_claude_md: bool = True) -> dict:
         "blocking": blocking,
         "advisories": advisories,
         "distribution_notes": dist_notes,
+        "distribution_actionable": dist_actionable,
+        "initial_state_traces": initial_traces,
         "uncovered_axioms": uncovered,
         "coverage_gaps": coverage_gaps,
         "axiom_coverage": {a: {"declared": ids, "executed": [c for c in ids if c in executed]}
@@ -257,14 +277,23 @@ def render_markdown(report: dict) -> str:
             "价值回收由第 30 项检查；跨平台回退由第 36 项检查；工具异常路径由第 37 项检查。"
             "分发扫描凭据特征串、家目录路径与实体词；词表、空注册表或实例声明缺失时必须留痕，静默跳过会阻断。"
             "业务正文与 credentials/ 的内容不进入这些扫描。"]
+    traces = report.get("initial_state_traces") or []
+    if traces:
+        out += ["",
+                "**新克隆合法初始态留痕**（第 13、15c、22 项已核验；静默缺失会阻断。"
+                "本机已初始化时不待整改）："]
+        out += [f"- {item}" for item in traces]
 
     out += ["", "## 可优化项", ""]
     if report["blocking"]:
         out += [f"- **[阻断]** {b}" for b in report["blocking"]]
     if report["advisories"]:
         out += [f"- {a}" for a in report["advisories"]]
-    out += [f"- {a}" for a in report["distribution_notes"]]
-    if not report["blocking"] and not report["advisories"] and not report["distribution_notes"]:
+    actionable = report.get("distribution_actionable")
+    if actionable is None:
+        actionable = report.get("distribution_notes") or []
+    out += [f"- {a}" for a in actionable]
+    if not report["blocking"] and not report["advisories"] and not actionable:
         out.append("本轮无待优化项；已执行的机械门禁通过，未覆盖范围见上。")
     return "\n".join(out)
 

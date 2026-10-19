@@ -170,6 +170,33 @@ class RenderTests(unittest.TestCase):
         self.assertIn(GREEN_DIST["advisory"][0], md)
         self.assertNotIn("全项健康", md)
 
+    def test_fresh_clone_initial_state_stays_in_evidence(self):
+        """第 13、15c、22 项留痕完整进入验证结论，不升格为可优化项。"""
+        notes = [
+            "[新环境体检] 13. rules/ 零系统绑定检查: [实体词表未声明] 未读到词表",
+            "[新环境体检] 15c. 项目注册表登记进度检查: [注册表待登记] 尚无项目",
+            "[新环境体检] 22. 实例声明落地检查: [实例声明待落地] tips.md",
+            "[未入库] tools/x.py 未纳入版本库",
+        ]
+        report = _assemble(dist={"status": "pass", "blocking": [], "advisory": notes, "scans": ["entity"]})
+        self.assertEqual(len(report["initial_state_traces"]), 3)
+        self.assertEqual(report["distribution_notes"], notes)
+        self.assertEqual(report["distribution_actionable"], ["[未入库] tools/x.py 未纳入版本库"])
+        self.assertIn("合法初始态留痕 3 项", report["rows"][2]["证据"])
+        head, tail = rs.render_markdown(report).split("## 可优化项", 1)
+        for marker in ("实体词表未声明", "注册表待登记", "实例声明待落地"):
+            self.assertIn(marker, head)
+            self.assertNotIn(marker, tail)
+        self.assertIn("[未入库]", tail)
+
+    def test_only_initial_traces_leave_no_action_items(self):
+        clean = {**GREEN_LINT, "advisory_count": 0, "checks": [], "passed_checks": CHECK_TITLES}
+        dist = {"status": "pass", "blocking": [], "advisory": ["[实体词表未声明] 降级"]}
+        md = rs.render_markdown(_assemble(lint=clean, dist=dist))
+        head, tail = md.split("## 可优化项", 1)
+        self.assertIn("实体词表未声明", head)
+        self.assertIn("本轮无待优化项", tail)
+
     def test_all_verdicts_use_three_states(self):
         self.assertTrue(all(r["结论"] in {"通过", "阻断", "未验证"} for r in _assemble()["rows"]))
 
