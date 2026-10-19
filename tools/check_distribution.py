@@ -73,6 +73,41 @@ def _git(system: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def partition_shipped(files: list[str]) -> tuple[list[str], list[str]]:
+    """demos/ 是本地演示，不进入收件方文件树。
+
+    跟踪集里仍出现时由调用方阻断：git clone 与 git archive 会把跟踪文件带走，
+    只在检查时悄悄跳过会把泄露藏起来。
+    """
+    blocked = [rel for rel in files if rel == "demos" or rel.startswith("demos/")]
+    shipped = [rel for rel in files if rel not in blocked]
+    return shipped, blocked
+
+
+def fresh_coverage_gaps(recipient: Path, advisory: list[str]) -> list[str]:
+    """新克隆的合法初始态必须留痕。文件不存在且建议项没有对应标记，就是静默跳过。"""
+    system = recipient / paths.SYSTEM_DIRNAME
+    text = "\n".join(advisory)
+    issues = []
+    if not (system / "data" / "rules" / "零系统绑定词表.md").is_file() and "实体词表未声明" not in text:
+        issues.append(
+            "[降级未留痕] 收件方没有零系统绑定词表，体检却未留下「实体词表未声明」；"
+            "实体词检查停用时必须留痕，不能报成已检查。"
+        )
+    registry = system / "data" / "templates" / "registry.yaml"
+    if (recipient / FOREIGN_DIR_PROBE).is_dir() and registry.is_file() and "注册表待登记" not in text:
+        raw = registry.read_text(encoding="utf-8", errors="replace")
+        if not re.search(r"(?m)^-\s+id:", raw):
+            issues.append(
+                "[降级未留痕] 收件方注册表没有项目，体检却未留下「注册表待登记」。"
+            )
+    if not (system / "data" / "rules" / "tips.md").is_file() and "实例声明待落地" not in text:
+        issues.append(
+            "[降级未留痕] 收件方实例声明尚未落地，体检却未留下「实例声明待落地」。"
+        )
+    return issues
+
+
 def distribution_files(system: Path) -> list[str]:
     """收件方实际拿到的文件清单（版本库跟踪集）。"""
     try:
@@ -273,8 +308,15 @@ def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False) 
         )
 
     files = distribution_files(system)
+    shipped, demo_files = partition_shipped(files)
     terms = _forbidden_terms(workspace)
     blocking, advisory = [], []
+    if demo_files:
+        shown = "、".join(demo_files[:5]) + ("…" if len(demo_files) > 5 else "")
+        blocking.append(
+            f"[demos 不得分发] {shown} 仍在版本库跟踪集。"
+            "demos/ 只留在本机：确认 .gitignore 含 /demos/ 后执行 git rm -r --cached demos。"
+        )
     if not terms:
         advisory.append(
             "[实体词表未声明] 未读到 .entropaxis/data/rules/零系统绑定词表.md，实体名扫描已降级停用；"
@@ -284,12 +326,13 @@ def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False) 
     tmpdir = tempfile.mkdtemp(prefix="entropaxis-dist-")
     recipient = Path(tmpdir)
     try:
-        copied = build_recipient_tree(system, files, recipient)
+        copied = build_recipient_tree(system, shipped, recipient)
         blocking += scan_leaks(recipient / paths.SYSTEM_DIRNAME, terms)
-        advisory += dangling_skill_routes(system, recipient / paths.SYSTEM_DIRNAME, files)
+        advisory += dangling_skill_routes(system, recipient / paths.SYSTEM_DIRNAME, shipped)
         chain_blocking, chain_advisory = run_init_chain(recipient)
         blocking += chain_blocking
         advisory += chain_advisory
+        blocking += fresh_coverage_gaps(recipient, chain_advisory)
     finally:
         if not keep_tree:
             shutil.rmtree(tmpdir, ignore_errors=True)
@@ -301,6 +344,7 @@ def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False) 
         "status": "fail" if blocking else "pass",
         "distributed_files": copied,
         "entity_terms": len(terms),
+        "scans": ["entity", "credential", "home_path"],
         "blocking": blocking,
         "advisory": advisory,
         "recipient_tree": tmpdir if keep_tree else None,

@@ -38,10 +38,10 @@ except ImportError:
 # 值为空列表 = 该公理**没有**任何检查器承接，必须如实报未验证（见设计不变量 1）。
 AXIOM_COVERAGE = {
     "1. 一个事实，一个归属": ["10", "18"],
-    "2. 分层覆盖与就近优先": [],
+    "2. 分层覆盖与就近优先": ["33"],
     "3. 薄入口，按需读取与 Token 经济性": ["8", "12", "17", "24"],
     "4. 事实与物理实现优先": ["19b", "21"],
-    "5. 最小作用量与克制": [],
+    "5. 最小作用量与克制": ["34", "35"],
     "6. 尊重边界与物理动作闭环": ["31"],
     "7. 本地优先与自闭环": ["22"],
     "8. 动作驱动优于场景穷举": ["3", "7"],
@@ -182,14 +182,19 @@ def assemble(root: Path, fix_claude_md: bool = True) -> dict:
         {
             "对象": "收件方视角分发求值（新克隆工作区）",
             "证据": (f"阻断 {dist_block} 项 · 建议 {dist_adv if dist_adv is not None else '?'} 项"
+                     + (f"；已扫描 {'、'.join(dist['scans'])}" if dist.get("scans") else "")
                      if "error" not in dist else f"分发核验失败: {dist['error'][:120]}"),
             "结论": "通过" if dist_ok else "阻断",
         },
         {
             "对象": "元规则九条公理机械承接",
-            "证据": f"{len(covered)}/9 条有体检项承接；第 "
-                    + "、".join(a.split(".")[0] for a in uncovered) + " 条无机械检查器",
-            "结论": "阻断" if coverage_gaps else "未验证",
+            "证据": (
+                f"{len(covered)}/9 条有体检项承接并已执行"
+                if not uncovered else
+                f"{len(covered)}/9 条有体检项承接；第 "
+                + "、".join(a.split('.', 1)[0] for a in uncovered) + " 条无机械检查器"
+            ),
+            "结论": "阻断" if coverage_gaps else ("未验证" if uncovered else "通过"),
         },
         {
             "对象": "CLAUDE.md 薄壳纯净度自动改写",
@@ -236,13 +241,22 @@ def render_markdown(report: dict) -> str:
     for r in report["rows"]:
         out.append(f"| {r['对象']} | {r['证据']} | {r['结论']} |")
 
-    uncovered = "、".join(
-        f"第 {a.split('.', 1)[0]} 条（{a.split('. ', 1)[-1]}）" for a in report["uncovered_axioms"]
-    )
-    out += ["", f"**未覆盖范围**：元规则{uncovered}属价值判断，无机械检查器承接，本轮未验证；"
-                f"有承接的公理仅验证所列机械检查；授权裁决与本次交付是否已打开仍需人工核验"
-                f"（第 31 项只证明源码未直接调用平台打开命令）；"
-                f"业务内容与实例数据内容不在范围，实例声明的结构与来源仍受体检。"]
+    if report["uncovered_axioms"]:
+        uncovered = "、".join(
+            f"第 {a.split('.', 1)[0]} 条（{a.split('. ', 1)[-1]}）" for a in report["uncovered_axioms"]
+        )
+        gap = f"元规则{uncovered}无机械检查器承接，本轮未验证。"
+    else:
+        gap = "九条公理均有体检项承接。"
+    out += ["",
+            "**未覆盖范围**：" + gap +
+            "第 33 项只拦截明示放宽语句，以及动态执行和系统外壳调用；同义改写不在检测内。"
+            "第 34 项只拦截禁用第三方依赖。第 35 项只列出零引用规则，不自动删除。"
+            "第 31 项证明源码未直接调用平台打开命令；本报告不落盘，本轮无打开义务。"
+            "语法税超过 50% 时第 24 项写明去表化这一兑现方式。"
+            "价值回收由第 30 项检查；跨平台回退由第 36 项检查；工具异常路径由第 37 项检查。"
+            "分发扫描凭据特征串、家目录路径与实体词；词表、空注册表或实例声明缺失时必须留痕，静默跳过会阻断。"
+            "业务正文与 credentials/ 的内容不进入这些扫描。"]
 
     out += ["", "## 可优化项", ""]
     if report["blocking"]:

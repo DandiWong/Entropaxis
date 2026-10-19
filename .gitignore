@@ -12,3 +12,6 @@ skills/*.zip
 # 必须带前导斜杠锚定顶层——无锚点会匹配任意层级同名目录，误伤已跟踪的
 # templates/instance/（历史上曾叫 templates/data/，与此互为前车之鉴）
 /data/
+
+# 本地演示页含环境路径与实例口径，只留本机，不进 clone / archive。
+/demos/

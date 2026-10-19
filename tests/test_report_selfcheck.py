@@ -45,9 +45,19 @@ class AxiomCoverageDriftTests(unittest.TestCase):
         self.assertEqual(set(rs.AXIOM_COVERAGE), expected,
                          "AXIOM_COVERAGE 与 00_元规则.md 已漂移，须同步")
 
-    def test_uncovered_axioms_are_declared_not_silently_passed(self):
+    def test_covered_axioms_pass_when_their_checks_ran(self):
         report = _assemble()
-        self.assertTrue(report["uncovered_axioms"], "无机械承接的公理必须被点名")
+        self.assertEqual(report["uncovered_axioms"], [])
+        row = next(r for r in report["rows"] if "元规则" in r["对象"])
+        self.assertEqual(row["结论"], "通过")
+
+    def test_axiom_without_checker_stays_unverified(self):
+        coverage = dict(rs.AXIOM_COVERAGE)
+        key = next(iter(coverage))
+        coverage[key] = []
+        with mock.patch.object(rs, "AXIOM_COVERAGE", coverage):
+            report = _assemble()
+        self.assertIn(key, report["uncovered_axioms"])
         row = next(r for r in report["rows"] if "元规则" in r["对象"])
         self.assertEqual(row["结论"], "未验证")
 
@@ -147,7 +157,8 @@ class RenderTests(unittest.TestCase):
     def test_uncovered_range_reads_naturally(self):
         md = rs.render_markdown(_assemble())
         self.assertIn("**未覆盖范围**：", md)
-        self.assertRegex(md, r"第 \d+ 条（[^）]+）")
+        self.assertIn("第 33 项", md)
+        self.assertIn("第 37 项", md)
 
     def test_all_healthy_states_no_pending_items(self):
         clean = {**GREEN_LINT, "advisory_count": 0, "checks": [], "passed_checks": CHECK_TITLES}

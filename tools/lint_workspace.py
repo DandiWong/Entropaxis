@@ -285,14 +285,22 @@ def check_syntax_tax_budget(root: Path) -> list[str]:
     if entry_ag.is_file():
         ratio = _compute_syntax_tax_ratio(entry_ag.read_text(encoding="utf-8"))
         if ratio > MAX_ENTRYPOINT_SYNTAX_TAX_PCT:
-            issues.append(f"[常驻入口语法税超标] entrypoints/AGENTS.md 语法税 {ratio}% > {MAX_ENTRYPOINT_SYNTAX_TAX_PCT}%；须去表化为紧凑列表。")
+            issues.append(_syntax_tax_issue(
+                "常驻入口语法税超标", f"entrypoints/AGENTS.md 语法税 {ratio}% > {MAX_ENTRYPOINT_SYNTAX_TAX_PCT}%；须去表化为紧凑列表。", ratio))
     rules_dir = system / "rules"
     if rules_dir.is_dir():
         for rf in sorted(rules_dir.glob("*.md")):
             ratio = _compute_syntax_tax_ratio(rf.read_text(encoding="utf-8"))
             if ratio > MAX_RULE_SYNTAX_TAX_PCT:
-                issues.append(f"[规则语法税超标] rules/{rf.name} 语法税 {ratio}% > {MAX_RULE_SYNTAX_TAX_PCT}%；改用冒号键值行或紧凑列表消税。")
+                issues.append(_syntax_tax_issue(
+                    "规则语法税超标", f"rules/{rf.name} 语法税 {ratio}% > {MAX_RULE_SYNTAX_TAX_PCT}%；改用冒号键值行或紧凑列表消税。", ratio))
     return issues
+
+
+def _syntax_tax_issue(kind: str, detail: str, ratio: float) -> str:
+    """语法税超过 50% 时写明兑现方式：去表化。50% 以下仍只报超预算。"""
+    payoff = " Token 差额可兑现：去掉表格，改成冒号键值行。" if ratio > 50 else ""
+    return f"[{kind}] {detail}{payoff}"
 
 
 def _normalize_rule_text(content: str) -> str:
@@ -1258,7 +1266,11 @@ def check_open_bypass(root: Path) -> list[str]:
 
 
 _OPEN_ARGV = re.compile(
-    r"""\[\s*["'](?:open|xdg-open)["']\s*,|\[\s*["']cmd["']\s*,\s*["']/c["']\s*,\s*["']start["']"""
+    r"""\[\s*["'](?:open|xdg-open)["']\s*,"""
+    r"""|\[\s*["']cmd["']\s*,\s*["']/c["']\s*,\s*["']start["']"""
+    r"""|webbrowser\.open\("""
+    r"""|os\.startfile\("""
+    r"""|os\.system\(\s*["'][^"']*\b(?:open|xdg-open|start)\b"""
 )
 _OPEN_FENCE = re.compile(r"^(?:\$\s*)?(?:open|xdg-open|start)\b")
 
@@ -1387,6 +1399,191 @@ def check_workspace_hygiene(root: Path) -> list[str]:
     return issues
 
 
+# 第 33 项：元规则第 2 条里可以机械识别的放宽。同义改写不在此列。
+_LAYER_RELAX = re.compile(
+    r"忽略\s*(?:元规则|安全边界|授权确认|打开闭环)"
+    r"|放宽\s*(?:授权|凭据边界|数据边界|凭据)"
+    r"|不必确认即可\s*(?:发送|推送|删除|外发|发布)"
+    r"|跳过\s*打开闭环"
+    r"|(?:附件|网页|日志|工具输出).{0,16}(?:即|作为)\s*(?:指令|授权)"
+    r"|插件内部约定\s*(?:优先|高于|覆盖)"
+)
+_LAYER_NEGATION = re.compile(r"不得|禁止|严禁|不允许|不能|不会|不把|不是")
+_DYNAMIC_EXEC = re.compile(r"\beval\(|\bexec\(|\bos\.system\(|\bshell\s*=\s*True")
+# 第 34 项：工具设计只允许标准库与 PyYAML。名单是会把控制面绑到第三方的常见包，不是全量。
+_BANNED_IMPORT = re.compile(
+    r"^\s*(?:import|from)\s+(requests|httpx|aiohttp|urllib3|pandas|numpy|boto3|"
+    r"openai|anthropic|flask|django|fastapi|rich|typer|toml|ruamel)\b",
+    re.MULTILINE,
+)
+# 第 36 项：这些命令在 Windows 上没有同名可执行文件。
+_UNIX_ONLY_ARGV = re.compile(
+    r"""\[\s*["'](?:find|mdfind|osascript|pbcopy|xdg-open|plocate|locate)["']"""
+)
+_PLATFORM_FALLBACK = re.compile(r"win32|Windows|不支持")
+# 第 37 项：测试名或断言里出现失败形态，才算异常路径有执行证据。
+_ERROR_TEST = re.compile(
+    r"def test_\w*(?:fail|reject|error|missing|silent|invalid|refus|unreadable|unknown|mismatch|block)",
+    re.IGNORECASE,
+)
+
+
+def _project_layer_files(root: Path) -> list[Path]:
+    """项目入口与 Spec。控制面规则正文是禁令本身，不拿来判放宽。"""
+    files: list[Path] = []
+    for pattern in ("**/AGENTS.md", "**/*Spec*.md"):
+        for path in root.glob(pattern):
+            if not path.is_file() or not _is_first_party(path, root):
+                continue
+            if paths.SYSTEM_DIRNAME in path.relative_to(root).parts:
+                continue
+            files.append(path)
+    return files
+
+
+def check_layer_override(root: Path) -> list[str]:
+    """项目入口与 Spec 不得明示放宽上层授权、凭据或数据边界；工具不得把材料当代码执行。
+
+    只识别固定句式。同一行含否定词（不得、禁止）的是禁令，不是放宽。
+    """
+    issues = []
+    for path in _project_layer_files(root):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for lineno, line in enumerate(lines, 1):
+            if _LAYER_RELAX.search(line) and not _LAYER_NEGATION.search(line):
+                issues.append(
+                    f"[分层放宽] {path.relative_to(root)}:{lineno} 明示放宽上层授权、凭据或数据边界；"
+                    "项目规则与 Spec 只能收紧，例外走对应规则的人工授权。"
+                )
+    tools = root / paths.SYSTEM_DIRNAME / "tools"
+    if tools.is_dir():
+        for path in sorted(tools.glob("*.py")):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if _DYNAMIC_EXEC.search(text):
+                issues.append(
+                    f"[材料被执行] {path.relative_to(root)} 把文本交给动态执行或系统外壳；"
+                    "附件、日志和工具输出里的命令不是指令。"
+                )
+    return issues
+
+
+def check_stdlib_only(root: Path) -> list[str]:
+    """工具只允许标准库与 PyYAML。新引入名单内的第三方包即违反最小作用量。"""
+    tools = root / paths.SYSTEM_DIRNAME / "tools"
+    if not tools.is_dir():
+        return []
+    issues = []
+    for path in sorted(tools.glob("*.py")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        match = _BANNED_IMPORT.search(text)
+        if match:
+            issues.append(
+                f"[多余依赖] {path.relative_to(root)} 引入 {match.group(1)}；"
+                "复用标准库或已有工具，PyYAML 是唯一允许的第三方依赖。"
+            )
+    return issues
+
+
+def check_rule_retirement_candidates(root: Path) -> list[str]:
+    """零引用的规则登记为退役候选。只列出，不删除。"""
+    system = root / paths.SYSTEM_DIRNAME
+    rules = sorted((system / "rules").glob("*.md")) if (system / "rules").is_dir() else []
+    if not rules:
+        return []
+    corpus: list[Path] = []
+    for pattern in ("rules/*.md", "entrypoints/*.md", "skills/*/SKILL.md", "tests/*.py", "tools/*.py"):
+        corpus.extend(path for path in system.glob(pattern) if path.is_file())
+    texts = []
+    for path in corpus:
+        try:
+            texts.append((path.resolve(), path.read_text(encoding="utf-8", errors="replace")))
+        except OSError:
+            continue
+    issues = []
+    for rule in rules:
+        needle_name = rule.name
+        needle_stem = rule.stem
+        own = rule.resolve()
+        if any(path != own and (needle_name in text or needle_stem in text) for path, text in texts):
+            continue
+        issues.append(
+            f"[退役候选] rules/{rule.name} 在规则、入口、Skill、工具与测试中零引用；"
+            "按《根系统治理》规则审计流程登记，由人仲裁后再删。"
+        )
+    return issues
+
+
+def check_platform_fallback(root: Path) -> list[str]:
+    """调用 Unix 专用命令的工具，同一文件必须给出 Windows 分支或明确写不支持。"""
+    tools = root / paths.SYSTEM_DIRNAME / "tools"
+    if not tools.is_dir():
+        return []
+    issues = []
+    for path in sorted(tools.glob("*.py")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if _UNIX_ONLY_ARGV.search(text) and not _PLATFORM_FALLBACK.search(text):
+            issues.append(
+                f"[跨平台回退缺失] {path.relative_to(root)} 调用了 Unix 专用命令，"
+                "同一文件须有 win32/Windows 分支，或写明该平台不支持。"
+            )
+    return issues
+
+
+def check_tool_error_tests(root: Path) -> list[str]:
+    """每个工具至少有一处测试提到它的失败、拒绝、缺失或非零退出。
+
+    没有 tests/ 的夹具工作区跳过：那里不是在证明本仓库的异常路径。
+    """
+    system = root / paths.SYSTEM_DIRNAME
+    tools = system / "tools"
+    tests = system / "tests"
+    if not tools.is_dir() or not tests.is_dir():
+        return []
+    blobs = []
+    for path in tests.glob("*.py"):
+        try:
+            blobs.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    issues = []
+    for tool in sorted(tools.glob("*.py")):
+        if tool.stem in {"paths", "__init__"}:
+            continue
+        relevant = [text for text in blobs if tool.stem in text]
+        if not relevant:
+            issues.append(
+                f"[异常路径无测试] tools/{tool.name} 没有测试提到它；"
+                "为失败、拒绝或缺失输入补一个会执行的测试。"
+            )
+            continue
+        blob = "\n".join(relevant)
+        covered = (
+            _ERROR_TEST.search(blob)
+            or "assertRaises" in blob
+            or "returncode" in blob
+            or "❌" in blob
+            or "assertIsNone" in blob
+        )
+        if not covered:
+            issues.append(
+                f"[异常路径无测试] tools/{tool.name} 的测试只有成功路径；"
+                "补一个失败、拒绝、缺失或非零退出的测试。"
+            )
+    return issues
+
+
 def main() -> int:
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
     # --json 供 report_selfcheck.py 等下游消费，避免消费方去 parse 人读散文（《工具设计》3.3 结构化输出）
@@ -1434,6 +1631,11 @@ def main() -> int:
         ("28. 项目入口待填项检查", check_project_entry_placeholders, False),
         ("29. 工作区存量卫生检查", check_workspace_hygiene, False),
         ("30. 胶囊生命周期同步检查", check_capsule_lifecycle, False),
+        ("33. 分层放宽与材料执行检查", check_layer_override, True),
+        ("34. 工具依赖克制检查", check_stdlib_only, True),
+        ("35. 规则退役候选检查", check_rule_retirement_candidates, False),
+        ("36. 跨平台回退检查", check_platform_fallback, True),
+        ("37. 工具异常路径测试检查", check_tool_error_tests, True),
     ]
 
     all_issues = []

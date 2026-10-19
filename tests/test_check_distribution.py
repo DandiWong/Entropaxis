@@ -15,6 +15,8 @@ from tools.check_distribution import (
     scan_leaks,
     FOREIGN_DIR_PROBE,
     dangling_skill_routes,
+    partition_shipped,
+    fresh_coverage_gaps,
 )
 
 _TERMS = ["acmecorp", "acmeboard"]
@@ -99,6 +101,51 @@ class DistributionSetTests(unittest.TestCase):
             self.assertTrue((dest / FOREIGN_DIR_PROBE).is_dir())
             # 探针只播在工作区根，不得混进 .entropaxis/（否则会被当成分发内容扫描）
             self.assertFalse((dest / paths.SYSTEM_DIRNAME / FOREIGN_DIR_PROBE).exists())
+
+    def test_gitignored_demos_stay_out_of_the_distribution(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            system = _mk_repo(root)
+            (system / ".gitignore").write_text("/demos/\n", encoding="utf-8")
+            demo = system / "demos"
+            demo.mkdir()
+            (demo / "index.html").write_text("acmecorp", encoding="utf-8")
+            (system / "public.md").write_text("公开内容", encoding="utf-8")
+            _git(system, "add", "-A")
+            files = distribution_files(system)
+            shipped, blocked = partition_shipped(files)
+            self.assertEqual(blocked, [])
+            self.assertNotIn("demos/index.html", shipped)
+            self.assertIn("public.md", shipped)
+
+    def test_force_tracked_demos_are_not_shipped_and_are_named(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            system = _mk_repo(root)
+            (system / ".gitignore").write_text("/demos/\n", encoding="utf-8")
+            demo = system / "demos"
+            demo.mkdir()
+            (demo / "index.html").write_text("本地演示", encoding="utf-8")
+            _git(system, "add", "-f", "demos/index.html")
+            shipped, blocked = partition_shipped(distribution_files(system))
+            self.assertEqual(blocked, ["demos/index.html"])
+            self.assertNotIn("demos/index.html", shipped)
+
+    def test_fresh_gaps_require_the_degrade_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            recipient = Path(td)
+            system = recipient / paths.SYSTEM_DIRNAME
+            (system / "data" / "templates").mkdir(parents=True)
+            (system / "data" / "templates" / "registry.yaml").write_text("projects: []\n", encoding="utf-8")
+            (recipient / FOREIGN_DIR_PROBE).mkdir()
+            self.assertEqual(fresh_coverage_gaps(recipient, [
+                "[实体词表未声明] 未读到词表",
+                "[注册表待登记] 尚无项目",
+                "[实例声明待落地] tips.md",
+            ]), [])
+            gaps = fresh_coverage_gaps(recipient, [])
+            self.assertEqual(len(gaps), 3, gaps)
+            self.assertTrue(all("降级未留痕" in gap for gap in gaps))
 
     def test_untracked_file_reported_as_pending(self) -> None:
         with tempfile.TemporaryDirectory() as td:

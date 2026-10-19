@@ -122,6 +122,18 @@ class UpdateCapsuleTests(unittest.TestCase):
         uc.update_capsule(str(self.cap))
         self.assertEqual(lw.check_capsule_lifecycle(root), [])
 
+    def test_lint_reports_overdue_value_review(self) -> None:
+        root = Path(self._td.name)
+        self.manifest(lifecycle="delivered")
+        text = (self.cap / "capsule.yaml").read_text(encoding="utf-8").replace(
+            "review_due_at: null", "review_due_at: 2000-01-01")
+        (self.cap / "capsule.yaml").write_text(text, encoding="utf-8")
+        tools = root / ".entropaxis" / "tools"
+        tools.mkdir(parents=True)
+        (tools / "update_capsule.py").write_text(TOOL.read_text(encoding="utf-8"), encoding="utf-8")
+        issues = lw.check_capsule_lifecycle(root)
+        self.assertTrue(any("[价值回收到期]" in item for item in issues), issues)
+
     def test_cli(self) -> None:
         ok = subprocess.run([sys.executable, str(TOOL), str(self.cap), "--json"], capture_output=True, text=True)
         self.assertEqual(ok.returncode, 0, ok.stderr)
