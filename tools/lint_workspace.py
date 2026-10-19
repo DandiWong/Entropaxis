@@ -1224,6 +1224,53 @@ def check_routing_integrity(root: Path) -> list[str]:
         for bad_rule in ("开发通用规则", "开发项目联动规则", "知识库规则", "项目运行规则", "表达文风规则", "代码库重构与治理规则"):
             if bad_rule in text:
                 issues.append(f"[子入口硬编码废弃规则] {agents_doc.relative_to(root)} 包含废弃规则名 {bad_rule}，应收敛至单一根回链。")
+
+    # 4. 事务胶囊外部依赖（dependencies）断链与漂移检查
+    for manifest in root.glob("**/capsule.yaml"):
+        if not _is_first_party(manifest, root):
+            continue
+        cap_dir = manifest.parent
+        try:
+            import yaml  # noqa: PLC0415
+            m_data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+            deps = m_data.get("dependencies") or []
+            for dep in deps:
+                raw_p = dep if isinstance(dep, str) else dep.get("path")
+                if not raw_p:
+                    continue
+                # 相对路径多层容错解析：
+                # 1) 相对胶囊目录
+                # 2) 相对所属项目根目录（含 AGENTS.md 的最近上级目录）
+                # 3) 相对工作区根
+                target_p = (cap_dir / raw_p).resolve()
+                if not target_p.exists():
+                    cur = cap_dir
+                    proj_root = None
+                    while cur != root and cur.parent != cur:
+                        if (cur / "AGENTS.md").is_file():
+                            proj_root = cur
+                            break
+                        cur = cur.parent
+                    if proj_root:
+                        candidate = (proj_root / raw_p).resolve()
+                        if candidate.exists():
+                            target_p = candidate
+                if not target_p.exists():
+                    candidate = (root / raw_p).resolve()
+                    if candidate.exists():
+                        target_p = candidate
+                if not target_p.exists():
+                    issues.append(f"[胶囊依赖断链] {manifest.relative_to(root)} 声明的外部依赖不存在: {raw_p}")
+                elif isinstance(dep, dict) and dep.get("sha256") and target_p.is_file():
+                    import hashlib  # noqa: PLC0415
+                    curr_sha = hashlib.sha256(target_p.read_bytes()).hexdigest()
+                    if curr_sha != dep["sha256"]:
+                        issues.append(
+                            f"[胶囊依赖漂移] {manifest.relative_to(root)} 依赖的 {raw_p} 内容已变更（SHA256 漂移）；"
+                            f"记录: {dep['sha256'][:8]}... 当前: {curr_sha[:8]}..."
+                        )
+        except Exception:
+            pass
     return issues
 
 

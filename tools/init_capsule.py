@@ -119,6 +119,8 @@ roles_manifest:
   assigned_by: init_capsule.py
   revision: 0
   assignments: []
+# 外部依赖声明（客观资产、原型Demo、前序输入，契约 schemas/capsule.schema.json）
+dependencies: []
 # 事务工时日志（唯一真源，契约 schemas/capsule.schema.json；由 tools/update_capsule.py 维护）
 worklogs: []
 """

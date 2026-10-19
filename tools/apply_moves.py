@@ -367,10 +367,73 @@ def _execute(rows: list[Move], log_path: Path, root: Path, shared: list[Path], u
             print(f"   已{verb} {done} 行，已完成部分保留；{hint}")
             return EXIT_FAILED
         done += 1
+    # 成功执行后，级联更新全工作区 capsule.yaml 中的外部依赖路径
+    if done > 0:
+        _cascade_capsule_dependencies(rows, root, undo=undo)
     suffix = "（不删除任何文件，遗留空目录不清理）" if undo else ""
     print(f"✅ {verb}完成：{done} 行{suffix}。")
     return EXIT_OK
 
+
+def _cascade_capsule_dependencies(rows: list[Move], root: Path, *, undo: bool) -> None:
+    """文件或目录移动后，自动级联修正胶囊 capsule.yaml 中声明的外部依赖相对路径。"""
+    try:
+        import yaml  # noqa: PLC0415
+    except ImportError:
+        return
+    pair_map = [(dst, src) if undo else (src, dst) for _, src, dst in rows]
+    for manifest in root.glob("**/capsule.yaml"):
+        cap_dir = manifest.parent
+        try:
+            text = manifest.read_text(encoding="utf-8")
+            data = yaml.safe_load(text) or {}
+            deps = data.get("dependencies")
+            if not isinstance(deps, list) or not deps:
+                continue
+            mutated = False
+            new_deps = []
+            for item in deps:
+                is_str = isinstance(item, str)
+                raw_p = item if is_str else (item.get("path") if isinstance(item, dict) else None)
+                if not raw_p:
+                    new_deps.append(item)
+                    continue
+                # 计算该依赖指向的绝对路径
+                dep_target = (cap_dir / raw_p).resolve()
+                try:
+                    dep_rel_to_root = os.path.normpath(str(dep_target.relative_to(root)))
+                except ValueError:
+                    dep_rel_to_root = os.path.normpath(raw_p)
+                
+                # 比对移动记录
+                updated_rel = None
+                for old_root_rel, new_root_rel in pair_map:
+                    if dep_rel_to_root == old_root_rel or dep_rel_to_root.startswith(old_root_rel + os.sep):
+                        sub = dep_rel_to_root[len(old_root_rel):].lstrip(os.sep)
+                        updated_rel = os.path.join(new_root_rel, sub) if sub else new_root_rel
+                        break
+                if updated_rel:
+                    # 重算相对该胶囊目录的新路径
+                    new_target_abs = root / updated_rel
+                    try:
+                        new_rel_to_cap = os.path.relpath(new_target_abs, cap_dir)
+                    except ValueError:
+                        new_rel_to_cap = updated_rel
+                    if is_str:
+                        new_deps.append(new_rel_to_cap)
+                    else:
+                        updated_item = dict(item)
+                        updated_item["path"] = new_rel_to_cap
+                        new_deps.append(updated_item)
+                    mutated = True
+                else:
+                    new_deps.append(item)
+            if mutated:
+                data["dependencies"] = new_deps
+                # 保持紧凑 YAML 替换输出
+                manifest.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False), encoding="utf-8")
+        except Exception:
+            pass
 
 def run(manifest_path: Path, *, root: Path, apply: bool = False, undo: bool = False) -> int:
     root = root.expanduser().resolve()

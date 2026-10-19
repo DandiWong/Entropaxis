@@ -56,6 +56,25 @@
           "original_summary": { "type": "string" }
         }
       }
+    },
+    "dependencies": {
+      "type": "array",
+      "description": "胶囊对外部客观资产、原型或前序标准的显式依赖与数字指纹",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "role": { "type": "string" },
+              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "captured_at": { "type": "string" }
+            }
+          }
+        ]
+      }
     }
   }
 }

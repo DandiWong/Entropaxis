@@ -482,8 +482,33 @@ def update_capsule(capsule_dir: str, *, delivered: str | None = None, dry_run: b
                 worklog_refs.append(open_seg["seg_id"])
             mutated = True
 
+        # 交付终审时：自动捕获外部依赖的当前 SHA256 指纹，加固防腐封箱
+        deps = data.get("dependencies")
+        if isinstance(deps, list) and deps:
+            import hashlib  # noqa: PLC0415
+            new_deps = []
+            for d in deps:
+                is_str = isinstance(d, str)
+                raw_p = d if is_str else (d.get("path") if isinstance(d, dict) else None)
+                if not raw_p:
+                    new_deps.append(d)
+                    continue
+                t_path = (capsule / raw_p).resolve()
+                if not t_path.exists():
+                    t_path = (paths.WORKSPACE_ROOT / raw_p).resolve()
+                if t_path.is_file():
+                    sha = hashlib.sha256(t_path.read_bytes()).hexdigest()
+                    item_obj = {"path": raw_p, "role": "living_asset", "sha256": sha, "captured_at": _now_iso()} if is_str else dict(d)
+                    if not is_str:
+                        item_obj["sha256"] = sha
+                        item_obj["captured_at"] = _now_iso()
+                    new_deps.append(item_obj)
+                else:
+                    new_deps.append(d)
+            data["dependencies"] = new_deps
+            mutated = True
+
     # 方案 3.4 archived-unmeasured 自动结转: 遗留的 open / pending_approval 段自动转为 unmeasured
-    if target == "archived-unmeasured":
         for s in data.get("task_segments") or []:
             if s.get("state") in ("open", "pending_approval"):
                 s["state"] = "unmeasured"
