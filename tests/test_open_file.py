@@ -308,6 +308,46 @@ class DirectoryAssociationTests(unittest.TestCase):
 
     def test_url_opens_in_default_browser(self) -> None:
         runner = RecordingRunner()
-        results = open_paths(["https://example.com/orders"], config_path=Path("/nonexistent.json"), platform="darwin", runner=runner)
+        no_tab = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "false", "")
+        results = open_paths(["https://example.com/orders"], config_path=Path("/nonexistent.json"),
+                             platform="darwin", runner=runner, closer=no_tab)
         self.assertTrue(results[0]["ok"])
+        self.assertFalse(results[0]["reloaded"])
         self.assertEqual(runner.calls[0][0], ["open", "https://example.com/orders"])
+
+    def test_url_reloads_existing_tab_instead_of_new_one(self) -> None:
+        runner = RecordingRunner()
+        scripts = []
+
+        def tab_found(argv, **kw):
+            scripts.append(argv[2])
+            return subprocess.CompletedProcess(argv, 0, "true", "")
+
+        res = open_paths(["http://example.test:3000/"], config_path=Path("/nonexistent.json"),
+                         platform="darwin", runner=runner, closer=tab_found)[0]
+        self.assertTrue(res["ok"] and res["reloaded"])
+        self.assertEqual(res["selected_app"], "Google Chrome")
+        self.assertEqual(runner.calls, [], "命中已有标签页时不得再新开")
+        self.assertIn('"http://example.test:3000"', scripts[0], "尾斜杠应归一后匹配")
+
+    def test_html_file_reloads_existing_tab(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            page = Path(td) / "原型.html"
+            page.write_text("<p>v2</p>", encoding="utf-8")
+            runner = RecordingRunner()
+            scripts = []
+
+            def safari_only(argv, **kw):
+                scripts.append(argv[2])
+                hit = "Safari" in argv[2]
+                return subprocess.CompletedProcess(argv, 0, "true" if hit else "false", "")
+
+            res = open_paths([str(page)], config_path=Path("/nonexistent.json"), platform="darwin",
+                             runner=runner, closer=safari_only, on_deliver=True)[0]
+            self.assertTrue(res["reloaded"])
+            self.assertEqual(res["selected_app"], "Safari")
+            self.assertEqual(runner.calls, [])
+            self.assertIn(page.resolve().as_uri(), scripts[0])
+
+    def test_reload_probe_skipped_off_macos(self) -> None:
+        self.assertEqual(open_file._reload_browser_tab("http://x", "linux", closer=None), "")

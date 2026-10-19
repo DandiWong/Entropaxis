@@ -202,6 +202,69 @@ def _close_if_already_open(
     return False
 
 
+BROWSER_RELOAD_EXTENSIONS = {".html", ".htm"}
+
+# 每个浏览器单独一段脚本：未安装的浏览器编译失败只影响自己。`is running` 守卫防止把未开的浏览器拉起来。
+_BROWSER_RELOAD_SCRIPTS = {
+    "Google Chrome": '''
+if application "Google Chrome" is running then
+    tell application "Google Chrome"
+        repeat with w in windows
+            set i to 0
+            repeat with t in tabs of w
+                set i to i + 1
+                set u to URL of t
+                if u is "{url}" or u starts with "{url}/" or u starts with "{url}#" or u starts with "{url}?" then
+                    reload t
+                    set active tab index of w to i
+                    set index of w to 1
+                    activate
+                    return "true"
+                end if
+            end repeat
+        end repeat
+    end tell
+end if
+return "false"
+''',
+    "Safari": '''
+if application "Safari" is running then
+    tell application "Safari"
+        repeat with w in windows
+            repeat with t in tabs of w
+                set u to URL of t
+                if u is "{url}" or u starts with "{url}/" or u starts with "{url}#" or u starts with "{url}?" then
+                    set URL of t to u
+                    set current tab of w to t
+                    set index of w to 1
+                    activate
+                    return "true"
+                end if
+            end repeat
+        end repeat
+    end tell
+end if
+return "false"
+''',
+}
+
+
+def _reload_browser_tab(url: str, platform: str, closer=subprocess.run) -> str:
+    """已有同地址标签页时就地刷新并切到前台，返回浏览器名；没有则返回空串，由调用方照常打开。"""
+    if platform != "darwin":
+        return ""  # ponytail: 仅 macOS AppleScript；其他平台照旧新开，有需求再补
+    escaped = url.rstrip("/").replace("\\", "\\\\").replace('"', '\\"')
+    for browser, template in _BROWSER_RELOAD_SCRIPTS.items():
+        try:
+            res = closer(["osascript", "-e", template.replace("{url}", escaped)],
+                         check=False, capture_output=True, text=True, timeout=10)
+        except Exception:
+            continue
+        if res.returncode == 0 and "true" in (res.stdout or "").lower():
+            return browser
+    return ""
+
+
 def _open_path(
     path_text: str,
     config: dict,
@@ -212,6 +275,12 @@ def _open_path(
     on_deliver: bool = False,
 ) -> dict:
     if path_text.startswith(("http://", "https://")):
+        browser = _reload_browser_tab(path_text, platform, closer)
+        if browser:
+            return {
+                "path": path_text, "ok": True, "selected_app": browser, "command": [],
+                "used_fallback": False, "reloaded": True, "reason": "", "returncode": 0,
+            }
         # 本地 dev 页面预览：URL 无扩展名映射，直接交给系统默认浏览器
         argv = {"darwin": ["open", path_text], "win32": ["cmd", "/c", "start", "", path_text]}.get(
             platform, ["xdg-open", path_text]
@@ -261,6 +330,12 @@ def _open_path(
                 "reason": f"交付场景不自动打开该格式 ({suffix or '无扩展名'})，已在回复中给出路径",
                 "returncode": 0,
             })
+            return result
+
+    if path.is_file() and path.suffix.lower() in BROWSER_RELOAD_EXTENSIONS:
+        browser = _reload_browser_tab(path.as_uri(), platform, closer)
+        if browser:
+            result.update({"ok": True, "selected_app": browser, "reloaded": True, "returncode": 0})
             return result
 
     association = _association_for(path, config)
