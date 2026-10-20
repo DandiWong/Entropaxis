@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -35,7 +36,12 @@ HERE = Path(__file__).resolve().parent
 SYSTEM_DIR = paths.SYSTEM_DIR
 WORKSPACE = paths.WORKSPACE_ROOT
 
-SUBPROCESS_TIMEOUT = 300
+# 收件方环境是**更慢**的那个：同一套单测在临时树上跑，耗时只会比本机长。
+# 超时写死小常数会把"机器慢"报成"系统异常"，掩盖真实结论，因此默认可观并可外部覆盖。
+DEFAULT_SUBPROCESS_TIMEOUT = 900
+TIMEOUT_ENV = "ENTROPAXIS_SUBPROCESS_TIMEOUT"
+# 超时不是被测对象的失败，必须与真失败分开计数（见 run_init_chain）。
+TIMEOUT_EXIT = 124
 
 # 收件方工作区探针目录名：刻意取一个不会与任何真实工作区、也不会与注册表排除规则
 # （repo/、Archive/、node_modules/ …）撞名的名字，用来求值"工作区非空"这个状态。
@@ -211,17 +217,58 @@ def scan_leaks(tree: Path, terms: list[str]) -> list[str]:
     return issues
 
 
-def _run(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        cmd, cwd=str(cwd), capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT
+def resolve_timeout(cli: int | None = None) -> int:
+    """子进程超时：CLI > 环境变量 > 默认。非法值直接报错，不悄悄回退。"""
+    if cli is not None:
+        if cli <= 0:
+            raise ToolError("❌ --timeout 必须为正整数（秒）。\n👉 修复建议: 例如 --timeout 1800。")
+        return cli
+    raw = os.environ.get(TIMEOUT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_SUBPROCESS_TIMEOUT
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ToolError(
+            f"❌ 环境变量 {TIMEOUT_ENV}={raw!r} 不是整数。\n"
+            f"👉 修复建议: 改为秒数（如 {DEFAULT_SUBPROCESS_TIMEOUT}），或删除该变量使用默认值。"
+        ) from None
+    if value <= 0:
+        raise ToolError(
+            f"❌ 环境变量 {TIMEOUT_ENV}={value} 必须为正数。\n👉 修复建议: 删除该变量或改为正整数秒。"
+        )
+    return value
+
+
+def _run(cmd: list[str], cwd: Path, timeout: int = DEFAULT_SUBPROCESS_TIMEOUT) -> subprocess.CompletedProcess:
+    """执行子命令；超时收敛成 TIMEOUT_EXIT 而不是抛出，让调用方把两种失败分开报。"""
+    try:
+        return subprocess.run(
+            cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, TIMEOUT_EXIT, "", f"超时: 超过 {timeout}s 未返回")
+
+
+def _timeout_issue(label: str, timeout: int) -> str:
+    return (
+        f"[{label}超时] 子进程超过 {timeout}s 未返回。"
+        "这是超时设置与被测耗时失配，不是被测对象的失败；"
+        f"调大 --timeout 或 {TIMEOUT_ENV} 后重跑。"
     )
 
 
-def run_init_chain(workspace: Path) -> tuple[list[str], list[str]]:
-    """在收件方树上实跑 bootstrap → lint → 单测，返回 (阻断项, 建议项)。"""
-    blocking, advisory = [], []
+def run_init_chain(workspace: Path, timeout: int | None = None) -> tuple[list[str], list[str]]:
+    """在收件方树上实跑 bootstrap → lint → 单测，返回 (阻断项, 建议项)。
 
-    boot = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/bootstrap.py"], workspace)
+    超时即中止后续步骤：慢机器上继续跑只会把同一条超时重复三遍，掩盖真实结论。
+    """
+    blocking, advisory = [], []
+    timeout = resolve_timeout(timeout)
+
+    boot = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/bootstrap.py"], workspace, timeout)
+    if boot.returncode == TIMEOUT_EXIT:
+        return blocking + [_timeout_issue("初始化", timeout)], advisory
     output = boot.stdout + boot.stderr
     if boot.returncode != 0:
         blocking.append(f"[初始化失败] bootstrap.py 退出码 {boot.returncode}；输出尾部：{output.strip()[-300:]}")
@@ -233,14 +280,18 @@ def run_init_chain(workspace: Path) -> tuple[list[str], list[str]]:
                 "新工作区首次初始化不应出现失败或自相矛盾的提示。"
             )
     # 幂等重入：连跑两次不得出现新的失败标记
-    again = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/bootstrap.py"], workspace)
+    again = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/bootstrap.py"], workspace, timeout)
+    if again.returncode == TIMEOUT_EXIT:
+        return blocking + [_timeout_issue("初始化不幂等重跑", timeout)], advisory
     if again.returncode != 0:
         blocking.append(f"[初始化不幂等] 第二次运行 bootstrap.py 退出码 {again.returncode}。")
     for marker in ("❌", "损坏", "Traceback"):
         if marker in again.stdout + again.stderr:
             blocking.append(f"[初始化不幂等] 第二次运行 bootstrap.py 输出含「{marker}」。")
 
-    lint = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/lint_workspace.py", "--json"], workspace)
+    lint = _run([sys.executable, f"{paths.SYSTEM_DIRNAME}/tools/lint_workspace.py", "--json"], workspace, timeout)
+    if lint.returncode == TIMEOUT_EXIT:
+        return blocking + [_timeout_issue("新环境体检", timeout)], advisory
     try:
         result = json.loads(lint.stdout)
         if not isinstance(result, dict) or not isinstance(result.get("checks"), list):
@@ -256,7 +307,10 @@ def run_init_chain(workspace: Path) -> tuple[list[str], list[str]]:
     tests = _run(
         [sys.executable, "-m", "unittest", "discover", "-s", f"{paths.SYSTEM_DIRNAME}/tests", "-t", paths.SYSTEM_DIRNAME],
         workspace,
+        timeout,
     )
+    if tests.returncode == TIMEOUT_EXIT:
+        return blocking + [_timeout_issue("新环境单测", timeout)], advisory
     ran = re.search(r"^Ran (\d+) tests? in", tests.stderr or tests.stdout, re.MULTILINE)
     if tests.returncode != 0 or ran is None or int(ran.group(1)) == 0:
         blocking.append(
@@ -298,9 +352,11 @@ def dangling_skill_routes(system: Path, tree: Path, files: list[str]) -> list[st
     return issues
 
 
-def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False) -> dict:
+def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False,
+                       timeout: int | None = None) -> dict:
     """核验分发就绪度，返回结构化结果字典。"""
     system = workspace / paths.SYSTEM_DIRNAME
+    timeout = resolve_timeout(timeout)
     if not system.is_dir():
         raise ToolError(
             f"❌ 未找到控制面目录: {system}\n"
@@ -329,7 +385,7 @@ def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False) 
         copied = build_recipient_tree(system, shipped, recipient)
         blocking += scan_leaks(recipient / paths.SYSTEM_DIRNAME, terms)
         advisory += dangling_skill_routes(system, recipient / paths.SYSTEM_DIRNAME, shipped)
-        chain_blocking, chain_advisory = run_init_chain(recipient)
+        chain_blocking, chain_advisory = run_init_chain(recipient, timeout)
         blocking += chain_blocking
         advisory += chain_advisory
         blocking += fresh_coverage_gaps(recipient, chain_advisory)
@@ -340,13 +396,19 @@ def check_distribution(workspace: Path = WORKSPACE, *, keep_tree: bool = False) 
     for rel in pending_files(system):
         advisory.append(f"[未入库] {rel} 未纳入版本库，收件方不会拿到；确认是否遗漏 git add。")
 
+    timeouts = [item for item in blocking if "超时]" in item]
     return {
         "status": "fail" if blocking else "pass",
         "distributed_files": copied,
         "entity_terms": len(terms),
         "scans": ["entity", "credential", "home_path"],
         "blocking": blocking,
+        "blocking_count": len(blocking),
+        "timeouts": timeouts,
+        "timeout_count": len(timeouts),
+        "timeout_seconds": timeout,
         "advisory": advisory,
+        "advisory_count": len(advisory),
         "recipient_tree": tmpdir if keep_tree else None,
     }
 
@@ -358,10 +420,14 @@ def main() -> int:
     )
     parser.add_argument("--json", action="store_true", help="以结构化 JSON 格式输出结果")
     parser.add_argument("--keep-tree", action="store_true", help="保留重建的收件方工作区以便人工排查")
+    parser.add_argument(
+        "--timeout", type=int, default=None,
+        help=f"单个子进程超时秒数（默认 {DEFAULT_SUBPROCESS_TIMEOUT}，也可用 {TIMEOUT_ENV} 覆盖）",
+    )
     args = parser.parse_args()
 
     try:
-        res = check_distribution(keep_tree=args.keep_tree)
+        res = check_distribution(keep_tree=args.keep_tree, timeout=args.timeout)
     except ToolError as err:
         print(str(err), file=sys.stderr)
         return 1
@@ -378,6 +444,8 @@ def main() -> int:
         print(f"分发文件数: {res['distributed_files']}")
         print(f"实体词表条目: {res['entity_terms']}")
         print(f"阻断项: {len(res['blocking'])}")
+        if res["timeout_count"]:
+            print(f"   · 其中超时 {res['timeout_count']} 项（单次上限 {res['timeout_seconds']}s）")
         for issue in res["blocking"]:
             print(f"   • {issue}")
         print(f"建议项: {len(res['advisory'])}")

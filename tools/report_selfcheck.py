@@ -37,6 +37,12 @@ except ImportError:
 # 新克隆缺这些声明时必须留痕，静默即阻断。留痕证明降级可见，不构成待整改项。
 INITIAL_STATE_MARKERS = ("实体词表未声明", "注册表待登记", "实例声明待落地")
 
+# 各遍次的耗时量级不同：体检是秒级，单测是分钟级，分发求值还要在临时树上再跑一遍单测。
+# 统一用一个小常数会把慢机器报成「系统异常」——那正是分发检查自身踩过的坑。
+LINT_TIMEOUT = 600
+TESTS_TIMEOUT = 1800
+DISTRIBUTION_TIMEOUT = 3600
+
 
 def split_distribution_notes(notes: list[str]) -> tuple[list[str], list[str]]:
     """把分发建议拆成合法初始态留痕与其余待整改项。"""
@@ -76,7 +82,7 @@ def _run(argv: list[str], root: Path, timeout: int = 600) -> subprocess.Complete
 def run_unittest(root: Path) -> dict:
     """第二遍门禁之一：单元测试。条数从 unittest 自身输出取，不手抄。"""
     proc = _run([sys.executable, "-m", "unittest", "discover",
-                 "-s", f"{paths.SYSTEM_DIRNAME}/tests", "-t", paths.SYSTEM_DIRNAME], root)
+                 "-s", f"{paths.SYSTEM_DIRNAME}/tests", "-t", paths.SYSTEM_DIRNAME], root, TESTS_TIMEOUT)
     tail = proc.stderr or proc.stdout
     ran = re.search(r"^Ran (\d+) tests? in ([\d.]+)s", tail, re.MULTILINE)
     ok = re.search(r"^OK(?:\s|$)", tail, re.MULTILINE) is not None
@@ -144,11 +150,12 @@ def run_lint(root: Path, fix_claude_md: bool = True) -> dict:
     argv = [sys.executable, str(root / paths.SYSTEM_DIRNAME / "tools/lint_workspace.py"), "--json"]
     if fix_claude_md:
         argv.append("--fix-claude-md")
-    return _json_result(_run(argv, root))
+    return _json_result(_run(argv, root, LINT_TIMEOUT))
 
 
 def run_distribution(root: Path) -> dict:
-    return _json_result(_run([sys.executable, str(root / paths.SYSTEM_DIRNAME / "tools/check_distribution.py"), "--json"], root))
+    return _json_result(_run([sys.executable, str(root / paths.SYSTEM_DIRNAME / "tools/check_distribution.py"), "--json"],
+                             root, DISTRIBUTION_TIMEOUT))
 
 
 def _dist_counts(dist: dict) -> tuple[int | None, int | None, list[str]]:

@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -239,6 +240,58 @@ class InitChainTests(unittest.TestCase):
         for output in ("garbled", "[]", "{}"):
             with self.subTest(output=output):
                 self.assertTrue(any("无法解析" in i for i in self.run_chain(lint_output=output)[0]))
+
+
+class TimeoutConfigTests(unittest.TestCase):
+    """超时是环境失配，不是被测对象的失败：两者必须分开报，且默认值要容得下全量单测。"""
+
+    def test_default_timeout_covers_full_suite(self):
+        # 本机全量单测已达 8 分钟量级，收件方环境更慢；默认值低于 900s 必然误报。
+        self.assertGreaterEqual(cd.DEFAULT_SUBPROCESS_TIMEOUT, 900)
+
+    def test_cli_timeout_wins_over_env(self):
+        with mock.patch.dict("os.environ", {cd.TIMEOUT_ENV: "1200"}):
+            self.assertEqual(cd.resolve_timeout(1800), 1800)
+            self.assertEqual(cd.resolve_timeout(None), 1200)
+
+    def test_env_timeout_used_when_no_cli(self):
+        with mock.patch.dict("os.environ", {cd.TIMEOUT_ENV: "1500"}):
+            self.assertEqual(cd.resolve_timeout(), 1500)
+
+    def test_invalid_timeout_is_actionable(self):
+        with mock.patch.dict("os.environ", {cd.TIMEOUT_ENV: "abc"}):
+            with self.assertRaises(ToolError) as ctx:
+                cd.resolve_timeout()
+            self.assertIn("👉", str(ctx.exception))
+        with self.assertRaises(ToolError) as ctx:
+            cd.resolve_timeout(0)
+        self.assertIn("👉", str(ctx.exception))
+
+    def test_run_maps_timeout_to_sentinel_instead_of_raising(self):
+        proc = cd._run([sys.executable, "-c", "import time; time.sleep(5)"], Path("."), timeout=1)
+        self.assertEqual(proc.returncode, cd.TIMEOUT_EXIT)
+
+    def test_timeout_blocks_but_aborts_remaining_steps(self):
+        timed_out = subprocess.CompletedProcess([], cd.TIMEOUT_EXIT, "", "超时")
+        with mock.patch.object(cd, "_run", side_effect=[timed_out]) as run:
+            blocking, advisory = cd.run_init_chain(Path("unused"), timeout=30)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(advisory, [])
+        self.assertEqual(len(blocking), 1, blocking)
+        self.assertIn("初始化超时", blocking[0])
+        self.assertIn("--timeout", blocking[0])
+        self.assertFalse(any("初始化失败" in i for i in blocking), "超时不得报成真失败")
+
+    def test_test_phase_timeout_is_named_as_timeout(self):
+        results = [subprocess.CompletedProcess([], 0, "", ""),
+                   subprocess.CompletedProcess([], 0, "", ""),
+                   subprocess.CompletedProcess([], 0, '{"passed": true, "blocking_count": 0, "checks": []}', ""),
+                   subprocess.CompletedProcess([], cd.TIMEOUT_EXIT, "", "超时")]
+        with mock.patch.object(cd, "_run", side_effect=results):
+            blocking, _ = cd.run_init_chain(Path("unused"), timeout=30)
+        self.assertEqual(len(blocking), 1, blocking)
+        self.assertIn("新环境单测超时", blocking[0])
+        self.assertFalse(any("单测失败" in i for i in blocking))
 
 
 if __name__ == "__main__":
