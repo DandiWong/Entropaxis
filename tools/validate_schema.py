@@ -215,7 +215,15 @@ def parse_front_matter(text: str) -> dict | None:
         k = unicodedata.normalize(
             "NFKC", "".join(ch for ch in k if unicodedata.category(ch) != "Cf")
         ).strip()
-        out[k] = int(v) if v.isdigit() else v
+        if v.isdigit():
+            out[k] = int(v)
+        elif re.fullmatch(r"[-+]?\d+\.\d+", v):
+            try:
+                out[k] = float(v)
+            except ValueError:
+                out[k] = v
+        else:
+            out[k] = v
     return out
 
 
