@@ -16,4 +16,6 @@
 - `entrypoints/`：根入口唯一物理源（`AGENTS.md`、`CLAUDE.md`）
 - `data/`：实例数据与凭据（不入库），布局见 `rules/控制面布局.md`
 
-在本目录下运行测试：`python3 -m unittest discover -s tests -t .`；体检：`python3 tools/lint_workspace.py`。
+在本目录下运行测试：`python3 -m unittest discover -s tests -t .`（单个模块：`python3 -m unittest tests.test_<名>`）；体检：`python3 tools/lint_workspace.py`。
+
+路径统一取自 `tools/paths.py`：本目录必须位于某工作区根下的 `.entropaxis/`（`WORKSPACE_ROOT = SYSTEM_DIR.parent`），摊平检出会导致工具找不到工作区根。
