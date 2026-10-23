@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shlex
 import shutil
@@ -175,28 +174,20 @@ def main() -> int:
     parser.add_argument("--message", help="tag 说明，默认 Release <version>")
     parser.add_argument("--timeout", type=int, default=1800, help="验证命令超时秒数，默认 1800")
     parser.add_argument("--dry-run", action="store_true", help="只预检并输出计划，不做任何写入")
-    parser.add_argument("--json", action="store_true", help="以结构化 JSON 输出")
     args = parser.parse_args()
 
     try:
         plan = plan_release(Path(args.repo).expanduser(), args.version, args.source, args.main)
         if args.dry_run:
-            result = {"ok": True, "dry_run": True, "version": plan["version"], "main": plan["main"],
-                      "source": plan["source"], "pending": plan["pending"], "latest_tag": plan["latest_tag"],
-                      "checked_out": str(plan["checked_out"]) if plan["checked_out"] else None}
-            print(json.dumps(result, ensure_ascii=False, indent=2) if args.json else
-                  f"✅ 预检通过: {plan['source']} → {plan['main']}，待合入 {len(plan['pending'])} 个提交，拟打 {plan['version']}")
+            print(f"✅ 预检通过: {plan['source']} → {plan['main']}，待合入 {len(plan['pending'])} 个提交，拟打 {plan['version']}")
             return 0
         result = cut_release(plan, args.verify, args.message, args.timeout)
     except ToolError as err:
         print(str(err), file=sys.stderr)
         return 1
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-    else:
-        print(f"✅ {result['version']} → {result['main']}@{result['commit'][:7]}（合入 {result['merged']} 个提交，验证通过，未推送）")
-        if result["warning"]:
-            print(f"⚠️ {result['warning']}")
+    print(f"✅ {result['version']} → {result['main']}@{result['commit'][:7]}（合入 {result['merged']} 个提交，验证通过，未推送）")
+    if result["warning"]:
+        print(f"⚠️ {result['warning']}")
     return 0
 
 

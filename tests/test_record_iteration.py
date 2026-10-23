@@ -1,5 +1,4 @@
 """record_iteration 的分节插入、幂等与语种跟随核验。"""
-import json
 import subprocess
 import sys
 import tempfile
@@ -154,7 +153,7 @@ class LocateAndAtomicTests(unittest.TestCase):
             self.assertIn("已包含任务段，禁止使用 --time", p_time.stderr)
 
             # 3. --from-segments 成功写入 Tasks ⏱ 1.5h
-            cmd_from = [sys.executable, str(Path(ri.__file__)), "Tech-92", "--from-segments", "--root", str(root), "--json"]
+            cmd_from = [sys.executable, str(Path(ri.__file__)), "Tech-92", "--from-segments", "--root", str(root)]
             p_from = subprocess.run(cmd_from, capture_output=True, text=True)
             self.assertEqual(p_from.returncode, 0, p_from.stderr)
             tasks_content = (docs_dir / "Tasks.md").read_text(encoding="utf-8")
@@ -163,8 +162,7 @@ class LocateAndAtomicTests(unittest.TestCase):
             # 4. 再次执行 --from-segments 幂等无变更
             p_from_again = subprocess.run(cmd_from, capture_output=True, text=True)
             self.assertEqual(p_from_again.returncode, 0)
-            data = json.loads(p_from_again.stdout)
-            self.assertFalse(data["changes"][-1]["changed"])
+            self.assertEqual((docs_dir / "Tasks.md").read_text(encoding="utf-8"), tasks_content)
 
 
 if __name__ == "__main__":

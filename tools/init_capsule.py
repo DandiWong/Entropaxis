@@ -4,7 +4,7 @@
 规范真源：`.entropaxis/data/docs/20260910_事务胶囊设计规范/02_方案.md`（`status: active`，
 经 6 轮对抗性审计，16 项问题全部 `closed`，见同目录 `05_审计报告.md`）。本工具
 经《治理指令》「机制转工具」6 步 SOP 由该规范的原型脚手架纳管而来，核心逻辑
-与审计通过版本逐字一致，只补齐 ApX 行动导向错误契约与 `--json` 结构化输出。
+与审计通过版本逐字一致，只补齐 ApX 行动导向错误契约。
 
 设计要点（对应审计 R2-C1/M1/M2/M4/M5/m1~m6、R3-m1、R4-M1、R5-M1/m1）：
   1. 只生成 Schema 合法的阶段文档：文档级 status 一律 `draft`，交付/验收字段一律「待回填」占位；
@@ -19,7 +19,7 @@
      反解析，核对与原始输入等值。
 
 用法：
-  python3 .entropaxis/tools/init_capsule.py <父目录> <主题> --id Tech-N --mode full|light|research [--json]
+  python3 .entropaxis/tools/init_capsule.py <父目录> <主题> --id Tech-N --mode full|light|research
 """
 
 from __future__ import annotations
@@ -46,7 +46,6 @@ def _error(reason: str, fix: str) -> CapsuleInitError:
 # —— 输入契约（单一真源，脚本内只此一份） ————————————————
 TOPIC_RESERVED = set('*:?\"<>|/\\')
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
-CHINESE_RE = re.compile(r"[一-龥]")
 ID_RE = re.compile(r"^(Tech|Task|B|R|SC|M|Bug)-\d+$")
 
 
@@ -251,8 +250,8 @@ carrier: session-local
 
 def validate_inputs(topic: str, task_id: str) -> None:
     """主题与 Task ID 的路径合法性强校验，先于任何目录操作。"""
-    if not topic or not CHINESE_RE.search(topic):
-        raise _error("主题不含中文", "新建胶囊主题须含中文；产品代号可原样嵌入。存量目录不追溯。")
+    if not topic:
+        raise _error("主题为空", "新建胶囊主题不能为空。")
     if topic != topic.strip():
         raise _error("主题含首尾空白", "去除主题首尾空格或制表符后重试。")
     if CONTROL_RE.search(topic):
@@ -385,7 +384,7 @@ def create_capsule(base_dir: Path, topic: str, task_id: str, mode: str) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description="初始化 Entropaxis 事务胶囊（原子、自检、no-clobber）")
     parser.add_argument("target_dir", type=Path, help="胶囊放置的父级目录")
-    parser.add_argument("topic", type=str, help="胶囊主题（须含中文，产品代号可嵌入）")
+    parser.add_argument("topic", type=str, help="胶囊主题（以中文为主，英文专用名词/代号可保留）")
     parser.add_argument("--id", default="Tech-1", help="Task ID（默认 Tech-1）")
     parser.add_argument(
         "--mode",
@@ -393,7 +392,6 @@ def main() -> int:
         default="full",
         help="full=01/02/03/04/07 · light=01/02/04/07 · research=仅 01（审计报告均由「审计」指令按需创建）",
     )
-    parser.add_argument("--json", action="store_true", help="以结构化 JSON 格式输出结果")
     args = parser.parse_args()
     try:
         created = create_capsule(args.target_dir, args.topic, args.id, args.mode)
@@ -404,22 +402,8 @@ def main() -> int:
         print(f"❌ 意外系统异常: {err}\n👉 修复建议: 请检查目标目录权限与磁盘空间，或汇报至根系统治理流程。", file=sys.stderr)
         return 2
 
-    if args.json:
-        print(json.dumps(
-            {
-                "status": "success",
-                "target": str(created),
-                "lifecycle": "draft",
-                "mode": args.mode,
-                "id": args.id,
-                "topic": args.topic,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ))
-    else:
-        print(f"✨ 事务胶囊初始化成功（lifecycle: draft）: {created}")
-        print("   下一步：编写 01/02 → 触发「审计」出具 03_方案审计报告（真实指纹）→ 定稿后进入实施")
+    print(f"✨ 事务胶囊初始化成功（lifecycle: draft）: {created}")
+    print("   下一步：编写 01/02 → 触发「审计」出具 03_方案审计报告（真实指纹）→ 定稿后进入实施")
     return 0
 
 

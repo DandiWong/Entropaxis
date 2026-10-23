@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -34,7 +33,10 @@ class ToolError(Exception):
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    try:
+        proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise ToolError("❌ 未找到 git 命令。\n👉 修复建议: 安装 git（macOS: xcode-select --install；Windows: winget install Git.Git）后重试。") from exc
     if check and proc.returncode != 0:
         raise ToolError(
             f"❌ git {' '.join(args)} 失败: {proc.stderr.strip() or proc.stdout.strip()}\n"
@@ -201,39 +203,31 @@ def main() -> int:
     parser.add_argument("--delete-remote", action="store_true", help="同时删除远端同名分支")
     parser.add_argument("--list-targets", action="store_true", help="只列出可选目标分支")
     parser.add_argument("--dry-run", action="store_true", help="只预检并输出计划，不做任何写入")
-    parser.add_argument("--json", action="store_true", help="以结构化 JSON 输出")
     args = parser.parse_args()
     repo = Path(args.repo).expanduser()
 
     try:
         if args.list_targets:
             result = list_targets(repo, args.remote)
-            print(json.dumps(result, ensure_ascii=False) if args.json else
-                  f"当前 {result['source']}；可选目标: {', '.join(result['targets']) or '（无）'}")
+            print(f"当前 {result['source']}；可选目标: {', '.join(result['targets']) or '（无）'}")
             return 0
         if not args.target:
             raise ToolError("❌ 未指定目标分支。\n👉 修复建议: 先 --list-targets 取候选并由人选定，再加 --target。")
         plan = plan_finish(repo, args.target, args.remote, args.message,
                            task_id=args.task_id, time_hours=args.time)
         if args.dry_run:
-            result = {"ok": True, "dry_run": True, "source": plan["source"], "target": plan["target"],
-                      "staged": plan["staged"], "trailers": plan["trailers"], "untracked": plan["untracked"], "pending": plan["pending"]}
             trailer_desc = f"（注入 Trailer: {', '.join(f'{k}: {v}' for k, v in plan['trailers'])}）" if plan["trailers"] else ""
-            print(json.dumps(result, ensure_ascii=False, indent=2) if args.json else
-                  f"✅ 预检通过: {plan['source']} → {plan['target']}，待提交 {len(plan['staged'])} 个文件{trailer_desc}、"
+            print(f"✅ 预检通过: {plan['source']} → {plan['target']}，待提交 {len(plan['staged'])} 个文件{trailer_desc}、"
                   f"待合入 {len(plan['pending'])} 个提交；未跟踪 {len(plan['untracked'])} 个不提交")
             return 0
         result = finish_branch(plan, args.delete_remote)
     except ToolError as err:
         print(str(err), file=sys.stderr)
         return 1
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-    else:
-        print(f"✅ {result['source']} → {result['target']}@{result['merge_commit']} 已推送 {result['remote']}，"
-              f"本地分支已删除{'（含远端）' if result['remote_deleted'] else ''}")
-        if result["warning"]:
-            print(f"⚠️ {result['warning']}")
+    print(f"✅ {result['source']} → {result['target']}@{result['merge_commit']} 已推送 {result['remote']}，"
+          f"本地分支已删除{'（含远端）' if result['remote_deleted'] else ''}")
+    if result["warning"]:
+        print(f"⚠️ {result['warning']}")
     return 0
 
 

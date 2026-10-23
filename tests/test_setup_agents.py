@@ -1,5 +1,4 @@
 import contextlib
-import json
 import io
 import shutil
 import sys
@@ -54,16 +53,16 @@ class SetupAgentsTests(TestCase):
         self.assertEqual(data["command_profiles"][second]["model"], "provider/replaced")
         self.assertEqual(data["command_profiles"][second]["timeout_s"], 123)
 
-    def test_cli_set_preference_appends_agent_model_record_with_json_only_output(self) -> None:
+    def test_cli_set_preference_appends_agent_model_record(self) -> None:
         data = self.data()
         sa.save_config(self.config, data)
 
         code, stdout, err = self.invoke(
-            "--config", str(self.config), "--set-preference", "Builder", "3", "pi", "provider/model", "--json"
+            "--config", str(self.config), "--set-preference", "Builder", "3", "pi", "provider/model"
         )
 
         self.assertEqual(code, 0, err)
-        self.assertEqual(json.loads(stdout)["changed"], ["Builder"])
+        self.assertTrue(stdout.startswith("✅ Builder → "), stdout)
         saved = yaml.safe_load(self.config.read_text(encoding="utf-8"))
         name = saved["roles"]["Builder"]["preferences"][2]
         self.assertEqual(saved["command_profiles"][name]["agent"], "pi")
@@ -85,7 +84,6 @@ class SetupAgentsTests(TestCase):
         sa.set_preference(data, "Builder", 1, "omp", "provider/one")
         sa.set_preference(data, "Builder", 2, "codex", "provider/two")
         first, second = data["roles"]["Builder"]["preferences"]
-        data["roles"]["Builder"]["profile"] = None
         sa.save_config(self.config, data)
 
         code, _, err = self.invoke("--config", str(self.config), "--set-timeout", "Builder", "1200")
@@ -109,10 +107,11 @@ class SetupAgentsTests(TestCase):
         sa.save_config(self.config, data)
         before = self.config.read_bytes()
 
-        code, _, err = self.invoke("--config", str(self.config), "--set-timeout", "Reviewer", "1801")
+        cap = role_preferences.hard_role_max_timeout("Reviewer")
+        code, _, err = self.invoke("--config", str(self.config), "--set-timeout", "Reviewer", str(cap + 1))
 
         self.assertEqual(code, 1)
-        self.assertIn("1800", err)
+        self.assertIn(str(cap), err)
         self.assertEqual(self.config.read_bytes(), before)
 
     def test_cli_targets_requested_preference_without_rebuilding_others(self) -> None:
@@ -120,7 +119,6 @@ class SetupAgentsTests(TestCase):
         sa.set_preference(data, "Builder", 1, "omp", "provider/one")
         sa.set_preference(data, "Builder", 2, "codex", "provider/two")
         first, second = data["roles"]["Builder"]["preferences"]
-        data["roles"]["Builder"]["profile"] = None
         sa.save_config(self.config, data)
 
         code, _, err = self.invoke("--config", str(self.config), "--set-model", "Builder", "provider/two-new", "--preference", "2")
@@ -132,14 +130,12 @@ class SetupAgentsTests(TestCase):
         self.assertEqual(saved["command_profiles"][first]["model"], "provider/one")
         self.assertEqual(saved["command_profiles"][second]["model"], "provider/two-new")
         self.assertEqual(saved["command_profiles"][second]["timeout_s"], 77)
-        self.assertEqual(saved["roles"]["Builder"]["profile"], None)
 
     def test_editing_shared_profile_copies_before_mutating(self) -> None:
         data = self.data()
         sa.set_preference(data, "Builder", 1, "omp", "provider/original")
         shared = data["roles"]["Builder"]["preferences"][0]
         data["roles"]["Reviewer"]["preferences"] = [shared]
-        data["roles"]["Reviewer"]["profile"] = shared
 
         sa.set_model(data, "Reviewer", "provider/reviewer", preference=1)
 
@@ -148,22 +144,20 @@ class SetupAgentsTests(TestCase):
         self.assertEqual(data["command_profiles"][shared]["model"], "provider/original")
         self.assertEqual(data["command_profiles"][reviewer]["model"], "provider/reviewer")
 
-    def test_list_exposes_full_sequence_without_choosing_unselected_preference(self) -> None:
+    def test_list_exposes_full_sequence_with_first_as_default(self) -> None:
         data = self.data()
         sa.set_preference(data, "Builder", 1, "omp", "provider/one")
         sa.set_preference(data, "Builder", 2, "codex", "provider/two")
-        data["roles"]["Builder"]["profile"] = None
 
         item = next(item for item in sa.list_roles(data) if item["role"] == "Builder")
 
         self.assertEqual([preference["number"] for preference in item["preferences"]], [1, 2])
-        self.assertIsNone(item["selected_preference"])
-        self.assertNotIn("profile", item)
+        self.assertEqual(item["default_preference"], 1)
+        self.assertEqual(item["profile"], item["preferences"][0]["profile"])
 
     def test_save_rejects_invalid_preference_reference_without_writing(self) -> None:
         data = self.data()
         data["roles"]["Builder"]["preferences"] = ["missing"]
-        data["roles"]["Builder"]["profile"] = "missing"
 
         with self.assertRaises(sa.ConfigError):
             sa.save_config(self.config, data)
@@ -176,7 +170,7 @@ class SetupAgentsTests(TestCase):
 
         names = data["roles"]["Builder"]["preferences"]
         self.assertEqual(len(names), 2)
-        self.assertEqual(data["roles"]["Builder"]["profile"], names[0])
+        self.assertNotIn("profile", data["roles"]["Builder"])
         self.assertEqual(data["command_profiles"][names[0]]["argv"], ["custom-cli", "--task", "{PROMPT}"])
         self.assertNotIn("fallback_profile", data["command_profiles"][names[0]])
 
@@ -202,7 +196,35 @@ class SetupAgentsTests(TestCase):
         migrated = yaml.safe_load(self.config.read_text(encoding="utf-8"))
         self.assertEqual(migrated["roles"]["Builder"]["preferences"], ["builder-primary", "builder-fallback"])
         self.assertNotIn("fallback_profile", migrated["command_profiles"]["builder-primary"])
+        self.assertNotIn("profile", migrated["roles"]["Builder"])
 
+    def test_legacy_profile_fails_schema_with_migrate_hint_and_migration_moves_it_to_front(self) -> None:
+        legacy = {
+            "default_dispatch_mode": "strict",
+            "roles": {"Builder": {"duty": "build", "preferences": ["p-a", "p-b"], "profile": "p-b"}},
+            "command_profiles": {"p-a": {"agent": "omp", "model": "x/a"}, "p-b": {"agent": "omp", "model": "x/b"}},
+            "dispatch_authorizations": [],
+        }
+        self.config.write_text(yaml.safe_dump(legacy, sort_keys=False), encoding="utf-8")
+        errors = sa.schema_errors(sa.load_config(self.config))
+        self.assertTrue(errors)
+        self.assertIn("setup_agents.py --migrate-preferences", "\n".join(errors))
+        self.assertIn("👉", "\n".join(errors))
+
+        code, out, err = self.invoke("--config", str(self.config), "--migrate-preferences")
+        self.assertEqual(code, 0, err)
+        migrated = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        self.assertNotIn("profile", migrated["roles"]["Builder"])
+        self.assertEqual(migrated["roles"]["Builder"]["preferences"], ["p-b", "p-a"])
+        self.assertIn("已挪到首位", out)
+        self.assertEqual(sa.schema_errors(sa.load_config(self.config)), [])
+
+    def test_set_role_subagent_writes_empty_preferences(self) -> None:
+        data = self.data()
+        sa.set_preference(data, "Builder", 1, "omp", "provider/one")
+        sa.set_role(data, "Builder", "subagent", "")
+        self.assertEqual(data["roles"]["Builder"]["preferences"], [])
+        self.assertNotIn("profile", data["roles"]["Builder"])
     def test_remove_preference_is_dry_run_until_confirmed(self) -> None:
         data = self.data()
         sa.set_preference(data, "Builder", 1, "omp", "provider/one")
@@ -226,22 +248,22 @@ class SetupAgentsTests(TestCase):
         before = self.config.read_bytes()
 
         with mock.patch("tools.role_preferences.subprocess.run") as model_run:
-            code, stdout, err = self.invoke("--config", str(self.config), "--check-preferences", "--json")
+            code, stdout, err = self.invoke("--config", str(self.config), "--check-preferences")
 
         self.assertEqual(code, 1, err)
         self.assertIn("authorization_required", stdout)
         self.assertEqual(model_run.call_count, 0)
         self.assertEqual(self.config.read_bytes(), before)
 
-    def test_authorized_check_reports_successful_ordinal_and_persists_selection(self) -> None:
+    def test_authorized_check_reports_first_available_and_leaves_file_untouched(self) -> None:
         data = self.data()
         sa.set_preference(data, "Builder", 1, "omp", "provider/one")
         sa.set_preference(data, "Builder", 2, "codex", "provider/two")
-        data["roles"]["Builder"]["profile"] = None
         sa.save_config(self.config, data)
+        before = self.config.read_bytes()
         names = data["roles"]["Builder"]["preferences"]
         local = [{
-            "role": "Builder", "selected_profile": None, "selected_preference": None,
+            "role": "Builder",
             "preferences": [
                 {"number": 1, "profile": names[0], "status": "local_ready"},
                 {"number": 2, "profile": names[1], "status": "local_ready"},
@@ -253,18 +275,16 @@ class SetupAgentsTests(TestCase):
         ):
             code, stdout, err = self.invoke(
                 "--config", str(self.config), "--check-preferences", "--authorize-model-check",
-                "--authorization-event", "user-confirmed-123", "--json",
+                "--authorization-event", "user-confirmed-123",
             )
 
         self.assertEqual(code, 0, err)
-        self.assertIn('"selected_preference":2', stdout)
-        saved = yaml.safe_load(self.config.read_text(encoding="utf-8"))
-        self.assertEqual(saved["roles"]["Builder"]["profile"], names[1])
+        self.assertIn('"first_available_preference":2', stdout)
+        self.assertEqual(self.config.read_bytes(), before)
 
     def test_verify_reports_only_local_executable_not_model_ready(self) -> None:
         data = self.data()
         sa.set_preference(data, "Builder", 1, "omp", "provider/one")
-        data["roles"]["Builder"]["profile"] = data["roles"]["Builder"]["preferences"][0]
         sa.save_config(self.config, data)
 
         with mock.patch("tools.setup_agents.shutil.which", return_value="/usr/bin/omp"):

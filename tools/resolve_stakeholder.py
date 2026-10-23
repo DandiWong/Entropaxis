@@ -332,22 +332,15 @@ def _run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             matrix for pid in project_ids
             if (matrix := resolve_project_matrix(pid, ws_root, inherit=True))
         ]
-        if args.json:
-            print(json.dumps({matrix["project_id"]: matrix for matrix in matrices}, ensure_ascii=False, indent=2))
-        else:
-            for matrix in matrices:
-                print(format_matrix_text(matrix))
+        for matrix in matrices:
+            print(format_matrix_text(matrix))
         return 0
 
     if args.list_people:
         raw = load_stakeholders_raw(ws_root)
         people = _truncate_list(raw.get("people", []), args.limit, "人员列表")
-        if args.json:
-            print(json.dumps(people, ensure_ascii=False, indent=2))
-        else:
-            for p in people:
-                roles = find_person_roles(p["id"], ws_root)
-                print(format_person_text(p, roles))
+        for p in people:
+            print(format_person_text(p, find_person_roles(p["id"], ws_root)))
         return 0
 
     # 显式按人查询
@@ -356,11 +349,7 @@ def _run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         if not person:
             print(f"❌ 错误原因：未找到与 '{args.person_query}' 匹配的人员或别名。\n👉 修复建议：检查 stakeholders.yaml 中的 people 列表或添加其别名。", file=sys.stderr)
             return 2
-        roles = find_person_roles(person["id"], ws_root)
-        if args.json:
-            print(json.dumps({"person": person, "roles": roles}, ensure_ascii=False, indent=2))
-        else:
-            print(format_person_text(person, roles))
+        print(format_person_text(person, find_person_roles(person["id"], ws_root)))
         return 0
 
     # 显式按项目查询
@@ -369,10 +358,7 @@ def _run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         if not matrix:
             print(f"❌ 错误原因：未在 stakeholders.yaml 中找到项目 '{args.project_query}'。\n👉 修复建议：检查 stakeholders.yaml 中的 projects 定义或运行 --list 查看已登记项目。", file=sys.stderr)
             return 2
-        if args.json:
-            print(json.dumps(matrix, ensure_ascii=False, indent=2))
-        else:
-            print(format_matrix_text(matrix))
+        print(format_matrix_text(matrix))
         return 0
 
     # 自动推断查询类型
@@ -384,20 +370,13 @@ def _run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     # 优先查项目矩阵
     matrix = resolve_project_matrix(query, ws_root)
     if matrix:
-        if args.json:
-            print(json.dumps(matrix, ensure_ascii=False, indent=2))
-        else:
-            print(format_matrix_text(matrix))
+        print(format_matrix_text(matrix))
         return 0
 
     # 次选查人员
     person = resolve_person(query, ws_root)
     if person:
-        roles = find_person_roles(person["id"], ws_root)
-        if args.json:
-            print(json.dumps({"person": person, "roles": roles}, ensure_ascii=False, indent=2))
-        else:
-            print(format_person_text(person, roles))
+        print(format_person_text(person, find_person_roles(person["id"], ws_root)))
         return 0
 
     print(f"❌ 错误原因：查询词 '{query}' 既未命中任何已登记项目，也未命中人员或别名。\n👉 修复建议：检查 .entropaxis/data/templates/stakeholders.yaml，确认项目 ID 或人员姓名/别名是否登记。", file=sys.stderr)
@@ -409,7 +388,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("query", nargs="?", default="", help="项目 ID、人名或别名查询词")
     parser.add_argument("--project", "-p", dest="project_query", help="显式指定按项目查询")
     parser.add_argument("--person", "-u", dest="person_query", help="显式指定按人名/别名查询")
-    parser.add_argument("--json", action="store_true", help="输出机器可读的 JSON 格式")
     parser.add_argument("--list", action="store_true", help="列出全部项目的干系人矩阵")
     parser.add_argument("--list-people", action="store_true", help="列出全部主库人员")
     parser.add_argument("--limit", type=int, default=20, help="列表最多显示的条数（0 或负数不截断）")

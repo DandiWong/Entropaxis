@@ -102,7 +102,8 @@ def format_project_text(p: dict) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="按名称或别名解析项目目录与代码真源")
     parser.add_argument("query", nargs="?", default="", help="项目 ID、别名或自然语言查询词")
-    parser.add_argument("--json", action="store_true", help="输出机器可读的 JSON 格式")
+    parser.add_argument("--json", action="store_true",
+                        help="输出机器可读 JSON（会议 Skill workspace_locator 等程序消费方契约；默认仍是极简文本）")
     parser.add_argument("--list", action="store_true", help="列出注册表中的全部项目")
     parser.add_argument("--workspace-root", default=None, help="工作区根目录路径（可选）")
 

@@ -881,6 +881,16 @@ class TargetBindingTests(unittest.TestCase):
             self.assertEqual(cag.main(), 0)
         self.assertEqual(out.getvalue().strip(), self._sha())
 
+    def test_cli_errors_are_action_oriented(self) -> None:
+        """《工具设计》3.2：用法错误与缺文件都给「❌ 原因 + 👉 修复建议」。"""
+        for argv in (["--candidate", "x.md"], [str(self.dir / "missing.md")],
+                     ["--candidate", str(self.dir / "missing.md"), "--commit", "y.md"], []):
+            with mock.patch.object(sys, "argv", ["check_audit_gate.py", *argv]), \
+                    mock.patch.object(sys, "stderr", io.StringIO()) as err:
+                self.assertEqual(cag.main(), 2, argv)
+            self.assertIn("❌", err.getvalue(), argv)
+            self.assertIn("👉", err.getvalue(), argv)
+
 
 class CheckAuditGateV4Tests(unittest.TestCase):
     """schema_version 4：v3 围栏 + audit_phase 与 open 问题准入（gate/basis/evidence/repro）。"""

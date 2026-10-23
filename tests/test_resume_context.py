@@ -110,11 +110,11 @@ class ResumeContextTests(unittest.TestCase):
         self.assertEqual(RC.default_root(self.ws, self.ws), self.ws)
         self.assertEqual(RC.default_root(Path("/"), self.ws), self.ws)
 
-    def test_cli_json_and_bad_input(self) -> None:
-        ok = subprocess.run([sys.executable, str(TOOL), "--root", str(self.ws), "--json"],
+    def test_cli_and_bad_input(self) -> None:
+        ok = subprocess.run([sys.executable, str(TOOL), "--root", str(self.ws)],
                             capture_output=True, text=True, env=os.environ)
         self.assertEqual(ok.returncode, 0, ok.stderr)
-        self.assertIn("verdict", json.loads(ok.stdout))
+        self.assertTrue(ok.stdout.startswith("verdict="), ok.stdout)
         bad = subprocess.run([sys.executable, str(TOOL), "--root", str(self.ws / "nope")],
                              capture_output=True, text=True)
         self.assertEqual(bad.returncode, 1)

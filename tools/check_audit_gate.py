@@ -26,7 +26,6 @@ import argparse
 import hashlib
 import json
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -792,6 +791,14 @@ def main() -> int:
     parser.add_argument("--fingerprint", metavar="TARGET", help="只输出受审对象（文件或目录）的 target_sha256")
     args = parser.parse_args()
 
+    def report(file: Path, issues: list[str], ok_msg: str) -> int:
+        if issues:
+            for issue in issues:
+                print(f"[审计门禁] {file}: {issue}", file=sys.stderr)
+        else:
+            print(ok_msg)
+        return 1 if issues else 0
+
     if args.fingerprint:
         target = Path(args.fingerprint)
         if not (target.is_file() or target.is_dir()):
@@ -802,39 +809,31 @@ def main() -> int:
 
     if args.candidate or args.commit:
         if not (args.candidate and args.commit):
-            print("用法: --candidate 与 --commit 必须同时提供", file=sys.stderr)
+            print("❌ --candidate 与 --commit 只给了一个\n👉 修复建议: 两个参数同时提供，或都不给改走只读模式。", file=sys.stderr)
             return 2
         candidate_path = Path(args.candidate)
         commit_path = Path(args.commit)
         if not candidate_path.is_file():
-            print(f"[候选报告不存在] {candidate_path}", file=sys.stderr)
+            print(f"❌ 候选报告不存在: {candidate_path}\n👉 修复建议: 先写出候选报告，再用 --candidate 指向它。", file=sys.stderr)
             return 2
         candidate_text = candidate_path.read_text(encoding="utf-8")
         violations = check_candidate_commit(candidate_text, commit_path)
-        if violations:
-            for v in violations:
-                print(f"[审计门禁] {candidate_path}: {v}", file=sys.stderr)
+        if not violations:
+            atomic_write(commit_path, candidate_text)
+        else:
             print(f"❌ 校验未通过，未写入 {commit_path}。", file=sys.stderr)
-            return 1
-        atomic_write(commit_path, candidate_text)
-        print(f"✅ 校验通过，已原子写入 {commit_path}。")
-        return 0
+        return report(candidate_path, violations, f"✅ 校验通过，已原子写入 {commit_path}。")
 
     if not args.path:
-        print("用法: python3 check_audit_gate.py <审计报告路径>", file=sys.stderr)
-        print("  或: python3 check_audit_gate.py --candidate <候选> --commit <目标>", file=sys.stderr)
+        print("❌ 缺少审计报告路径\n👉 修复建议: python3 check_audit_gate.py <审计报告路径>，"
+              "或 --candidate <候选> --commit <目标>。", file=sys.stderr)
         return 2
     path = Path(args.path)
     if not path.is_file():
-        print(f"[审计报告不存在] {path}", file=sys.stderr)
+        print(f"❌ 审计报告不存在: {path}\n👉 修复建议: 用 find_capsule.py --latest-artifact audit 定位。", file=sys.stderr)
         return 2
     issues = check_report_file(path)  # 走 path 感知入口：CLI 与调度器共用同一判据（复核 C-02）
-    if issues:
-        for issue in issues:
-            print(f"[审计门禁] {path}: {issue}", file=sys.stderr)
-        return 1
-    print(f"✅ {path} 未发现会话内降级下的 Critical 违规关闭。")
-    return 0
+    return report(path, issues, f"✅ {path} 未发现会话内降级下的 Critical 违规关闭。")
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@
   trace    人读执行轨迹（命令原文、退出码、耗时、输出尾部）
   validate 校验 manifest 档案
 
-退出码: 0=成功 / 2=BLOCKED(硬门禁穷尽，须问题级豁免) / 3=LOCAL_CARRY(软门禁本地承载) / 4=用法或校验错误
+退出码: 0=成功 / 2=BLOCKED(硬门禁穷尽须问题级豁免；或 strict×软门禁 aborted：偏好用尽，未改配置，由用户决定) / 3=LOCAL_CARRY(软门禁本地承载：配置 preferences 为空或 graceful 授权) / 4=用法或校验错误
 """
 
 from __future__ import annotations
@@ -71,6 +71,14 @@ PROMPT_PLACEHOLDER = "{PROMPT}"
 LEASE_SECONDS = 600
 
 EXIT_OK, EXIT_BLOCKED, EXIT_LOCAL, EXIT_USAGE = 0, 2, 3, 4
+
+
+class UsageError(Exception):
+    """参数/档案类错误：main 统一渲染成 stderr「❌ 原因 / 👉 修复建议」，退出码 EXIT_USAGE。"""
+
+    def __init__(self, reason: str, fix: str) -> None:
+        super().__init__(reason)
+        self.reason, self.fix = reason, fix
 
 
 def _now_iso() -> str:
@@ -388,17 +396,14 @@ def resolve_profile_chain(profile_name: str, config: dict[str, Any], role: str |
 
 
 def _tier3_default_chain(role: str, config: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-    """Selected preference controls the global entry point; null never auto-selects."""
-    profiles = config.get("command_profiles") or {}
-    declared = config.get("roles") or {}
-    if role in declared:
-        name = (declared[role] or {}).get("profile")
-        if "preferences" in declared[role] and name is not None and name not in declared[role]["preferences"]:
-            return "UNCONFIGURED", []
-        if not name:
-            return "SUBAGENT_AUTO", []
-        return (name, resolve_profile_chain(name, config, role)) if name in profiles else ("UNCONFIGURED", [])
-    return "UNCONFIGURED", []
+    """调度总从 preferences[0] 起，失败顺延；preferences 为空即配置声明会话内承载。只读配置。"""
+    names = ((config.get("roles") or {}).get(role) or {}).get("preferences")
+    if not isinstance(names, list):
+        return "UNCONFIGURED", []
+    if not names:
+        return "SUBAGENT_AUTO", []
+    chain = resolve_profile_chain(names[0], config, role)
+    return (names[0], chain) if chain else ("UNCONFIGURED", [])
 
 
 def build_argv(profile: dict[str, Any], prompt: str) -> list[str] | None:
@@ -413,7 +418,12 @@ def build_argv(profile: dict[str, Any], prompt: str) -> list[str] | None:
     # 一律 NOT_EXECUTABLE，即"写了真实调研提示词就必定调度失败"。
     if not _argv_ok(argv):
         return None
-    return [prompt if t == PROMPT_PLACEHOLDER else t for t in argv]
+    res = [prompt if t == PROMPT_PLACEHOLDER else t for t in argv]
+    if "agent" in profile:
+        agent = profile["agent"]
+        flags = role_preferences.USAGE_FLAGS.get(agent, [])
+        res.extend(flags)
+    return res
 
 
 def _executable(argv0: str) -> str | None:
@@ -642,7 +652,8 @@ _FRONT_MATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 
 def stamp_carrier(path: Path, carrier: str | None, carrier_ref: str | None = "",
                   fallback_reason: str | None = "", audit: bool = False,
-                  receipt_id: str | None = "") -> bool:
+                  receipt_id: str | None = "",
+                  duration_s: float | None = None) -> bool:
     """把实际承载三元组写回 .md 交付物 Front Matter。
 
     与 audit_report.schema.json 的 reviewer_mode/reviewer_ref/fallback_reason 同构（该文件
@@ -666,8 +677,12 @@ def stamp_carrier(path: Path, carrier: str | None, carrier_ref: str | None = "",
     if not m:
         return False
     block = m.group(1)
-    fields = [("carrier", carrier), ("carrier_ref", carrier_ref), ("fallback_reason", fallback_reason),
-              ("receipt_id", receipt_id)]
+    fields: list[tuple[str, Any]] = [("carrier", carrier), ("carrier_ref", carrier_ref), ("fallback_reason", fallback_reason),
+                                     ("receipt_id", receipt_id)]
+    if duration_s is not None and duration_s > 0:
+        fields.append(("duration_s", round(duration_s, 2)))
+    if re.search(r"^status:\s*completed\b", block, re.MULTILINE) and not re.search(r"^completed_at:", block, re.MULTILINE):
+        fields.append(("completed_at", _now_iso()))
     if audit:
         # 承载信息一并接管 Audit 的特化字段：模型无从知道自己是不是被外置派发的——
         # 实测外置 Reviewer 自述 `reviewer_mode: session`（从它自己看就是个会话）。
@@ -687,12 +702,16 @@ def stamp_carrier(path: Path, carrier: str | None, carrier_ref: str | None = "",
     return True
 
 
-def _yaml_inline(value: str) -> str:
+def _yaml_inline(value: Any) -> str:
     """单行 YAML 标量：命令原文含冒号/引号，裸写会让 Front Matter 解析错位。"""
-    return json.dumps(value, ensure_ascii=False) if re.search(r'[:#\'"\n{}\[\]]', value) else value
+    if isinstance(value, (int, float)):
+        return str(value)
+    s = str(value)
+    return json.dumps(s, ensure_ascii=False) if re.search(r'[:#\'"\n{}\[\]]', s) else s
 
 
 TRACE_LOG = SYSTEM_ROOT / "data" / "logs" / "dispatch-trace.jsonl"
+RUN_DIR = TRACE_LOG.parent / "run"
 TRACE_MAX_BYTES = 4 * 1024 * 1024
 
 
@@ -715,6 +734,31 @@ def trace(record: dict[str, Any], path: Path | None = None) -> None:
     except OSError:
         pass
 
+def _write_run_file(dispatch_id: str, info: dict[str, Any]) -> None:
+    """原子写入 RUN_DIR/<dispatch_id>.json，记录运行态信息。
+
+    失败一律吞掉：运行态留痕不得反过来阻断主流程调度。
+    """
+    try:
+        RUN_DIR.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(info, ensure_ascii=False, indent=2).encode("utf-8")
+        with tempfile.NamedTemporaryFile("wb", dir=str(RUN_DIR), delete=False) as tf:
+            tmp_path = Path(tf.name)
+            tf.write(payload)
+        target_path = RUN_DIR / f"{dispatch_id}.json"
+        os.replace(tmp_path, target_path)
+    except Exception:
+        pass
+
+
+def _remove_run_file(dispatch_id: str) -> None:
+    """删除 RUN_DIR/<dispatch_id>.json，不存在或任何异常都吞掉。"""
+    try:
+        target_path = RUN_DIR / f"{dispatch_id}.json"
+        target_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
 def _timeout_error(profile: dict[str, Any], role: str | None) -> str | None:
     """链上每条都已由 resolve_profile_chain 物化 timeout_s；这里只做最终防御。
 
@@ -724,8 +768,8 @@ def _timeout_error(profile: dict[str, Any], role: str | None) -> str | None:
     timeout = profile.get("timeout_s")
     if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 7200:
         return "timeout_s 必须为 1..7200 的整数"
-    if role in HARD_ROLES and timeout > 1800:
-        return f"{role} 的 timeout_s 不得超过 1800"
+    if role in HARD_ROLES and timeout > role_preferences.hard_role_max_timeout(role):
+        return f"{role} 的 timeout_s 不得超过 {role_preferences.hard_role_max_timeout(role)}"
     return None
 
 
@@ -770,9 +814,20 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
         # resume_context.py 按 dispatch_id 配对，无结束记录时再看 pid 是否存活。
         dispatch_id = uuid.uuid4().hex
         trace({**ordinal, "event": "start", "dispatch_id": dispatch_id, "pid": os.getpid(), "role": role,
-               "profile": prof["name"], "cwd": str(cwd), "deliverable": str(deliverable)})
+               "profile": prof["name"], "agent": prof.get("agent"), "model": prof.get("model"),
+               "cwd": str(cwd), "deliverable": str(deliverable)})
         produces_file = deliverable != cwd
         before = _sha256_path(deliverable) if produces_file and deliverable.exists() else None
+        _write_run_file(dispatch_id, {
+            "dispatch_id": dispatch_id,
+            "pid": os.getpid(),
+            "role": role,
+            "profile": prof["name"],
+            "agent": prof.get("agent"),
+            "model": prof.get("model"),
+            "cwd": str(cwd),
+            "started_at": started,
+        })
         try:
             # stdin 必须显式给 DEVNULL：不给就继承调用者的 stdin，而被调度的 CLI 见 stdin
             # 非 tty 会当成"有管道输入"并读到 EOF 为止——调用者不关闭就永远读不到。实测
@@ -794,23 +849,32 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
                 stamp_carrier(deliverable, prof["name"],
                               " ".join(role_preferences.profile_argv_safe(prof)) or prof["name"],
                               "", audit=(role == "Reviewer"), receipt_id="")
-            reasons = (["交付物未被本次调用写出或改写（沿用既有文件不构成本轮产出）"] if unchanged
-                       else _deliverable_issues(deliverable, role))
+            # 代码型无独立交付物文件（deliverable == cwd）时不套文档判据，以子进程退出码为准，最终由 verify 裁定；非代码型角色调度依然执行原交付物判据
+            skip_criteria = not produces_file and ROLE_CRITERIA.get(role, {}).get("form") == "code"
+            reasons = [] if skip_criteria else (
+                ["交付物未被本次调用写出或改写（沿用既有文件不构成本轮产出）"] if unchanged
+                else _deliverable_issues(deliverable, role))
             ok = proc.returncode == 0 and not reasons
             code = "" if ok else ("NO_VALID_OUTPUT" if proc.returncode == 0 else "CHAIN_EXHAUSTED")
+            usage = None
+            if "agent" in prof:
+                try:
+                    usage = role_preferences.parse_usage(proc.stdout or "", prof.get("agent"))
+                except Exception:
+                    usage = None
             trace({**ordinal, "dispatch_id": dispatch_id, "role": role, "profile": prof["name"], "argv": argv,
                    "cwd": str(cwd), "executed": True, "exit_code": proc.returncode, "duration_s": round(time.time() - t0, 1),
                    "deliverable": str(deliverable), "deliverable_valid": not reasons,
                    # 判据不合格要说出是哪一条：只报 NO_VALID_OUTPUT 会让人以为是模型不行
                    "criteria_issues": reasons[:8] or None,
-                   "failure_code": code or None, "stdout_tail": (proc.stdout or "")[-600:],
+                   "failure_code": code or None, "usage": usage, "stdout_tail": (proc.stdout or "")[-600:],
                    "stderr_tail": (proc.stderr or "")[-600:]})
             if ok:
                 if role == "Reviewer" and produces_file:
                     # 新一轮审计结论可能让方案过审：推进所在胶囊的 lifecycle
                     update_capsule.sync_for(deliverable)
                 attempts.append({**ordinal, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
-                                 "ended_at": ended, "exit_code": 0, "report_sha256": _sha256_path(deliverable)})
+                                 "ended_at": ended, "exit_code": 0, "duration_s": round(time.time() - t0, 1), "report_sha256": _sha256_path(deliverable)})
                 return "", attempts, True
             attempts.append({**ordinal, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
                              "ended_at": ended, "exit_code": proc.returncode, "failure_code": code,
@@ -822,6 +886,8 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
             trace({"dispatch_id": dispatch_id, "role": role, "profile": prof["name"], "argv": argv,
                    "cwd": str(cwd), "executed": True, "failure_code": "TIMEOUT", "duration_s": round(time.time() - t0, 1)})
             codes.add("TIMEOUT")
+        finally:
+            _remove_run_file(dispatch_id)
     if not codes:
         codes.add("CHAIN_EXHAUSTED")
     aggregate = min(codes, key=lambda c: _FAILURE_PRIORITY[c])
@@ -835,14 +901,26 @@ def adjudicate(mode: str, gate: str, failure_code: str) -> dict[str, Any]:
     if gate == "hard":
         return {"outcome": "blocked", "exit": EXIT_BLOCKED,
                 "reason": f"{mode} × 硬门禁 × {failure_code} → blocked；仅问题级 waived_by_user（经 check_audit_gate.py 校验）可解锁会话内承载"}
-    if mode == "strict" and failure_code in ("UNCONFIGURED", "SUBAGENT_AUTO"):
+    if mode == "strict" and failure_code == "SUBAGENT_AUTO":
         return {"outcome": "local_carry", "exit": EXIT_LOCAL, "needs_external_review": False,
-                "reason": f"strict × 软门禁 × {failure_code} → 本地承载 + attempts 记 unconfigured→local"}
+                "reason": "strict × 软门禁 × SUBAGENT_AUTO → 按配置会话内承载（preferences 为空）+ attempts 记 configured→local"}
     if mode == "strict":
-        return {"outcome": "local_carry", "exit": EXIT_LOCAL, "needs_external_review": True,
-                "reason": f"strict × 软门禁 × {failure_code} → 本地承载 + 留痕 + 待外置复核（计入 Maintainer 终审必查）"}
+        return {"outcome": "aborted", "exit": EXIT_BLOCKED, "needs_external_review": False,
+                "reason": f"strict × 软门禁 × {failure_code} → aborted：不本地承载；未修改配置；由用户决定调整 preferences 或重试"}
     return {"outcome": "local_carry", "exit": EXIT_LOCAL, "needs_external_review": False,
             "reason": f"graceful × 软门禁 × {failure_code} → 本地承载 + 留痕"}
+
+
+def _failed_preferences(attempts: list[dict[str, Any]]) -> list[str]:
+    """aborted 输出用：每个失败偏好一行「序号 profile 失败码: 原因」。"""
+    lines = []
+    for a in attempts:
+        if not a.get("failure_code"):
+            continue
+        detail = " ".join(str(a.get("detail") or ("超时" if a.get("timeout") else "")).split())[:160]
+        no = a.get("preference_number")
+        lines.append(f"{f'{no}. ' if no else ''}{a['profile']} {a['failure_code']}" + (f": {detail}" if detail else ""))
+    return lines
 
 
 def resolve_mode(man: dict[str, Any] | None, config: dict[str, Any], role: str) -> tuple[str, str]:
@@ -859,51 +937,46 @@ def resolve_mode(man: dict[str, Any] | None, config: dict[str, Any], role: str) 
 
 # ---------------------------------------------------------------- 主流程
 
-def run_assignment(cwd: Path, assignment_id: str, prompt: str, ack: str | None, owner: str) -> int:
+def run_assignment_result(cwd: Path, assignment_id: str, prompt: str, ack: str | None, owner: str) -> dict[str, Any]:
     cwd = cwd.resolve()
     tier, archive, man = find_manifest(cwd)
     if archive is None or man is None:
-        print(json.dumps({"error": "无第 1/2 级指派档案", "hint": "三级解析落到第 3 级默认，run 需要显式指派（方案 §2.2-4 建档条件）"}, ensure_ascii=False))
-        return EXIT_USAGE
+        raise UsageError("无第 1/2 级指派档案（三级解析落到第 3 级默认）",
+                         "run --assignment 需要档案内既有指派（方案 §2.2-4 建档条件）；无档案请用 run --role <角色> --out <交付物> 直跑")
     config = load_dispatch_config()
     target = [a for a in man.get("assignments", []) if a.get("assignment_id") == assignment_id]
     if not target:
-        print(json.dumps({"error": f"assignment_id 不存在: {assignment_id}", "known": [a.get("assignment_id") for a in man.get("assignments", [])]}, ensure_ascii=False))
-        return EXIT_USAGE
+        raise UsageError(f"assignment_id 不存在: {assignment_id}",
+                         f"改用已有 ID: {[a.get('assignment_id') for a in man.get('assignments', [])]}")
     a = target[0]
     errs = validate_manifest(man)
     if errs:
-        print(json.dumps({"error": "manifest 校验失败", "issues": errs}, ensure_ascii=False))
-        return EXIT_USAGE
+        raise UsageError("manifest 校验失败: " + "；".join(errs[:3]) + (f"（共 {len(errs)} 条）" if len(errs) > 3 else ""),
+                         f"先运行 dispatch_role.py validate --manifest {archive} 查看全部问题并修正")
     role = a["role"]
     profile_name = a["command_profile"]
     chain = resolve_profile_chain(profile_name, config, role)
     if not chain:
-        print(json.dumps({"error": f"指派 {assignment_id} 引用的 command_profile 不存在或无效: {profile_name}",
-                          "rule": "指派显式 profile 不得回退到角色默认偏好"}, ensure_ascii=False))
-        return EXIT_USAGE
+        raise UsageError(f"指派 {assignment_id} 引用的 command_profile 不存在或无效: {profile_name}",
+                         "在 roles.yaml 补全该 profile，或改指派的 command_profile（显式 profile 不得回退到角色默认偏好）")
     timeout_errors = [reason for profile in chain if (reason := _timeout_error(profile, role))]
     if timeout_errors:
-        print(json.dumps({"error": f"指派 {assignment_id} 的 command_profile timeout 无效",
-                          "issues": timeout_errors}, ensure_ascii=False))
-        return EXIT_USAGE
+        raise UsageError(f"指派 {assignment_id} 的 command_profile timeout 无效: " + "；".join(timeout_errors),
+                         "修正 roles.yaml 中对应 profile 的 timeout_s")
     mode, mode_why = resolve_mode(man, config, role)
     gate = "hard" if role in HARD_ROLES else "soft"
     target_file: Path | None = None
     if a.get("target_path"):
         target_file = (archive.parent / a["target_path"]).resolve()
         if not target_file.exists():
-            print(json.dumps({"error": f"target_path 不存在: {target_file}"}, ensure_ascii=False))
-            return EXIT_USAGE
+            raise UsageError(f"target_path 不存在: {target_file}", "恢复该文件，或更新指派的 target_path")
         actual = _receipt_module().target_sha256(target_file)
         if actual != a["target_sha256"]:
-            print(json.dumps({"error": "target_sha256 与当前对象不符", "declared": a["target_sha256"], "actual": actual,
-                              "rule": "succeeded 失效回 pending（方案 §2.5）；请更新指纹后重跑"}, ensure_ascii=False))
-            return EXIT_USAGE
+            raise UsageError(f"target_sha256 与当前对象不符（档案 {a['target_sha256'][:12]}，实际 {actual[:12]}）",
+                             "依据已变更，succeeded 失效回 pending（方案 §2.5）；更新指纹后重跑")
     if not a.get("deliverable"):
-        print(json.dumps({"error": f"指派 {assignment_id} 只有 deliverable_ref（代码型），无交付物文件可判",
-                          "hint": "代码型角色用 run --role Builder --verify <校验profile> 直跑"}, ensure_ascii=False))
-        return EXIT_USAGE
+        raise UsageError(f"指派 {assignment_id} 只有 deliverable_ref（代码型），无交付物文件可判",
+                         "代码型角色用 run --role Builder --verify <校验profile> 直跑")
     deliverable = (archive.parent / a["deliverable"]).resolve()
 
     source = "profile"
@@ -925,8 +998,7 @@ def run_assignment(cwd: Path, assignment_id: str, prompt: str, ack: str | None, 
 
     store = ManifestStore(archive)
     if not store.acquire(owner):
-        print(json.dumps({"error": "档案被有效锁占用", "lock": str(store.lock_dir)}, ensure_ascii=False))
-        return EXIT_USAGE
+        raise UsageError(f"档案被有效锁占用: {store.lock_dir}", "等锁持有者结束，或确认租约过期后重试")
 
     def mutate(m: dict[str, Any]) -> None:
         m["revision"] = int(m.get("revision", 0)) + 1
@@ -948,22 +1020,26 @@ def run_assignment(cwd: Path, assignment_id: str, prompt: str, ack: str | None, 
     finally:
         store.release()
 
+    # 工时伴随签署入账：调度成功即本棒工时事实，结算交付物所在胶囊的 open 任务段（无段静默跳过）
+    worktime = update_capsule.end_open_task_for(path=deliverable) if succeeded else None
+
     if succeeded:
-        print(json.dumps({"outcome": "succeeded", "tier": tier, "role": role, "mode": mode, "source": source,
-                          "selected_preference": next((x.get("preference_number") for x in reversed(attempts) if "failure_code" not in x), None),
-                          "carrier": carrier, "carrier_ref": carrier_ref, "carrier_stamped": stamped,
-               "receipt_id": receipt.get("receipt_id") or None, "receipt_signed": receipt.get("mac", "") not in ("", "unsigned"),
-                          "deliverable_sha256": _sha256_path(deliverable), "revision": updated["revision"]}, ensure_ascii=False))
-        return EXIT_OK
+        return {"outcome": "succeeded", "tier": tier, "role": role, "gate": gate, "mode": mode, "source": source,
+                "selected_preference": next((x.get("preference_number") for x in reversed(attempts) if "failure_code" not in x), None),
+                "carrier": carrier, "carrier_ref": carrier_ref, "carrier_stamped": stamped,
+                "receipt_id": receipt.get("receipt_id") or None, "receipt_signed": receipt.get("mac", "") not in ("", "unsigned"),
+                "deliverable": str(deliverable), "deliverable_sha256": _sha256_path(deliverable), "revision": updated["revision"],
+                "worklog_refs": (worktime or {}).get("worklog_refs") or [], "exit": EXIT_OK}
     verdict = adjudicate(mode, gate, failure)
-    print(json.dumps({"outcome": verdict["outcome"], "tier": tier, "role": role, "mode": f"{mode}（{mode_why}）", "gate": gate,
-                      "failure_code": failure, "reason": verdict["reason"], "needs_external_review": verdict.get("needs_external_review", False),
-                      "attempts": len(attempts)}, ensure_ascii=False))
-    return verdict["exit"]
+    return {"outcome": verdict["outcome"], "tier": tier, "role": role, "mode": f"{mode}（{mode_why}）", "gate": gate,
+            "failure_code": failure, "reason": verdict["reason"], "needs_external_review": verdict.get("needs_external_review", False),
+            "attempts": len(attempts), "exit": verdict["exit"],
+            **({"failed_preferences": _failed_preferences(attempts)} if verdict["outcome"] == "aborted" else {})}
 
 
-def run_direct(cwd: Path, role: str, prompt: str, out: Path | None, owner: str,
-               target: Path | None = None, verify: str | None = None) -> int:
+def run_direct_result(cwd: Path, role: str, prompt: str, out: Path | None, owner: str,
+                      target: Path | None = None, verify: str | None = None,
+                      capsule: Path | None = None) -> dict[str, Any]:
     """直跑模式：第 3 级解析 → 执行 → 判据裁定 → 指派记录由工具落笔。
 
     此前调度一次必须先手写 assignment YAML 并算 target_sha256，而调研/方案类角色根本
@@ -976,18 +1052,15 @@ def run_direct(cwd: Path, role: str, prompt: str, out: Path | None, owner: str,
     """
     cwd = cwd.resolve()
     if verify and role not in VERIFY_ROLES:
-        print(json.dumps({"error": f"--verify 只适用于 {sorted(VERIFY_ROLES)}，实得 {role}"}, ensure_ascii=False))
-        return EXIT_USAGE
+        raise UsageError(f"--verify 只适用于 {sorted(VERIFY_ROLES)}，实得 {role}", "去掉 --verify，或改用代码型角色")
     if out is None and role in HARD_ROLES:
-        print(json.dumps({"error": f"硬门禁角色 {role} 无交付物不得调度"}, ensure_ascii=False))
-        return EXIT_USAGE
+        raise UsageError(f"硬门禁角色 {role} 无交付物不得调度", "加 --out <交付物路径>")
     deliverable = (out if out is None or out.is_absolute() else cwd / out)
     deliverable = deliverable.resolve() if deliverable is not None else None
     target_file = (target if target is None or target.is_absolute() else cwd / target)
     target_file = target_file.resolve() if target_file is not None else None
     if target_file is not None and not target_file.exists():
-        print(json.dumps({"error": f"--target 不存在: {target_file}"}, ensure_ascii=False))
-        return EXIT_USAGE
+        raise UsageError(f"--target 不存在: {target_file}", "核对 --target 路径（相对 --cwd）")
     config = load_dispatch_config()
     mode, mode_why = resolve_mode(None, config, role)
     gate = "hard" if role in HARD_ROLES else "soft"
@@ -1002,6 +1075,11 @@ def run_direct(cwd: Path, role: str, prompt: str, out: Path | None, owner: str,
             failure, attempts, succeeded = execute_chain(chain, bound, cwd, deliverable, role)
     else:
         failure, attempts, succeeded = source, [], False
+        if source == "SUBAGENT_AUTO":
+            now = _now_iso()
+            attempts.append({"profile": "configured→local", "argv_sha256": _sha256_str("configured→local"),
+                             "started_at": now, "ended_at": now, "failure_code": "SUBAGENT_AUTO",
+                             "detail": "roles.preferences 为空：配置声明会话内承载"})
 
     verify_result: dict[str, Any] | None = None
     if verify:
@@ -1022,14 +1100,18 @@ def run_direct(cwd: Path, role: str, prompt: str, out: Path | None, owner: str,
     fallback_reason = "" if succeeded else _FAILURE_TO_REASON.get(failure, "")
     verdict = {"outcome": "succeeded", "exit": EXIT_OK} if succeeded else adjudicate(mode, gate, failure)
     status = "succeeded" if succeeded else ("blocked" if verdict["outcome"] == "blocked" else "failed")
+    # 工时伴随签署入账：代码型产出无交付物文件，只能靠 --capsule 定位活跃胶囊（交付物路径优先）
+    worktime = update_capsule.end_open_task_for(capsule=capsule, path=deliverable or cwd) if succeeded else None
     # 先盖章再取指纹，否则档案记的是盖章前的文件
     receipt = _issue_receipt(role, attempts, deliverable, target_file, carrier, carrier_ref) if succeeded else {}
+    duration_s = ok_attempt.get("duration_s") if (succeeded and ok_attempt) else None
     stamped = (stamp_carrier(deliverable,
                              carrier if succeeded else None,
                              carrier_ref if succeeded else None,
                              fallback_reason,
                              audit=(role == "Reviewer"),
-                             receipt_id=receipt.get("receipt_id", "") if succeeded else None)
+                             receipt_id=receipt.get("receipt_id", "") if succeeded else None,
+                             duration_s=duration_s)
                if deliverable is not None else False)
 
     tier, archive = find_archive_any(cwd)
@@ -1081,7 +1163,7 @@ def run_direct(cwd: Path, role: str, prompt: str, out: Path | None, owner: str,
             archive_error = f"档案被有效锁占用，本次指派未落笔: {store.lock_dir}"
 
     receipt = {"outcome": verdict["outcome"], "role": role, "gate": gate, "mode": f"{mode}（{mode_why}）",
-               "carrier": carrier, "carrier_ref": carrier_ref, "carrier_stamped": stamped,
+               "carrier": None if verdict["outcome"] == "aborted" else carrier, "carrier_ref": carrier_ref, "carrier_stamped": stamped,
                "selected_preference": ok_attempt.get("preference_number") if succeeded and ok_attempt else None,
                "receipt_id": receipt.get("receipt_id") or None, "receipt_signed": receipt.get("mac", "") not in ("", "unsigned"),
                "deliverable": str(deliverable) if deliverable else None,
@@ -1089,11 +1171,68 @@ def run_direct(cwd: Path, role: str, prompt: str, out: Path | None, owner: str,
                "archived": archived, "archive_error": archive_error, "tier": tier, "failure_code": failure or None,
                "fallback_reason": fallback_reason or None, "reason": verdict.get("reason", ""),
                "needs_external_review": verdict.get("needs_external_review", False), "attempts": len(attempts)}
+    if verdict["outcome"] == "aborted":
+        receipt["failed_preferences"] = _failed_preferences(attempts)
+    receipt["worklog_refs"] = (worktime or {}).get("worklog_refs") or []
     if verify_result is not None:
         receipt["verify"] = {"profile": verify, "passed": verify_result["passed"], "exit_code": verify_result.get("exit_code")}
-    print(json.dumps(receipt, ensure_ascii=False))
-    return verdict["exit"]
+    receipt["exit"] = verdict["exit"]
+    return receipt
 
+
+
+def _fmt(v: Any) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (list, tuple)):
+        return ",".join(_fmt(x) for x in v)
+    s = str(v)
+    return json.dumps(s, ensure_ascii=False) if (not s or re.search(r"\s", s)) else s
+
+
+def _kv(d: dict[str, Any], keys: tuple[str, ...]) -> str:
+    """key=value 空格分隔；None/空串/空列表省略（False 保留，needs_external_review 等要看见）。"""
+    return " ".join(f"{k}={_fmt(d[k])}" for k in keys if d.get(k) not in (None, "", [], ()))
+
+
+def render_run(r: dict[str, Any]) -> str:
+    """run 结果 → 文本。首行是结论；次行是交付与失败事实；其余为明细。"""
+    d = {**r, "mode": str(r.get("mode", "")).split("（")[0]}
+    if d.get("deliverable_sha256"):
+        d["deliverable_sha256"] = d["deliverable_sha256"][:12]
+    v = d.get("verify")
+    if v:
+        d["verify"] = f"{v['profile']}:{'pass' if v['passed'] else 'fail'}(exit={v.get('exit_code')})"
+    lines = [_kv(d, ("outcome", "role", "gate", "mode", "carrier", "selected_preference", "receipt_id")),
+             _kv(d, ("deliverable", "failure_code", "fallback_reason", "needs_external_review", "verify", "worklog_refs"))]
+    rest = _kv(d, ("tier", "source", "carrier_stamped", "receipt_signed", "archived", "attempts", "revision", "deliverable_sha256", "target"))
+    lines += [x for x in (rest,) if x]
+    for k in ("reason", "archive_error"):
+        if d.get(k):
+            lines.append(f"{k}: {d[k]}")
+    if d.get("outcome") == "aborted":
+        lines += ["❌ 各偏好失败原因:"] + [f"  {x}" for x in d.get("failed_preferences") or ["（无可执行偏好）"]]
+        lines.append("👉 未修改配置；由用户决定调整 preferences 或重试")
+    return "\n".join(x for x in lines if x)
+
+
+def _emit(fn: Any, render: Any, *args: Any, **kw: Any) -> int:
+    """计算与打印分离的唯一出口：fn 返回结果字典，这里渲染并取退出码；UsageError 走 stderr。"""
+    try:
+        res = fn(*args, **kw)
+    except UsageError as exc:
+        print(f"❌ {exc.reason}\n👉 修复建议: {exc.fix}", file=sys.stderr)
+        return EXIT_USAGE
+    print(render(res))
+    return res.get("exit", EXIT_OK)
+
+
+def run_assignment(*args: Any, **kw: Any) -> int:
+    return _emit(run_assignment_result, render_run, *args, **kw)
+
+
+def run_direct(*args: Any, **kw: Any) -> int:
+    return _emit(run_direct_result, render_run, *args, **kw)
 
 
 def _issue_receipt(role: str, attempts: list[dict[str, Any]], deliverable: Path | None,
@@ -1180,12 +1319,52 @@ _FAILURE_TO_REASON = {
 _VERIFY_NOISE_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
                       "node_modules", ".venv", "venv", ".tox", "htmlcov", ".coverage"}
 
+# 调度档案里归调度器独有的块：ManifestStore.update 经正则只替换该块文本，块外内容逐字保留
+# （见 ManifestStore.update）。校验指纹剥离该块后计算——业务字段（id、dependencies、
+# deliverables 等）的任何改写或删除仍会改变指纹，并发调度写回不再误报（审计 C-1）。
+_ROLES_MANIFEST_BLOCK = re.compile(r"^roles_manifest:.*?(?=^\S|\Z)", re.DOTALL | re.MULTILINE)
+
+
+def _archive_fingerprint(path: Path) -> str:
+    """调度档案指纹：剥掉调度器独占的 roles_manifest 块后哈希，其余内容逐字节受检。"""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return _sha256_file(path)  # 读不成文本（含被改写成二进制垃圾）即整文件哈希，fail-closed
+    return _sha256_str(_ROLES_MANIFEST_BLOCK.sub("", text))
+
+
+def _dispatcher_state_paths(root: Path) -> tuple[set[Path], set[Path]]:
+    """调度器自身状态位置（解析后的绝对路径）。
+
+    返回 (整路径排除, 过滤指纹的档案)。前者（trace/run/回执/凭据/锁/journal）由调度器
+    整体拥有，任何变动不算篡改；后者是 capsule.yaml/workers.yaml——调度器只拥有其中
+    roles_manifest 块，指纹走 _archive_fingerprint（C-1：不得整文件免检）。
+    只按绝对路径落点判定，不按文件名/目录名匹配；这些位置不在 root 之下时自然无影响。
+    """
+    rec = _receipt_module()
+    excluded = [TRACE_LOG, TRACE_LOG.with_suffix(TRACE_LOG.suffix + ".1"), RUN_DIR, rec.RECEIPT_DIR, rec.KEY_FILE.parent]
+    archives: list[Path] = []
+    archive = find_archive_any(root)[1]
+    if archive is not None:
+        store = ManifestStore(archive)
+        excluded += [store.lock_dir, store.journal]
+        archives.append(archive)
+    return ({q.resolve() for q in excluded}, {q.resolve() for q in archives})
+
 
 def _source_fingerprints(root: Path) -> dict[str, str]:
-    """校验前的既有文件指纹表（排除噪声目录）。"""
+    """校验前的既有文件指纹表（排除噪声目录与调度器独占状态）。"""
     out: dict[str, str] = {}
+    excluded, archives = _dispatcher_state_paths(root)
     for p in root.rglob("*"):
         if not p.is_file() or _VERIFY_NOISE_DIRS & set(p.relative_to(root).parts):
+            continue
+        resolved = p.resolve()
+        if any(resolved.is_relative_to(q) for q in excluded):
+            continue
+        if resolved in archives:
+            out[str(p.relative_to(root))] = _archive_fingerprint(p)
             continue
         try:
             out[str(p.relative_to(root))] = _sha256_file(p)
@@ -1196,12 +1375,15 @@ def _source_fingerprints(root: Path) -> dict[str, str]:
 
 def _tampered_paths(before: dict[str, str], root: Path) -> list[str]:
     """校验后被改写或删除的既有文件；新建文件不算（缓存、报告属正常产物）。"""
+    _, archives = _dispatcher_state_paths(root)
     changed = []
     for rel, sha in before.items():
         p = root / rel
         if not p.is_file():
             changed.append(f"{rel}（已删除）")
-        elif _sha256_file(p) != sha:
+            continue
+        current = _archive_fingerprint(p) if p.resolve() in archives else _sha256_file(p)
+        if current != sha:
             changed.append(rel)
     return sorted(changed)
 
@@ -1275,11 +1457,12 @@ def cmd_trace(log: Path, n: int, full: bool) -> int:
             for k in ("cwd", "deliverable", "deliverable_valid", "stdout_tail", "stderr_tail", "detail"):
                 if r.get(k) not in (None, ""):
                     print(f"   {k}: {r[k]}")
-    print(f"—— 共 {len(rows)} 条，显示最近 {min(n, len(rows))} 条 · {log}")
+    print(f"—— 共 {len(rows)} 条，显示最近 {min(n, len(rows))} 条 · {log}"
+          + (f" · 加 -n {len(rows)} 放宽" if len(rows) > n else ""))
     return EXIT_OK
 
 
-def cmd_resolve(cwd: Path) -> int:
+def cmd_resolve(cwd: Path) -> dict[str, Any]:
     cwd = cwd.resolve()
     tier, archive, man = find_manifest(cwd)
     config = load_dispatch_config()
@@ -1308,8 +1491,37 @@ def cmd_resolve(cwd: Path) -> int:
         out["archivable"] = str(arch) if arch else None
         out["note"] = ("无指派记录；直跑 `run --role <角色> --out <交付物>` 会写入上述档案（第 %d 级）" % arch_tier
                        if arch else "无第 1/2 级档案；直跑只出回执不建档，第 3 级 roles.yaml 生效")
-    print(json.dumps(out, ensure_ascii=False, indent=1))
-    return EXIT_OK
+    return out
+
+
+def _more(total: int, n: int, flag: str = "-n") -> str:
+    return f"…还有 {total - n} 条，加 {flag} {total} 放宽" if total > n else ""
+
+
+def render_resolve(out: dict[str, Any], n: int = 20) -> str:
+    rows = out.get("assignments")
+    errs = out.get("manifest_errors") or []
+    head = {"tier": out["tier"], "archive": out["archive"], "mode": out["default_dispatch_mode"],
+            "config_present": out["config_present"], "archivable": out.get("archivable"),
+            "assignments": len(rows) if rows is not None else None,
+            "stale": sum(1 for r in rows or [] if r.get("stale")) or None, "manifest_errors": len(errs) or None}
+    lines = [_kv(head, tuple(head))]
+    for r in (rows or [])[:n]:
+        r = {**r, "mode": r["mode"].split("（")[0]}
+        lines.append(_kv(r, ("id", "role", "status", "gate", "mode", "profile", "target", "stale", "verify_profile")))
+    lines += [f"error: {e}" for e in errs[:n]]
+    lines += [m for m in (_more(len(rows or []), n), _more(len(errs), n)) if m]
+    if out.get("note"):
+        lines.append(out["note"])
+    return "\n".join(lines)
+
+
+def render_validate(res: dict[str, Any], n: int) -> str:
+    errs = res["issues"]
+    lines = [_kv({**res, "issues": len(errs) or None}, ("valid", "file", "issues"))]
+    lines += [f"error: {e}" for e in errs[:n]]
+    lines += [m for m in (_more(len(errs), n),) if m]
+    return "\n".join(lines)
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -1317,6 +1529,7 @@ def _main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd")
     pr = sub.add_parser("resolve", help="解析三级链，打印生效指派")
     pr.add_argument("--cwd", type=Path, default=Path.cwd())
+    pr.add_argument("-n", type=int, default=20, help="最多显示 N 条指派/问题")
     pu = sub.add_parser("run", help="执行指派（矩阵裁决 + CAS 写回）")
     pu.add_argument("--cwd", type=Path, default=Path.cwd())
     pu.add_argument("--assignment", help="档案内既有指派 ID；与 --role 二选一")
@@ -1326,6 +1539,7 @@ def _main(argv: list[str] | None = None) -> int:
     pu.add_argument("--verify", help="校验 profile 名；给定后成功判据为该命令退出码 0（代码型角色）")
     pu.add_argument("--prompt", help="任务提示词；缺省读 stdin")
     pu.add_argument("--ack", help="问题级豁免引用（hard blocked 时记录；有效性由 check_audit_gate.py 校验）")
+    pu.add_argument("--capsule", type=Path, help="活跃胶囊目录：调度成功后自动结算其 open 任务段（工时伴随签署入账）")
     pu.add_argument("--owner", default=os.environ.get("USER", "manager"))
     pt = sub.add_parser("trace", help="查看执行轨迹（命令原文、退出码、耗时）")
     pt.add_argument("-n", type=int, default=20, help="显示最近 N 条")
@@ -1333,39 +1547,38 @@ def _main(argv: list[str] | None = None) -> int:
     pt.add_argument("--log", type=Path, default=TRACE_LOG)
     pv = sub.add_parser("validate", help="校验 manifest 档案")
     pv.add_argument("--manifest", type=Path, required=True, help="capsule.yaml 或 workers.yaml")
+    pv.add_argument("-n", type=int, default=10, help="最多显示 N 条问题")
     args = p.parse_args(argv)
 
     if args.cmd == "resolve":
-        return cmd_resolve(args.cwd)
+        print(render_resolve(cmd_resolve(args.cwd), args.n))
+        return EXIT_OK
     if args.cmd == "trace":
         return cmd_trace(args.log, args.n, args.full)
     if args.cmd == "validate":
-        data = yaml.safe_load(args.manifest.read_text(encoding="utf-8")) or {}
+        try:
+            data = yaml.safe_load(args.manifest.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            raise UsageError(f"无法读取 manifest {args.manifest}: {exc}", "核对 --manifest 路径与 YAML 语法") from exc
         man = data.get("roles_manifest", data)
         errs = validate_manifest(man) if isinstance(man, dict) else ["manifest 非对象"]
-        print(json.dumps({"file": str(args.manifest), "valid": not errs, "issues": errs}, ensure_ascii=False))
+        print(render_validate({"file": str(args.manifest), "valid": not errs, "issues": errs}, args.n))
         return EXIT_OK if not errs else EXIT_USAGE
     if args.cmd == "run":
         prompt = args.prompt or (sys.stdin.read() if not sys.stdin.isatty() else "")
         if not prompt.strip():
-            print(json.dumps({"error": "缺任务提示词（--prompt 或 stdin）"}, ensure_ascii=False))
-            return EXIT_USAGE
+            raise UsageError("缺任务提示词", "加 --prompt <文本>，或经 stdin 传入")
         if bool(args.assignment) == bool(args.role):
-            print(json.dumps({"error": "--assignment 与 --role 二选一"}, ensure_ascii=False))
-            return EXIT_USAGE
+            raise UsageError("--assignment 与 --role 二选一", "只保留其一")
         if args.role:
             if not args.out and not args.verify:
-                print(json.dumps({"error": "--role 直跑须给 --out 交付物路径，或给 --verify 校验判据"}, ensure_ascii=False))
-                return EXIT_USAGE
+                raise UsageError("--role 直跑须给 --out 交付物路径，或给 --verify 校验判据", "加 --out <交付物路径> 或 --verify <校验profile>")
             if args.verify and args.role not in VERIFY_ROLES:
-                print(json.dumps({"error": f"--verify 只适用于代码型角色 {sorted(VERIFY_ROLES)}，实得 {args.role}",
-                                  "rule": "判据是角色属性；硬门禁角色无交付物即 blocked，不得以校验退出码顶替"}, ensure_ascii=False))
-                return EXIT_USAGE
+                raise UsageError(f"--verify 只适用于代码型角色 {sorted(VERIFY_ROLES)}，实得 {args.role}",
+                                 "去掉 --verify 并给 --out（判据是角色属性；硬门禁角色无交付物即 blocked）")
             if not args.out and args.role in HARD_ROLES:
-                print(json.dumps({"error": f"硬门禁角色 {args.role} 必须给 --out 交付物路径",
-                                  "rule": "独立性以产出为证；无交付物的硬角色一律不得记 succeeded"}, ensure_ascii=False))
-                return EXIT_USAGE
-            return run_direct(args.cwd, args.role, prompt, args.out, args.owner, args.target, args.verify)
+                raise UsageError(f"硬门禁角色 {args.role} 必须给 --out 交付物路径", "加 --out <交付物路径>（独立性以产出为证）")
+            return run_direct(args.cwd, args.role, prompt, args.out, args.owner, args.target, args.verify, args.capsule)
         return run_assignment(args.cwd, args.assignment, prompt, args.ack, args.owner)
     p.print_help()
     return EXIT_USAGE
@@ -1374,8 +1587,11 @@ def _main(argv: list[str] | None = None) -> int:
 def main(argv: list[str] | None = None) -> int:
     try:
         return _main(argv)
+    except UsageError as exc:
+        print(f"❌ {exc.reason}\n👉 修复建议: {exc.fix}", file=sys.stderr)
+        return EXIT_USAGE
     except setup_agents.ConfigError as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        print(f"❌ {exc}\n👉 修复建议: 修正 roles.yaml（data/templates/roles.yaml）后重试", file=sys.stderr)
         return EXIT_USAGE
 
 

@@ -63,7 +63,7 @@ AXIOM_COVERAGE = {
     "2. 分层覆盖与就近优先": ["33"],
     "3. 薄入口，按需读取与 Token 经济性": ["8", "12", "17", "24"],
     "4. 事实与物理实现优先": ["19b", "21"],
-    "5. 最小作用量与克制": ["34", "35"],
+    "5. 最小作用量与克制": ["34", "35", "38"],
     "6. 尊重边界与物理动作闭环": ["31"],
     "7. 本地优先与自闭环": ["22"],
     "8. 动作驱动优于场景穷举": ["3", "7"],
@@ -278,10 +278,10 @@ def render_markdown(report: dict) -> str:
     out += ["",
             "**未覆盖范围**：" + gap +
             "第 33 项只拦截明示放宽语句，以及动态执行和系统外壳调用；同义改写不在检测内。"
-            "第 34 项只拦截禁用第三方依赖。第 35 项只列出零引用规则，不自动删除。"
+            "第 34 项只拦截禁用第三方依赖。第 35 项只列出零引用规则，第 38 项只列出无程序读者的 --json，均不自动删除。"
             "第 31 项证明源码未直接调用平台打开命令；本报告不落盘，本轮无打开义务。"
             "语法税超过 50% 时第 24 项写明去表化这一兑现方式。"
-            "价值回收由第 30 项检查；跨平台回退由第 36 项检查；工具异常路径由第 37 项检查。"
+            "价值回收由第 30 项检查；跨平台回退与外部命令缺失由第 36 项检查（按文件判定）；工具异常路径由第 37 项检查。"
             "分发扫描凭据特征串、家目录路径与实体词；词表、空注册表或实例声明缺失时必须留痕，静默跳过会阻断。"
             "业务正文与 credentials/ 的内容不进入这些扫描。"]
     traces = report.get("initial_state_traces") or []
@@ -309,12 +309,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="系统自检三遍检查执行与报告装配（《治理指令》系统自检）")
     parser.add_argument("--root", type=Path, default=paths.WORKSPACE_ROOT, help="工作区根")
-    parser.add_argument("--json", action="store_true", help="输出结构化 JSON 而非 Markdown")
     parser.add_argument("--no-fix-claude-md", action="store_true", help="跳过 CLAUDE.md 自动改写")
     args = parser.parse_args()
 
     report = assemble(args.root.expanduser().resolve(), fix_claude_md=not args.no_fix_claude_md)
-    print(json.dumps(report, ensure_ascii=False, indent=2) if args.json else render_markdown(report))
+    print(render_markdown(report))
     return 0 if report["passed"] else 1
 
 

@@ -192,7 +192,6 @@ def main() -> int:
         parser.add_argument(f"--{field}", help=f"配合 --add-issue（v4）：{hint}")
     parser.add_argument("--set", nargs=2, metavar=("ID", "FIELD=VALUE"),
                         help="更新既有问题字段，如 --set C-2 status=closed")
-    parser.add_argument("--json", action="store_true", help="以结构化 JSON 输出")
     args = parser.parse_args()
 
     path = Path(args.report).expanduser()
@@ -207,15 +206,12 @@ def main() -> int:
 
         if args.list or not (args.add_issue or args.set):
             issues = state.get("issues", [])
-            if args.json:
-                print(json.dumps(state, ensure_ascii=False, indent=2))
-            else:
-                for i in issues:
-                    print(f"{i['id']}\t{i['level']}\t{i['status']}\t{i.get('gate', '-')}\t{i.get('evidence', '-')}")
-                print(f"# {len(issues)} 条，其中 open {sum(1 for i in issues if i['status'] == 'open')} 条")
-                phase = cag.parse_front_matter(text).get("audit_phase")
-                if phase in cag.GATE_ORDER:
-                    print("# " + blocking_summary(issues, phase))
+            for i in issues:
+                print(f"{i['id']}\t{i['level']}\t{i['status']}\t{i.get('gate', '-')}\t{i.get('evidence', '-')}")
+            print(f"# {len(issues)} 条，其中 open {sum(1 for i in issues if i['status'] == 'open')} 条")
+            phase = cag.parse_front_matter(text).get("audit_phase")
+            if phase in cag.GATE_ORDER:
+                print("# " + blocking_summary(issues, phase))
             return 0
 
         if args.add_issue:
@@ -238,16 +234,14 @@ def main() -> int:
             state = set_field(state, issue_id.strip(), field.strip(), value.strip())
 
         unsigned = commit(path, dump_state(text, state))
-        if unsigned and not args.json:
+        if unsigned:
             print("⚠️ 状态已推进，已删去 receipt_id：报告回到待复核态，下一轮 Reviewer 复核后重新盖章才恢复有效。",
                   file=sys.stderr)
         counts = {}
         for i in state.get("issues", []):
             counts[i["status"]] = counts.get(i["status"], 0) + 1
         summary = " ".join(f"{k}={v}" for k, v in sorted(counts.items()))
-        print(json.dumps({"ok": True, "report": str(path), "counts": counts, "receipt_cleared": unsigned},
-                         ensure_ascii=False)
-              if args.json else f"✅ 已更新 {path.name}: {summary}")
+        print(f"✅ 已更新 {path.name}: {summary}")
         return 0
     except AuditStateError as err:
         print(str(err), file=sys.stderr)

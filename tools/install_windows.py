@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import io
-import json
 import runpy
 import shutil
 import sys
@@ -226,7 +225,6 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--target", help="安装目录；省略时弹出图形化目录选择框")
-    parser.add_argument("--json", action="store_true", help="以结构化 JSON 格式输出结果")
 
     args = parser.parse_args()
 
@@ -243,17 +241,10 @@ def main() -> int:
 
         res = install(payload, target)
         verb = "升级" if res["mode"] == "upgrade" else "安装"
-        if not args.json:
-            print(f"✅ 控制面{verb}完成：{res['system_dir']}（{res['written_files']} 个文件）")
-            # 旧布局残留提示由随后 run_bootstrap 内的 print_legacy_layout_hint() 统一打印，
-            # 此处不重复；legacy_layout 字段只为 --json 消费方保留结构化信号。
+        print(f"✅ 控制面{verb}完成：{res['system_dir']}（{res['written_files']} 个文件）")
+        # 旧布局残留提示由随后 run_bootstrap 内的 print_legacy_layout_hint() 统一打印，此处不重复。
 
         boot = run_bootstrap(Path(res["workspace"]))
-        res["bootstrap"] = boot
-
-        if args.json:
-            print(json.dumps(res, ensure_ascii=False, indent=2))
-            return 0 if boot["returncode"] == 0 else 1
 
         if boot["returncode"] != 0:
             print(
@@ -281,7 +272,7 @@ def main() -> int:
 if __name__ == "__main__":
     code = main()
     # 冻结成 exe 时双击运行，控制台窗口会随进程退出一并消失——成功提示和报错都来不及看。
-    # 但非交互调用（CI 自检、--json 被另一进程捕获输出）没有可读的 stdin，input() 会遇 EOF
+    # 但非交互调用（CI 自检、输出被另一进程捕获）没有可读的 stdin，input() 会遇 EOF
     # 崩出未捕获异常，把已经算好的退出码打翻——这不是使用者的错，不该让程序在这里再炸一次。
     if getattr(sys, "frozen", False) and sys.stdin is not None and sys.stdin.isatty():
         try:

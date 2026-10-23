@@ -10,6 +10,7 @@ import argparse
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -41,7 +42,7 @@ def _validate_name(name: str) -> str:
         or "\\" in name
         or any(ord(char) < 32 for char in name)
     ):
-        raise AppInitError("应用名必须是安全的单层目录名")
+        raise AppInitError("应用名必须是安全的单层目录名\n👉 修复建议: 去掉 / \\ 与 .. ，只用一层目录名。")
     return name
 
 
@@ -50,7 +51,7 @@ def _validate_date(value: str | None) -> str:
     try:
         datetime.strptime(value, "%Y%m%d")
     except (TypeError, ValueError) as error:
-        raise AppInitError("开始日期必须使用 YYYYMMDD") from error
+        raise AppInitError("开始日期必须使用 YYYYMMDD\n👉 修复建议: 例如 --start 20261022。") from error
     return value
 
 
@@ -59,7 +60,7 @@ def _render(path: Path, values: dict[str, str]) -> str:
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", value)
     if "{{" in text or "}}" in text:
-        raise AppInitError(f"模板含未替换变量: {path}")
+        raise AppInitError(f"模板含未替换变量: {path}\n👉 修复建议: 补齐模板占位符对应的参数，或修正模板。")
     return text
 
 
@@ -174,13 +175,13 @@ def init_app(
     notes = notes if notes is not None else []
 
     if not templates.is_dir():
-        raise AppInitError(f"模板目录不存在: {templates}")
+        raise AppInitError(f"模板目录不存在: {templates}\n👉 修复建议: 运行 python3 .entropaxis/tools/bootstrap.py 恢复控制面。")
 
     app_path = target_dir / name if target_dir.name != name else target_dir
     if entry_only and not app_path.is_dir():
-        raise AppInitError(f"--entry-only 只用于已有目录，目录不存在: {app_path}")
+        raise AppInitError(f"--entry-only 只用于已有目录，目录不存在: {app_path}\n👉 修复建议: 去掉 --entry-only 新建，或核对 --target-dir。")
     if not entry_only and app_path.exists() and any(app_path.iterdir()):
-        raise AppInitError(f"目标应用目录已存在且非空，拒绝覆盖（已有仓库请用 --entry-only）: {app_path}")
+        raise AppInitError(f"目标应用目录已存在且非空，拒绝覆盖: {app_path}\n👉 修复建议: 已有仓库加 --entry-only，只补入口文件。")
 
     values = {
         "项目名": name,
@@ -293,7 +294,8 @@ def main() -> None:
             notes=notes,
         )
     except AppInitError as error:
-        parser.error(str(error))
+        print(f"❌ {error}", file=sys.stderr)
+        raise SystemExit(2)
     if args.parent:
         notes.append(record_in_parent(args.parent, target, _validate_date(args.start), "接入" if args.entry_only else "新建"))
     print(target)

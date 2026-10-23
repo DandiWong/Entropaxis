@@ -66,8 +66,8 @@ class LinkSkillsTests(TestCase):
 
 
 
-class FileOpenerMergeTests(TestCase):
-    """merge-preserve 策略：人工仲裁项持久保留；全量重扫仅显式触发（G-13）。"""
+class _OpenerSandbox(TestCase):
+    """临时 .entropaxis 沙盒：拷入真实模板，配置落 data/templates/，绝不触碰工作区实例。"""
 
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="file-opener-"))
@@ -85,48 +85,180 @@ class FileOpenerMergeTests(TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _arbitrated_config(self) -> dict:
+    def _init(self, **kwargs):
+        """固定探测结果为空集，保证命令选择只由平台分支决定。"""
+        with mock.patch.object(bootstrap, "detect_host_apps", return_value=set()):
+            return init_file_opener(verbose=False, system_dir=self.system_dir, **kwargs)
+
+
+class FileOpenerMergeTests(_OpenerSandbox):
+    """merge-preserve 策略（按平台分区）：人工仲裁项持久保留；全量重扫仅显式触发（G-13）。"""
+
+    def _partition_config(self, platform: str, associations: dict) -> dict:
+        return {"version": "1.0.0", "platforms": {platform: {"associations": associations}}}
+
+    def _arbitrated_markdown(self) -> dict:
+        return {
+            "name": "Markdown与标记文档",
+            "extensions": [".md"],
+            "selected_app": "Orca (orca file open)",
+            "command": "orca file open",
+            "available_candidates": ["Orca (orca file open)"],
+        }
+
+    def test_default_run_preserves_arbitration_and_fills_missing(self) -> None:
+        self.config_path.write_text(
+            json.dumps(self._partition_config("darwin", {"markdown": self._arbitrated_markdown()}), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        cfg = self._init(platform="darwin")
+        darwin = cfg["platforms"]["darwin"]["associations"]
+        self.assertEqual(darwin["markdown"]["command"], "orca file open")
+        self.assertIn("word", darwin)
+        on_disk = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["platforms"]["darwin"]["associations"]["markdown"]["command"], "orca file open")
+        self.assertIn("word", on_disk["platforms"]["darwin"]["associations"])
+
+    def test_force_rescan_rebuilds_from_template(self) -> None:
+        self.config_path.write_text(
+            json.dumps(self._partition_config("darwin", {"markdown": self._arbitrated_markdown()}), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        cfg = self._init(platform="darwin", force_rescan=True)
+        self.assertNotEqual(cfg["platforms"]["darwin"]["associations"]["markdown"]["command"], "orca file open")
+
+    def test_corrupt_config_self_heals(self) -> None:
+        self.config_path.write_text("{not-json", encoding="utf-8")
+        cfg = self._init(platform="win32")
+        self.assertIn("markdown", cfg["platforms"]["win32"]["associations"])
+        json.loads(self.config_path.read_text(encoding="utf-8"))
+
+    def test_rerun_without_change_keeps_file_stable(self) -> None:
+        self.config_path.write_text(json.dumps({
+            "version": "1.0.0",
+            "platform": "darwin",
+            "associations": {"markdown": self._arbitrated_markdown()},
+        }, ensure_ascii=False), encoding="utf-8")
+        first = self._init(platform="darwin")
+        stamp = self.config_path.stat().st_mtime_ns
+        second = self._init(platform="darwin")
+        self.assertEqual(first, second)
+        self.assertEqual(self.config_path.stat().st_mtime_ns, stamp)
+
+
+class FileOpenerPlatformPartitionTests(_OpenerSandbox):
+    """三平台适配（体检第 36 项）：darwin/win32/linux 分区隔离、旧格式迁移与他平台值不误判仲裁。"""
+
+    def _legacy_darwin_config(self) -> dict:
+        """旧版 bootstrap 在 macOS 上的产物形态：顶层 associations + platform 字段。"""
         return {
             "version": "1.0.0",
             "platform": "darwin",
             "associations": {
+                "word": {
+                    "name": "Word文档",
+                    "extensions": [".docx", ".doc"],
+                    "selected_app": "Microsoft Word",
+                    "command": 'open -a "Microsoft Word"',
+                    "available_candidates": ["Microsoft Word"],
+                },
                 "markdown": {
                     "name": "Markdown与标记文档",
-                    "extensions": [".md"],
-                    "selected_app": "Orca (orca file open)",
-                    "command": "orca file open",
-                    "available_candidates": ["Orca (orca file open)"],
-                }
+                    "extensions": [".md", ".markdown", ".asciidoc", ".adoc"],
+                    "selected_app": "Typora",
+                    "command": 'open -a "Typora"',
+                    "available_candidates": ["Typora"],
+                },
             },
         }
 
-    def test_default_run_preserves_arbitration_and_fills_missing(self) -> None:
-        self.config_path.write_text(json.dumps(self._arbitrated_config(), ensure_ascii=False), encoding="utf-8")
-        cfg = init_file_opener(verbose=False, system_dir=self.system_dir)
-        self.assertEqual(cfg["associations"]["markdown"]["command"], "orca file open")
-        self.assertIn("word", cfg["associations"])
-        on_disk = json.loads(self.config_path.read_text(encoding="utf-8"))
-        self.assertEqual(on_disk["associations"]["markdown"]["command"], "orca file open")
-        self.assertIn("word", on_disk["associations"])
+    def test_macos_legacy_config_migrates_on_windows_bootstrap(self) -> None:
+        """必测场景：macOS 旧格式随工作区搬到 Windows 后 bootstrap——win32 分区按 Windows
+        命令新生成且不打 arbitrated，darwin 分区整体原样归档，值一个都不改写。"""
+        self.config_path.write_text(json.dumps(self._legacy_darwin_config(), ensure_ascii=False), encoding="utf-8")
+        with mock.patch.object(bootstrap, "detect_host_apps", return_value={"winword", "wps"}):
+            cfg = init_file_opener(verbose=False, system_dir=self.system_dir, platform="win32")
+        win32 = cfg["platforms"]["win32"]["associations"]
+        self.assertEqual(win32["word"]["command"], "start winword")
+        self.assertFalse(any(info.get("arbitrated") for info in win32.values()))
+        self.assertEqual(cfg["platforms"]["darwin"]["associations"], self._legacy_darwin_config()["associations"])
+        self.assertNotIn("associations", cfg)  # 顶层旧字段已迁移，平台信息内化为分区键
+        self.assertNotIn("platform", cfg)
+        self.assertEqual(json.loads(self.config_path.read_text(encoding="utf-8")), cfg)
 
-    def test_force_rescan_rebuilds_from_template(self) -> None:
-        self.config_path.write_text(json.dumps(self._arbitrated_config(), ensure_ascii=False), encoding="utf-8")
-        cfg = init_file_opener(verbose=False, force_rescan=True, system_dir=self.system_dir)
-        self.assertNotEqual(cfg["associations"]["markdown"]["command"], "orca file open")
+    def test_fresh_generation_uses_platform_specific_fallback_commands(self) -> None:
+        for platform, fallback in (("darwin", "open"), ("win32", 'start ""'), ("linux", "xdg-open")):
+            with self.subTest(platform=platform):
+                self.config_path.unlink(missing_ok=True)
+                cfg = self._init(platform=platform)
+                self.assertEqual(set(cfg["platforms"]), {platform})
+                word = cfg["platforms"][platform]["associations"]["word"]
+                self.assertEqual(word["command"], fallback)
+                self.assertEqual(word["selected_app"], "系统默认关联程序")
 
-    def test_corrupt_config_self_heals(self) -> None:
-        self.config_path.write_text("{not-json", encoding="utf-8")
-        cfg = init_file_opener(verbose=False, system_dir=self.system_dir)
-        self.assertIn("markdown", cfg["associations"])
-        json.loads(self.config_path.read_text(encoding="utf-8"))
+    def test_linux_generation_picks_linux_candidates(self) -> None:
+        with mock.patch.object(bootstrap, "detect_host_apps", return_value={"wps"}):
+            cfg = init_file_opener(verbose=False, system_dir=self.system_dir, platform="linux")
+        word = cfg["platforms"]["linux"]["associations"]["word"]
+        self.assertEqual(word["command"], "wps")  # 模板 cmd_linux，而非他平台命令
+        # 模板把 Word 的 cmd_linux 也声明为 wps，首个命中即选中，应用名断言无增量价值
 
-    def test_rerun_without_change_keeps_file_stable(self) -> None:
-        self.config_path.write_text(json.dumps(self._arbitrated_config(), ensure_ascii=False), encoding="utf-8")
-        first = init_file_opener(verbose=False, system_dir=self.system_dir)
-        stamp = self.config_path.stat().st_mtime_ns
-        second = init_file_opener(verbose=False, system_dir=self.system_dir)
-        self.assertEqual(first, second)
-        self.assertEqual(self.config_path.stat().st_mtime_ns, stamp)
+    def test_windows_exe_names_match_microsoft_office_candidates(self) -> None:
+        """真实缺陷回归：win32 探测到的是 exe stem（WINWORD.EXE→winword、POWERPNT.EXE→powerpnt），
+        只按候选名子串匹配永远命中不了，Word/PowerPoint 已安装却回退系统默认。"""
+        with mock.patch.object(bootstrap, "detect_host_apps", return_value={"winword", "powerpnt"}):
+            cfg = init_file_opener(verbose=False, system_dir=self.system_dir, platform="win32")
+        assoc = cfg["platforms"]["win32"]["associations"]
+        self.assertEqual(assoc["word"]["command"], "start winword")
+        self.assertEqual(assoc["ppt"]["command"], "start powerpnt")
+
+    def test_arbitrated_only_judged_within_current_platform(self) -> None:
+        """他平台分区里的差异化命令不得被打 arbitrated，也不得被回填覆盖。"""
+        manual_win32_word = {
+            "name": "Word文档",
+            "extensions": [".docx", ".doc"],
+            "selected_app": "自定写作器",
+            "command": "start customwriter",
+        }
+        self.config_path.write_text(json.dumps({
+            "version": "1.0.0",
+            "platforms": {"win32": {"associations": {"word": manual_win32_word}}},
+        }, ensure_ascii=False), encoding="utf-8")
+        cfg = self._init(platform="darwin")
+        self.assertEqual(cfg["platforms"]["win32"]["associations"]["word"], manual_win32_word)
+        self.assertIn("word", cfg["platforms"]["darwin"]["associations"])  # 当前平台照常回填
+        self.assertNotIn("excel", cfg["platforms"]["win32"]["associations"])  # 他平台分区不动
+
+    def test_legacy_config_without_platform_field_archives_under_current(self) -> None:
+        self.config_path.write_text(json.dumps({
+            "version": "1.0.0",
+            "associations": {"markdown": {
+                "name": "Markdown与标记文档", "extensions": [".md"],
+                "selected_app": "Orca", "command": "orca file open",
+            }},
+        }, ensure_ascii=False), encoding="utf-8")
+        cfg = self._init(platform="linux")
+        self.assertEqual(set(cfg["platforms"]), {"linux"})
+        self.assertEqual(cfg["platforms"]["linux"]["associations"]["markdown"]["command"], "orca file open")
+
+    def test_force_rescan_rebuilds_only_current_platform_partition(self) -> None:
+        win32_partition = {"associations": {"word": {
+            "name": "Word文档", "extensions": [".docx", ".doc"],
+            "selected_app": "自定写作器", "command": "start customwriter", "arbitrated": True,
+        }}}
+        self.config_path.write_text(json.dumps({
+            "version": "1.0.0",
+            "platforms": {
+                "darwin": {"associations": {"markdown": {
+                    "name": "Markdown与标记文档", "extensions": [".md"],
+                    "selected_app": "Orca", "command": "orca file open", "arbitrated": True,
+                }}},
+                "win32": win32_partition,
+            },
+        }, ensure_ascii=False), encoding="utf-8")
+        cfg = self._init(platform="darwin", force_rescan=True)
+        self.assertNotEqual(cfg["platforms"]["darwin"]["associations"]["markdown"]["command"], "orca file open")
+        self.assertEqual(cfg["platforms"]["win32"], win32_partition)  # 全量重扫只重建当前平台分区
 
 
 class RolePreferenceBootstrapTests(TestCase):
@@ -138,7 +270,6 @@ class RolePreferenceBootstrapTests(TestCase):
                 "  Builder:\n"
                 "    duty: build\n"
                 "    preferences: [local-builder]\n"
-                "    profile: null\n"
                 "command_profiles:\n"
                 "  local-builder: {agent: codex, model: openai/gpt-test}\n"
             )
@@ -159,7 +290,7 @@ class RolePreferenceBootstrapTests(TestCase):
             with mock.patch.object(role_preferences.shutil, "which", return_value=str(fake_codex)):
                 report = detect_role_preferences(config)
 
-            self.assertIsNone(report[0]["selected_profile"])
+            self.assertNotIn("selected_profile", report[0])
             self.assertEqual(report[0]["preferences"][0]["status"], "local_ready")
             self.assertEqual(config.read_text(encoding="utf-8"), original)
 

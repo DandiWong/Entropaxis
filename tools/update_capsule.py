@@ -1006,6 +1006,43 @@ def override_worklog(capsule_dir: str | Path, ref: str, spent: float | None = No
         "total": worklog_total(capsule)
     }
 
+def _sync_stage_deliverable_effort(capsule: Path, stage: str, spent: float) -> None:
+    """把工时登记的 spent 当量同步注入对应阶段产物的 Front Matter 中（自包含元信息）。"""
+    candidates_map = {
+        "01_调研": ["01_调研.md"],
+        "02_方案": ["02_方案.md"],
+        "03_设计": ["03_设计.md"],
+        "04_实施": ["04_Spec.md", "04_实施说明.md"],
+        "05_审修": ["05_实施审计报告.md", "03_方案审计报告.md"],
+        "05_审计": ["05_实施审计报告.md", "03_方案审计报告.md"],
+        "07_验收": ["07_验收报告.md"],
+    }
+    file_names = candidates_map.get(stage, [])
+    target: Path | None = None
+    for name in file_names:
+        cand = capsule / name
+        if cand.is_file():
+            target = cand
+            break
+    if target is None and stage == "04_实施":
+        specs = sorted(capsule.glob("04_Spec_*.md"))
+        if specs:
+            target = specs[0]
+
+    if target is not None and target.is_file():
+        try:
+            text = target.read_text(encoding="utf-8")
+            m = re.match(r"\A---\n(.*?)\n---\n", text, re.DOTALL)
+            if m:
+                block = m.group(1)
+                line = f"effort: {spent}h"
+                if re.search(r"^effort:.*$", block, re.MULTILINE):
+                    block = re.sub(r"^effort:.*$", line, block, count=1, flags=re.MULTILINE)
+                else:
+                    block = block.rstrip() + "\n" + line
+                target.write_text(f"---\n{block}\n---\n{text[m.end():]}", encoding="utf-8")
+        except OSError:
+            pass
 
 def log_time(capsule_dir: str | Path, spent: float, stage: str | None = None, summary: str | None = None,
              operator: str | None = None, day: str | None = None, dry_run: bool = False,
@@ -1099,7 +1136,8 @@ def log_time(capsule_dir: str | Path, spent: float, stage: str | None = None, su
     if not dry_run:
         _check_invariants(data)
         _save_capsule_yaml(capsule, data, text)
-
+        if stage:
+            _sync_stage_deliverable_effort(capsule, stage, spent)
     return {
         "capsule": str(capsule),
         "status": "added",
@@ -1120,6 +1158,29 @@ def sync_for(path: Path) -> dict | None:
             except (ToolError, OSError):
                 return None
     return None
+
+
+def end_open_task_for(capsule: str | Path | None = None, path: str | Path | None = None,
+                      trigger: str = "dispatch") -> dict | None:
+    """供调度器调用：结算目标胶囊当前 open 任务段（工时伴随角色签署入账）。
+
+    与 sync_for 同构的静默契约：capsule 显式优先，其次 path 向上就近定位；
+    无胶囊、无 open 段、胶囊终态或数据异常一律返回 None——工时缺失不得反向
+    阻断角色调用的成功判定。
+    """
+    cdir: Path | None = None
+    if capsule is not None:
+        cand = Path(capsule).expanduser().resolve()
+        cdir = cand if (cand / "capsule.yaml").is_file() else None
+    elif path is not None:
+        p = Path(path).resolve()
+        cdir = next((d for d in [p.parent, *p.parents] if (d / "capsule.yaml").is_file()), None)
+    if cdir is None:
+        return None
+    try:
+        return end_task(cdir, trigger=trigger)
+    except (ToolError, OSError):
+        return None
 
 
 def main() -> int:
@@ -1156,7 +1217,6 @@ def main() -> int:
     parser.add_argument("--spent", type=float, help="覆盖后的工时数")
 
     parser.add_argument("--dry-run", action="store_true", help="只输出将要做的变更，不写入")
-    parser.add_argument("--json", action="store_true", help="以 JSON 输出")
     args = parser.parse_args()
 
     try:
@@ -1196,45 +1256,42 @@ def main() -> int:
         print(str(err), file=sys.stderr)
         return 1
 
-    if args.json:
-        print(json.dumps(res, ensure_ascii=False, indent=2))
-    else:
-        prefix = "[dry-run] " if args.dry_run else ""
-        status = res.get("status")
-        if status == "started":
-            print(f"{prefix}已开启任务段: {res['segment']['seg_id']} ({res['segment']['name']})")
-        elif status == "ended":
-            seg = res["segment"]
-            ent = res.get("entry")
-            if ent:
-                print(f"{prefix}任务段收尾并入账: {seg['seg_id']} [{seg['state']}] {ent['spent']}h | ref: {ent.get('ref')}")
-            else:
-                print(f"{prefix}任务段收尾: {seg['seg_id']} [{seg['state']}] ({seg.get('note') or '待审批'})")
-        elif status == "approved":
-            print(f"{prefix}任务段批准入账: {res['segment']['seg_id']} -> {res['entry']['spent']}h")
-        elif status == "fixed":
-            seg = res["segment"]
-            ent = res.get("entry")
-            if ent:
-                print(f"{prefix}任务段时间已修正并入账: {seg['seg_id']} [{seg['state']}] {ent['spent']}h")
-            else:
-                print(f"{prefix}任务段时间已修正: {seg['seg_id']} [{seg['state']}] ({seg.get('note') or '待审批'})")
-        elif status == "split":
-            parts = ", ".join(f"{s['seg_id']}[{s['state']}]" for s in res["segments"])
-            print(f"{prefix}任务段已拆分: {res['segment']['seg_id']} -> {parts}")
-        elif status == "overridden":
-            print(f"{prefix}已覆盖工时: {res['entry']['ref']} -> {res['entry']['spent']}h")
-        elif status == "touched":
-            print(f"{prefix}已刷新任务段活跃时间: {res.get('segment', {}).get('seg_id')}")
-        elif status in ("added", "existing"):
-            ent = res["entry"]
-            print(f"{prefix}已登记工时: {ent['date']} [{ent['stage']}] {ent['spent']}h - {ent['summary']} ({ent['operator']}) | 累计: {res['total']}h")
+    prefix = "[dry-run] " if args.dry_run else ""
+    status = res.get("status")
+    if status == "started":
+        print(f"{prefix}已开启任务段: {res['segment']['seg_id']} ({res['segment']['name']})")
+    elif status == "ended":
+        seg = res["segment"]
+        ent = res.get("entry")
+        if ent:
+            print(f"{prefix}任务段收尾并入账: {seg['seg_id']} [{seg['state']}] {ent['spent']}h | ref: {ent.get('ref')}")
         else:
-            changes = res.get("changes", {})
-            if changes:
-                print(f"{prefix}lifecycle {res['from']} → {res['to']} " + " ".join(f"{k}={v}" for k, v in changes.items() if k != "lifecycle"))
-            else:
-                print(f"lifecycle={res['from']} 无需变更")
+            print(f"{prefix}任务段收尾: {seg['seg_id']} [{seg['state']}] ({seg.get('note') or '待审批'})")
+    elif status == "approved":
+        print(f"{prefix}任务段批准入账: {res['segment']['seg_id']} -> {res['entry']['spent']}h")
+    elif status == "fixed":
+        seg = res["segment"]
+        ent = res.get("entry")
+        if ent:
+            print(f"{prefix}任务段时间已修正并入账: {seg['seg_id']} [{seg['state']}] {ent['spent']}h")
+        else:
+            print(f"{prefix}任务段时间已修正: {seg['seg_id']} [{seg['state']}] ({seg.get('note') or '待审批'})")
+    elif status == "split":
+        parts = ", ".join(f"{s['seg_id']}[{s['state']}]" for s in res["segments"])
+        print(f"{prefix}任务段已拆分: {res['segment']['seg_id']} -> {parts}")
+    elif status == "overridden":
+        print(f"{prefix}已覆盖工时: {res['entry']['ref']} -> {res['entry']['spent']}h")
+    elif status == "touched":
+        print(f"{prefix}已刷新任务段活跃时间: {res.get('segment', {}).get('seg_id')}")
+    elif status in ("added", "existing"):
+        ent = res["entry"]
+        print(f"{prefix}已登记工时: {ent['date']} [{ent['stage']}] {ent['spent']}h - {ent['summary']} ({ent['operator']}) | 累计: {res['total']}h")
+    else:
+        changes = res.get("changes", {})
+        if changes:
+            print(f"{prefix}lifecycle {res['from']} → {res['to']} " + " ".join(f"{k}={v}" for k, v in changes.items() if k != "lifecycle"))
+        else:
+            print(f"lifecycle={res['from']} 无需变更")
     return 0
 
 

@@ -5,6 +5,10 @@ All notable changes to the `tool-crafter` skill will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2] - 2026-10-22
+### Changed
+- Tool 契约改为「按读者定输出」：有程序读者才加 `--json`；模板默认不再带 `--json`。
+
 ## [2.1.1] - 2026-10-16
 ### Changed
 - 压缩 description 至 ≤250 字符，只保留能力一句与触发词，降低常驻元数据开销。

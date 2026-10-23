@@ -16,6 +16,14 @@ GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
 
+class GitMissingTests(unittest.TestCase):
+    def test_missing_git_is_actionable(self):
+        with mock.patch.object(fb.subprocess, "run", side_effect=FileNotFoundError("git")):
+            with self.assertRaises(fb.ToolError) as ctx:
+                fb._git(Path("."), "status")
+        self.assertIn("👉", str(ctx.exception))
+
+
 class FinishBranchTests(unittest.TestCase):
     def setUp(self):
         self._env = mock.patch.dict(os.environ, GIT_ENV)

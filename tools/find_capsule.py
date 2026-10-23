@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import platform
 import re
 import shutil
@@ -234,7 +233,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", type=Path, default=paths.WORKSPACE_ROOT, help="工作区根，默认自动推导")
     parser.add_argument("--any", action="store_true", help="不限于胶囊目录，返回全部命中目录")
     parser.add_argument("--timeout", type=int, default=60, help="单次检索超时秒数")
-    parser.add_argument("--json", action="store_true", help="输出 JSON")
     parser.add_argument("--doctor", action="store_true", help="只报告可用检索后端与安装建议")
     parser.add_argument("--latest-artifact", choices=tuple(ARTIFACT_PATTERNS),
                         help="定位最新的方案/Spec/审计报告候选（审计与修正的受审对象定位）")
@@ -247,7 +245,11 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.doctor:
-        print(json.dumps(doctor(), ensure_ascii=False, indent=2))
+        report = doctor()
+        found = [f"{k}={v}" for k, v in report["available"].items() if v]
+        print(f"{report['platform']} 可用后端: {', '.join(found) or '（无）'}")
+        for name, hint in report["install_hints"].items():
+            print(f"👉 缺 {name}: {hint}")
         return
 
     if args.latest_artifact:
@@ -257,9 +259,6 @@ def main() -> None:
         except CapsuleFindError as error:
             print(f"❌ {error}\n👉 用法：find_capsule.py --latest-artifact audit [主题词]", file=sys.stderr)
             raise SystemExit(2)
-        if args.json:
-            print(json.dumps(report, ensure_ascii=False, indent=2))
-            return
         if not report["results"]:
             print(f"❌ 未找到 {args.latest_artifact} 类交付物（范围 {report['scopes'][0]}）", file=sys.stderr)
             print("👉 换主题词收敛范围，或确认该胶囊内确已产出该阶段文档", file=sys.stderr)
@@ -280,9 +279,6 @@ def main() -> None:
         print(f"❌ {error}\n👉 换一个主题词，或加 --any 放宽到全部目录", file=sys.stderr)
         raise SystemExit(2)
 
-    if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2))
-        return
     if report["degraded"]:
         print(f"⚠️  {report['degraded']}", file=sys.stderr)
     if not report["results"]:

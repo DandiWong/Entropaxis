@@ -1,6 +1,7 @@
 """find_capsule 的检索收敛、结果过滤与降级留痕契约。"""
 import sys
 import tempfile
+from unittest import mock
 import unittest
 from pathlib import Path
 
@@ -182,6 +183,84 @@ class LatestArtifactTests(unittest.TestCase):
             report = FC.find_artifacts("audit", Path(empty))
             self.assertEqual(report["results"], [])
             self.assertFalse(report["truncated"])
+
+
+class MachineBackendPlatformTests(unittest.TestCase):
+    """机器范围后端按 platform.system() 分派：Darwin→mdfind、Windows→es、Linux→plocate，
+    对应 sys.platform 的 darwin / win32 / linux；本类逐分支模拟三平台并验证降级留痕。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _patch_which(self, mapping):
+        original = FC.shutil.which
+        FC.shutil.which = lambda name: mapping.get(name)
+        self.addCleanup(setattr, FC.shutil, "which", original)
+
+    def _patch_run(self, hits):
+        calls = []
+        original = FC._run
+
+        def fake_run(argv, timeout):
+            calls.append(list(argv))
+            return list(hits)
+
+        FC._run = fake_run
+        self.addCleanup(setattr, FC, "_run", original)
+        return calls
+
+    def test_darwin_uses_mdfind_and_reports_hidden_dir_caveat(self):
+        with mock.patch.object(FC.platform, "system", return_value="Darwin"):
+            self._patch_which({"mdfind": "/usr/bin/mdfind"})
+            calls = self._patch_run([])
+            _, backend, degraded = FC.search_machine("主题", Path(self.tmp.name), timeout=5)
+        self.assertEqual(backend, "mdfind")
+        self.assertEqual(calls[0][0], "mdfind")
+        self.assertIn("Spotlight 不索引隐藏目录", degraded)
+
+    def test_windows_uses_es_index_when_present(self):
+        with mock.patch.object(FC.platform, "system", return_value="Windows"):
+            self._patch_which({"es": r"C:\Tools\es.exe"})
+            calls = self._patch_run([])
+            _, backend, degraded = FC.search_machine("主题", Path(self.tmp.name), timeout=5)
+        self.assertEqual(backend, "es")
+        self.assertEqual(calls[0], ["es", "-p", "/ad", "主题"])
+        self.assertIsNone(degraded)
+
+    def test_linux_uses_plocate_and_keeps_dirs_only(self):
+        capsule = Path(self.tmp.name) / "20260101_胶囊"
+        capsule.mkdir()
+        noise = Path(self.tmp.name) / "note.txt"
+        noise.write_text("x", encoding="utf-8")
+        with mock.patch.object(FC.platform, "system", return_value="Linux"):
+            self._patch_which({"plocate": "/usr/bin/plocate"})
+            self._patch_run([str(capsule), str(noise)])
+            hits, backend, degraded = FC.search_machine("胶囊", Path(self.tmp.name), timeout=5)
+        self.assertEqual(hits, [str(capsule)])  # locate 结果须过滤掉非目录命中
+        self.assertEqual(backend, "plocate")
+        self.assertIn("updatedb", degraded)
+
+    def test_platform_without_index_degrades_to_realtime_walk(self):
+        with mock.patch.object(FC.platform, "system", return_value="Windows"):
+            self._patch_which({})  # 无 es、无 fd
+            original_fd = FC._fd_binary
+            FC._fd_binary = lambda: None
+            self.addCleanup(setattr, FC, "_fd_binary", original_fd)
+            self._patch_run([])
+            _, backend, degraded = FC.search_machine("主题", Path(self.tmp.name), timeout=5)
+        self.assertEqual(backend, "find")
+        self.assertIn("本平台无可用系统索引", degraded)
+        self.assertIn("已降级为 find", degraded)
+
+    def test_doctor_install_hints_follow_platform(self):
+        for system, fragment in (("Darwin", "brew"), ("Linux", "apt"), ("Windows", "winget")):
+            with self.subTest(system=system):
+                with mock.patch.object(FC.platform, "system", return_value=system), \
+                        mock.patch.object(FC.shutil, "which", lambda name: None):
+                    report = FC.doctor()
+                self.assertEqual(report["platform"], system)
+                self.assertIn(fragment, report["install_hints"]["fd"])
 
 
 if __name__ == "__main__":

@@ -169,7 +169,9 @@ def validate(data, schema: dict, path: str = "$", *, allow_schema_directives: bo
                 errs += validate(data[key], sub, f"{path}.{key}", allow_schema_directives=allow_schema_directives)
             if (not matched and schema.get("additionalProperties") is False
                     and not (allow_schema_directives and key in _SCHEMA_DIRECTIVE_KEYS)):
-                errs.append(f"{path}: 出现未声明字段 {key!r}（拼写错误或需先在 schema 中登记）")
+                hint = schema.get("unknown_field_hint")
+                errs.append(f"{path}: 出现未声明字段 {key!r}（拼写错误或需先在 schema 中登记）"
+                            + (f"\n👉 {hint}" if hint else ""))
         for key, sub in props.items():
             if key in data:
                 errs += validate(data[key], sub, f"{path}.{key}", allow_schema_directives=allow_schema_directives)

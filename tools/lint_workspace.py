@@ -1468,6 +1468,10 @@ _UNIX_ONLY_ARGV = re.compile(
     r"""\[\s*["'](?:find|mdfind|osascript|pbcopy|xdg-open|plocate|locate)["']"""
 )
 _PLATFORM_FALLBACK = re.compile(r"win32|Windows|不支持")
+_EXTERNAL_ARGV = re.compile(r"""(?:subprocess\.\w+|\b_run|\b_git)\(\s*\[\s*["'](?!python3?["'])[\w.\-]+["']""")
+_MISSING_GUARD = re.compile(r"shutil\.which|FileNotFoundError|OSError|except Exception")
+_PLATFORM_BRANCH = re.compile(r"sys\.platform|platform\.system\(\)|\bplatform\s*[!=]=|os\.name\s*[!=]=")
+_PLATFORMS = ("darwin", "win32", "linux")
 # 第 37 项：测试名或断言里出现失败形态，才算异常路径有执行证据。
 _ERROR_TEST = re.compile(
     r"def test_\w*(?:fail|reject|error|missing|silent|invalid|refus|unreadable|unknown|mismatch|block)",
@@ -1570,10 +1574,19 @@ def check_rule_retirement_candidates(root: Path) -> list[str]:
 
 
 def check_platform_fallback(root: Path) -> list[str]:
-    """调用 Unix 专用命令的工具，同一文件必须给出 Windows 分支或明确写不支持。"""
+    """三平台适配（《系统演进准则》第 1 节）：Unix 专用命令须有 Windows 分支或写明不支持；
+    任何外部命令须处理「命令不存在」；按平台分支的工具，提到它的测试须覆盖 darwin/win32/linux。
+    按文件判定：同文件有一处兜底即放行，逐调用点漏看；测试只核对三个平台名都出现，不证明每个分支都被执行。"""
     tools = root / paths.SYSTEM_DIRNAME / "tools"
     if not tools.is_dir():
         return []
+    tests_dir = root / paths.SYSTEM_DIRNAME / "tests"
+    test_blobs = []
+    for path in tests_dir.glob("*.py") if tests_dir.is_dir() else []:
+        try:
+            test_blobs.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
     issues = []
     for path in sorted(tools.glob("*.py")):
         try:
@@ -1585,6 +1598,20 @@ def check_platform_fallback(root: Path) -> list[str]:
                 f"[跨平台回退缺失] {path.relative_to(root)} 调用了 Unix 专用命令，"
                 "同一文件须有 win32/Windows 分支，或写明该平台不支持。"
             )
+        if "subprocess" in text and _EXTERNAL_ARGV.search(text) and not _MISSING_GUARD.search(text):
+            issues.append(
+                f"[命令缺失未处理] {path.relative_to(root)} 调用了外部命令，但没有处理命令不存在；"
+                "用 shutil.which 预检或捕获 FileNotFoundError，给出「❌ + 👉 安装命令」或降级留痕。"
+            )
+        # 没有 tests/ 的夹具工作区跳过，同第 37 项
+        if test_blobs and _PLATFORM_BRANCH.search(text):
+            blob = "\n".join(t for t in test_blobs if path.stem in t)
+            missing = [name for name in _PLATFORMS if name not in blob]
+            if missing:
+                issues.append(
+                    f"[三平台测试缺失] {path.relative_to(root)} 按平台分支，测试未覆盖 {'/'.join(missing)}；"
+                    "补模拟该平台的测试（patch sys.platform 或传 platform 参数）。"
+                )
     return issues
 
 
@@ -1631,9 +1658,48 @@ def check_tool_error_tests(root: Path) -> list[str]:
     return issues
 
 
+_JSON_FLAG = re.compile(r"""add_argument\(\s*["']--json["']|["']--json["']\s+in\s+sys\.argv""")
+
+
+def check_json_readers(root: Path) -> list[str]:
+    """提供 --json 的工具须有程序读者：工具、Skill 脚本或 CI 带 --json 调用它。
+
+    《工具设计》3.3 按读者定输出。只列出删除候选，不阻断：读者可能在扫描范围外。
+    """
+    system = root / paths.SYSTEM_DIRNAME
+    tools = system / "tools"
+    if not tools.is_dir():
+        return []
+    readers: list[tuple[Path, str]] = []
+    globs = [(tools, "*.py"), (system / "skills", "*/scripts/*"), (system / ".github", "**/*.yml")]
+    globs += [(root / d, "*/scripts/*") for d in (".claude/skills", ".agents/skills")]
+    for base, pattern in globs:
+        for path in base.glob(pattern) if base.is_dir() else []:
+            try:
+                readers.append((path.resolve(), path.read_text(encoding="utf-8", errors="replace")))
+            except OSError:
+                continue
+    issues = []
+    for tool in sorted(tools.glob("*.py")):
+        try:
+            if not _JSON_FLAG.search(tool.read_text(encoding="utf-8")):
+                continue
+        except OSError:
+            continue
+        # ponytail: 同行或 200 字符窗口内同时出现工具名与 --json 即算读者；跨函数拼 argv 会漏判，漏判只多一条建议
+        call = re.compile(re.escape(tool.name) + r"""[\s\S]{0,200}?["']?--json""")
+        if any(path != tool.resolve() and call.search(text) for path, text in readers):
+            continue
+        issues.append(
+            f"[--json 无程序读者] tools/{tool.name} 提供 --json，但工具、Skill 脚本与 CI 中没有带 --json 的调用；"
+            "按《工具设计》3.3 删除该开关，或在调用方补上真实读者。"
+        )
+    return issues
+
+
 def main() -> int:
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
-    # --json 供 report_selfcheck.py 等下游消费，避免消费方去 parse 人读散文（《工具设计》3.3 结构化输出）
+    # --json 的程序读者：report_selfcheck.py、check_distribution.py（《工具设计》3.3 按读者定输出）
     as_json = "--json" in sys.argv
     fixed_claude_md = []
     if "--fix-claude-md" in sys.argv:
@@ -1681,8 +1747,9 @@ def main() -> int:
         ("33. 分层放宽与材料执行检查", check_layer_override, True),
         ("34. 工具依赖克制检查", check_stdlib_only, True),
         ("35. 规则退役候选检查", check_rule_retirement_candidates, False),
-        ("36. 跨平台回退检查", check_platform_fallback, True),
+        ("36. 跨平台适配检查", check_platform_fallback, True),
         ("37. 工具异常路径测试检查", check_tool_error_tests, True),
+        ("38. --json 程序读者检查", check_json_readers, False),
     ]
 
     all_issues = []

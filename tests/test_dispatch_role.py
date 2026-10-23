@@ -28,6 +28,7 @@ if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
 from tools import dispatch_role as dr  # noqa: E402
+from tools import init_capsule, update_capsule  # noqa: E402
 from tools import role_preferences  # noqa: E402
 
 OK_BODY_NAME = "ok_body.md"  # 替身 CLI 把这份合规产出拷到交付物位置
@@ -127,7 +128,7 @@ class DispatchRoleTestBase(TestCase):
         self.ok_body = self.ws / OK_BODY_NAME
         self.ok_body.write_text(research_doc(), encoding="utf-8")
         self.ok = _mkexe(self.scripts, "ok.sh", f'#!/bin/sh\nout=${{1#*将本次产出写入：}}\nout=${{out%%（*}}\ncat "{self.ok_body}" > "$out"\n')
-        self.fail = _mkexe(self.scripts, "fail.sh", FAIL_SH)
+        self.fail_cmd = _mkexe(self.scripts, "fail.sh", FAIL_SH)
         self.slow = _mkexe(self.scripts, "slow.sh", SLOW_SH)
         self.config = self.ws / "roles.yaml"
         self._old_active = dr.ACTIVE_CONFIG
@@ -137,10 +138,17 @@ class DispatchRoleTestBase(TestCase):
         self._old_trace = dr.TRACE_LOG
         dr.TRACE_LOG = self.ws / "trace.jsonl"
 
+        self._old_run_dir = getattr(dr, "RUN_DIR", None)
+        self.run_dir = self.ws / "run"
+        dr.RUN_DIR = self.run_dir
     def tearDown(self) -> None:
         dr.ACTIVE_CONFIG = self._old_active
         dr.TRACE_LOG = self._old_trace
         self._tmp.cleanup()
+        if self._old_run_dir is not None:
+            dr.RUN_DIR = self._old_run_dir
+        elif hasattr(dr, "RUN_DIR"):
+            delattr(dr, "RUN_DIR")
 
     # ---- 脚手架 ----------------------------------------------------------
 
@@ -149,7 +157,7 @@ class DispatchRoleTestBase(TestCase):
         for role in dr.ALL_ROLES:
             primary = f"{role.lower()}-primary"
             if primary in profiles:
-                block["roles"][role] = {"duty": role, "preferences": [primary], "profile": primary}
+                block["roles"][role] = {"duty": role, "preferences": [primary]}
         if mode is not None:
             block["default_dispatch_mode"] = mode
         if grants is not None:
@@ -182,17 +190,18 @@ class DecisionMatrixTests(DispatchRoleTestBase):
                 self.assertEqual(v["outcome"], "blocked", f"{mode}×hard×{code}")
                 self.assertEqual(v["exit"], dr.EXIT_BLOCKED)
 
-    def test_soft_strict_unconfigured_no_review_flag(self) -> None:
-        for code in ("UNCONFIGURED", "SUBAGENT_AUTO"):
-            v = dr.adjudicate("strict", "soft", code)
-            self.assertEqual(v["outcome"], "local_carry")
-            self.assertFalse(v["needs_external_review"])
+    def test_soft_strict_subagent_auto_is_configured_local_carry(self) -> None:
+        v = dr.adjudicate("strict", "soft", "SUBAGENT_AUTO")
+        self.assertEqual(v["outcome"], "local_carry")
+        self.assertEqual(v["exit"], dr.EXIT_LOCAL)
+        self.assertFalse(v["needs_external_review"])
 
-    def test_soft_strict_real_failures_flagged_for_review(self) -> None:
-        for code in ("NOT_EXECUTABLE", "TIMEOUT", "NO_VALID_OUTPUT", "CHAIN_EXHAUSTED"):
+    def test_soft_strict_other_failures_abort(self) -> None:
+        for code in ("UNCONFIGURED", "NOT_EXECUTABLE", "TIMEOUT", "NO_VALID_OUTPUT", "CHAIN_EXHAUSTED", "VERIFY_FAILED"):
             v = dr.adjudicate("strict", "soft", code)
-            self.assertEqual(v["outcome"], "local_carry")
-            self.assertTrue(v["needs_external_review"], code)
+            self.assertEqual(v["outcome"], "aborted", code)
+            self.assertEqual(v["exit"], dr.EXIT_BLOCKED)
+            self.assertFalse(v["needs_external_review"])
 
     def test_soft_graceful_local_plain(self) -> None:
         for code in dr.FAILURE_CODES:
@@ -394,15 +403,15 @@ class RunFlowTests(DispatchRoleTestBase):
         self.assertEqual(man["revision"], 2)
 
     def test_hard_chain_exhausted_blocks(self) -> None:
-        rc = self._run("Reviewer", "p-fail", {"p-fail": {"argv": [self.fail, "{PROMPT}"], "timeout_s": 30}})
+        rc = self._run("Reviewer", "p-fail", {"p-fail": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 30}})
         self.assertEqual(rc, dr.EXIT_BLOCKED)
         man = yaml.safe_load((self.ws / "workers.yaml").read_text(encoding="utf-8"))["roles_manifest"]
         self.assertEqual(man["assignments"][0]["status"], "blocked")
         self.assertEqual(man["assignments"][0]["attempts"][-1]["exit_code"], 1)
 
-    def test_soft_chain_exhausted_local_with_review_flag(self) -> None:
-        rc = self._run("Builder", "p-fail", {"p-fail": {"argv": [self.fail, "{PROMPT}"], "timeout_s": 30}})
-        self.assertEqual(rc, dr.EXIT_LOCAL)
+    def test_soft_chain_exhausted_aborts(self) -> None:
+        rc = self._run("Builder", "p-fail", {"p-fail": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 30}})
+        self.assertEqual(rc, dr.EXIT_BLOCKED)
         man = yaml.safe_load((self.ws / "workers.yaml").read_text(encoding="utf-8"))["roles_manifest"]
         self.assertEqual(man["assignments"][0]["status"], "failed")
 
@@ -414,11 +423,11 @@ class RunFlowTests(DispatchRoleTestBase):
 
     def test_not_executable_missing_binary(self) -> None:
         rc = self._run("Builder", "p-miss", {"p-miss": {"argv": ["no-such-bin-zzz", "{PROMPT}"], "timeout_s": 5}})
-        self.assertEqual(rc, dr.EXIT_LOCAL)
+        self.assertEqual(rc, dr.EXIT_BLOCKED)
 
     def test_not_executable_missing_prompt_placeholder(self) -> None:
         rc = self._run("Builder", "p-noprompt", {"p-noprompt": {"argv": [self.ok], "timeout_s": 5}})
-        self.assertEqual(rc, dr.EXIT_LOCAL)
+        self.assertEqual(rc, dr.EXIT_BLOCKED)
         man = yaml.safe_load((self.ws / "workers.yaml").read_text(encoding="utf-8"))["roles_manifest"]
         self.assertEqual(man["assignments"][0]["attempts"][-1]["failure_code"], "NOT_EXECUTABLE")
 
@@ -435,13 +444,6 @@ class RunFlowTests(DispatchRoleTestBase):
         self.assertFalse(launched.exists())
         self.assertEqual((self.ws / "workers.yaml").read_bytes(), before)
 
-    def test_subagent_auto_via_unselected_role_is_available_only_to_direct_run(self) -> None:
-        self.config.write_text(
-            "default_dispatch_mode: strict\nroles:\n  Builder:\n    duty: build\n    preferences: []\n    profile: null\ncommand_profiles: {}\n",
-            encoding="utf-8")
-        rc = dr.run_direct(self.ws, "Builder", "x", Path("out.md"), owner="t")
-        self.assertEqual(rc, dr.EXIT_LOCAL)
-
     def test_no_valid_output_when_zero_exit_but_no_deliverable(self) -> None:
         ok_noop = _mkexe(self.scripts, "noop.sh", "#!/bin/sh\nexit 0\n")
         rc = self._run("Reviewer", "p-noop", {"p-noop": {"argv": [ok_noop, "{PROMPT}"], "timeout_s": 10}})
@@ -454,7 +456,7 @@ class RunFlowTests(DispatchRoleTestBase):
         self.assertEqual(rc, dr.EXIT_USAGE)
 
     def test_fallback_chain_rescues(self) -> None:
-        self.write_config({"p-pri": {"argv": [self.fail, "{PROMPT}"], "timeout_s": 10, "fallback_profile": "p-back"},
+        self.write_config({"p-pri": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 10, "fallback_profile": "p-back"},
                            "p-back": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 10}})
         self.write_workers(role="Reviewer", profile="p-pri")
         self.ok_body.write_text(audit_doc(dr._sha256_file(self.ws / "01.md")), encoding="utf-8")
@@ -482,7 +484,8 @@ class RunFlowTests(DispatchRoleTestBase):
     def test_invalid_config_and_timeout_never_launch_or_mutate_archive(self) -> None:
         launched = self.ws / "launched"
         launcher = _mkexe(self.scripts, "launcher.sh", f'#!/bin/sh\ntouch "{launched}"\n')
-        self.write_config({"p-hard-timeout": {"argv": [launcher, "{PROMPT}"], "timeout_s": 1801}})
+        over_cap = dr.role_preferences.hard_role_max_timeout("Reviewer") + 1
+        self.write_config({"p-hard-timeout": {"argv": [launcher, "{PROMPT}"], "timeout_s": over_cap}})
         self.write_workers(role="Reviewer", profile="p-hard-timeout")
         before = (self.ws / "workers.yaml").read_bytes()
 
@@ -493,7 +496,7 @@ class RunFlowTests(DispatchRoleTestBase):
         self.assertEqual((self.ws / "workers.yaml").read_bytes(), before)
 
         failure, attempts, succeeded = dr.execute_chain(
-            [{"name": "p-hard-timeout", "argv": [launcher, "{PROMPT}"], "timeout_s": 1801}],
+            [{"name": "p-hard-timeout", "argv": [launcher, "{PROMPT}"], "timeout_s": over_cap}],
             "x", self.ws, self.ws / "unused.md", "Reviewer",
         )
         self.assertEqual(failure, "NOT_EXECUTABLE")
@@ -508,9 +511,19 @@ class RunFlowTests(DispatchRoleTestBase):
         self.assertEqual(rc, dr.EXIT_USAGE)
         self.assertNotIn("Traceback", stderr.getvalue())
 
+    def test_usage_error_goes_to_stderr_as_cross_and_hint(self) -> None:
+        for argv in (["run", "--role", "Reviewer", "--prompt", "x"], ["run", "--prompt", "x"]):
+            err, out = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                rc = dr.main(argv)
+            self.assertEqual(rc, dr.EXIT_USAGE)
+            self.assertIn("❌", err.getvalue())
+            self.assertIn("👉", err.getvalue())
+            self.assertEqual(out.getvalue(), "")
+
     def test_fallback_cycle_guards(self) -> None:
-        profs = {"p-a": {"argv": [self.fail, "{PROMPT}"], "timeout_s": 5, "fallback_profile": "p-b"},
-                 "p-b": {"argv": [self.fail, "{PROMPT}"], "timeout_s": 5, "fallback_profile": "p-a"}}
+        profs = {"p-a": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 5, "fallback_profile": "p-b"},
+                 "p-b": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 5, "fallback_profile": "p-a"}}
         self.write_config(profs)
         self.write_workers(role="Reviewer", profile="p-a")
         rc = dr.run_assignment(self.ws, "r1", prompt="x", ack=None, owner="t")
@@ -563,10 +576,18 @@ class DeliverableValidityTests(DispatchRoleTestBase):
         self.assertFalse(dr.deliverable_valid(self.ws / "missing.md"))
 
 
+def _skip_if_legacy_instance(test: TestCase) -> None:
+    """data/templates/roles.yaml 仍含已删除的 profile 字段时跳过（待 --migrate-preferences 迁移后恢复断言）。"""
+    if dr.ROLES_CONFIG.exists() and any("profile" in (r or {}) for r in
+                                        (yaml.safe_load(dr.ROLES_CONFIG.read_text(encoding="utf-8")) or {}).get("roles", {}).values()):
+        test.skipTest("实例 roles.yaml 含旧 profile 字段，待运行 setup_agents.py --migrate-preferences")
+
+
 class RealWorkspaceConfigTests(TestCase):
     """对真实实例的集成断言（§3.5 分发验收的测试面）。"""
 
     def test_real_config_has_strict_default(self) -> None:
+        _skip_if_legacy_instance(self)
         cfg = dr.load_dispatch_config()  # roles.yaml
         if not cfg["present"]:
             self.skipTest("本机尚未初始化 roles.yaml（空态即初始态）")
@@ -581,6 +602,7 @@ class RealWorkspaceConfigTests(TestCase):
         from tools import validate_schema as vs
         if not dr.ROLES_CONFIG.exists():
             self.skipTest("本机尚未初始化 roles.yaml")
+        _skip_if_legacy_instance(self)
         data = yaml.safe_load(dr.ROLES_CONFIG.read_text(encoding="utf-8"))
         self.assertEqual(vs.validate(data, vs.load_schema("roles_config")), [])
 
@@ -603,7 +625,8 @@ class RealWorkspaceConfigTests(TestCase):
                 self.assertEqual(values, {roles[role]["timeout_s"] for role in users},
                                  f"{name} 跨角色共享但超时未按角色解析")
         for role in ("Reviewer", "Maintainer"):
-            self.assertLessEqual(roles[role]["timeout_s"], 1800, f"{role} 超过硬门禁上限")
+            cap = role_preferences.hard_role_max_timeout(role)
+            self.assertLessEqual(roles[role]["timeout_s"], cap, f"{role} 超过硬门禁上限 {cap}s")
 
 
 class DirectRunTests(DispatchRoleTestBase):
@@ -668,11 +691,24 @@ class DirectRunTests(DispatchRoleTestBase):
         self.assertEqual(rc, dr.EXIT_OK)
         self.assertFalse((self.ws / "capsule.yaml").exists(), "档案缺失时不得擅自造容器")
 
-    def test_unconfigured_soft_role_local_carry_keeps_session_local(self) -> None:
+    def test_empty_preferences_is_configured_local_carry(self) -> None:
+        self.config.write_text(
+            "default_dispatch_mode: strict\nroles:\n  Builder:\n    duty: build\n    preferences: []\ncommand_profiles: {}\n",
+            encoding="utf-8")
+        self.write_capsule()
+        before = self.config.read_bytes()
+        res = dr.run_direct_result(self.ws, "Builder", "x", Path("out.md"), owner="t")
+        self.assertEqual((res["outcome"], res["exit"], res["needs_external_review"]), ("local_carry", dr.EXIT_LOCAL, False))
+        self.assertEqual(res["failure_code"], "SUBAGENT_AUTO")
+        man = yaml.safe_load((self.ws / "capsule.yaml").read_text(encoding="utf-8"))["roles_manifest"]
+        self.assertEqual(man["assignments"][0]["attempts"][0]["profile"], "configured→local")
+        self.assertEqual(self.config.read_bytes(), before)
+
+    def test_unconfigured_soft_role_aborts_keeps_session_local_carrier(self) -> None:
         self.write_config({})
         self.write_capsule()
         rc = dr.run_direct(self.ws, "Researcher", "任务", Path("01_调研.md"), owner="test")
-        self.assertEqual(rc, dr.EXIT_LOCAL)
+        self.assertEqual(rc, dr.EXIT_BLOCKED)
         self.assertIn("carrier: session-local", self.out.read_text(encoding="utf-8"))
         man = yaml.safe_load((self.ws / "capsule.yaml").read_text(encoding="utf-8"))["roles_manifest"]
         self.assertEqual(man["assignments"][0]["status"], "failed")
@@ -776,6 +812,33 @@ class VerifyTamperTests(DispatchRoleTestBase):
         self.assertEqual(r["failure_code"], "VERIFY_FAILED")
         self.assertIn("product.py", r["detail"])
 
+    def test_concurrent_trace_append_is_not_tampering(self) -> None:
+        """并发调度只追加写 trace 日志，不得让本次校验被判 tampered。"""
+        (self.ws / "product.py").write_text("x = 1\n", encoding="utf-8")
+        trace_log = self.ws / "data" / "logs" / "dispatch-trace.jsonl"
+        trace_log.parent.mkdir(parents=True)
+        trace_log.write_text('{"ts": "t0"}\n', encoding="utf-8")
+        appender = _mkexe(self.scripts, "appender.sh", f'#!/bin/sh\necho \'{{"ts": "t1"}}\' >> "{trace_log}"\nexit 0\n')
+        self.write_config({"builder-verify": {"argv": [appender], "timeout_s": 30}})
+        with mock.patch.object(dr, "TRACE_LOG", trace_log), mock.patch.object(dr, "RUN_DIR", trace_log.parent / "run"):
+            r = dr.run_verify("builder-verify", dr.load_dispatch_config(), self.ws, "Builder")
+        self.assertTrue(r["passed"], f"调度器自身的 trace 追加不算篡改：{r.get('detail')}")
+        self.assertEqual(trace_log.read_text(encoding="utf-8").count("t1"), 1)
+
+    def test_rewriting_source_still_fails_beside_state_dirs(self) -> None:
+        """排除调度器状态不得放过同一 cwd 下的源码改写。"""
+        product = self.ws / "product.py"
+        product.write_text("x = 1\n", encoding="utf-8")
+        trace_log = self.ws / "data" / "logs" / "dispatch-trace.jsonl"
+        trace_log.parent.mkdir(parents=True)
+        trace_log.write_text("{}\n", encoding="utf-8")
+        cheat = _mkexe(self.scripts, "cheat2.sh", f'#!/bin/sh\necho "x = 2" > "{product}"\nexit 0\n')
+        self.write_config({"builder-verify": {"argv": [cheat], "timeout_s": 30}})
+        with mock.patch.object(dr, "TRACE_LOG", trace_log), mock.patch.object(dr, "RUN_DIR", trace_log.parent / "run"):
+            r = dr.run_verify("builder-verify", dr.load_dispatch_config(), self.ws, "Builder")
+        self.assertEqual(r["failure_code"], "VERIFY_FAILED")
+        self.assertIn("product.py", r["detail"])
+
     def test_new_cache_files_are_not_tampering(self) -> None:
         (self.ws / "product.py").write_text("x = 1\n", encoding="utf-8")
         honest = _mkexe(self.scripts, "honest.sh",
@@ -784,6 +847,71 @@ class VerifyTamperTests(DispatchRoleTestBase):
         self.write_config({"builder-verify": {"argv": [honest], "timeout_s": 30}})
         r = dr.run_verify("builder-verify", dr.load_dispatch_config(), self.ws, "Builder")
         self.assertTrue(r["passed"], f"新建产物不算改写：{r.get('detail')}")
+
+    # ---- C-1：调度档案不得整文件免检，只容忍调度器拥有的 roles_manifest 状态 ----
+
+    def _capsule(self) -> Path:
+        cap = self.ws / "capsule.yaml"
+        cap.write_text(yaml.safe_dump(
+            {"id": "T-9", "topic": "审计夹具", "dependencies": ["must-review.pdf"],
+             "roles_manifest": {"mode": "session", "assigned_at": "2026-10-23T00:00:00+08:00",
+                                "assigned_by": "test", "revision": 0, "assignments": []}},
+            allow_unicode=True, sort_keys=False), encoding="utf-8")
+        (self.ws / "must-review.pdf").write_bytes(b"fixture")
+        return cap
+
+    def test_verify_cannot_drop_capsule_business_fields(self):
+        """审计 S-2 反例：校验脚本删除 dependencies 后退出 0，不得判通过。"""
+        self._capsule()
+        verify = self.ws / "drop_deps.py"
+        verify.write_text(
+            "from pathlib import Path\n"
+            "import yaml\n"
+            "d = yaml.safe_load(Path('capsule.yaml').read_text(encoding='utf-8'))\n"
+            "d.pop('dependencies')\n"
+            "Path('capsule.yaml').write_text(yaml.safe_dump(d, allow_unicode=True, sort_keys=False), encoding='utf-8')\n",
+            encoding="utf-8")
+        self.write_config({"builder-verify": {"argv": [sys.executable, str(verify)], "timeout_s": 30}})
+        r = dr.run_verify("builder-verify", dr.load_dispatch_config(), self.ws, "Builder")
+        self.assertFalse(r["passed"], "档案业务字段在校验期间丢失仍判通过")
+        self.assertEqual(r["failure_code"], "VERIFY_FAILED")
+        self.assertIn("capsule.yaml", r["detail"])
+
+    def test_deleting_capsule_archive_during_verify_fails(self):
+        self._capsule()
+        verify = self.ws / "rm_cap.py"
+        verify.write_text("from pathlib import Path\nPath('capsule.yaml').unlink()\n", encoding="utf-8")
+        self.write_config({"builder-verify": {"argv": [sys.executable, str(verify)], "timeout_s": 30}})
+        r = dr.run_verify("builder-verify", dr.load_dispatch_config(), self.ws, "Builder")
+        self.assertFalse(r["passed"])
+        self.assertEqual(r["failure_code"], "VERIFY_FAILED")
+        self.assertIn("capsule.yaml（已删除）", r["detail"])
+
+    def test_concurrent_manifest_update_is_not_tampering(self):
+        """C-1 修复后正例：并发调度经 ManifestStore.update 只重写 roles_manifest 块。"""
+        self._capsule()
+        updater = self.ws / "bump_manifest.py"
+        updater.write_text(
+            "import sys\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "from tools.dispatch_role import ManifestStore\n"
+            "store = ManifestStore(Path('capsule.yaml'))\n"
+            "assert store.acquire('concurrent-dispatch')\n"
+            "def bump(man):\n"
+            "    man['revision'] = man.get('revision', 0) + 1\n"
+            "    man.setdefault('assignments', []).append(\n"
+            "        {'assignment_id': 'a-2', 'role': 'Builder', 'profile': 'p', 'status': 'logged'})\n"
+            "store.update(bump, 'concurrent-dispatch')\n"
+            "store.release()\n",
+            encoding="utf-8")
+        self.write_config({"builder-verify": {"argv": [sys.executable, str(updater), str(SYSTEM_ROOT)],
+                                              "timeout_s": 30}})
+        r = dr.run_verify("builder-verify", dr.load_dispatch_config(), self.ws, "Builder")
+        self.assertTrue(r["passed"], f"并发 roles_manifest 写回不算篡改：{r.get('detail')}")
+        man = yaml.safe_load((self.ws / "capsule.yaml").read_text(encoding="utf-8"))["roles_manifest"]
+        self.assertEqual(man["revision"], 1, "夹具必须真的改写了档案，否则正例不成立")
+        self.assertEqual(man["assignments"][0]["assignment_id"], "a-2")
 
 
 class StampBeforeCriteriaTests(DispatchRoleTestBase):
@@ -856,6 +984,36 @@ class ArgvBuildTests(DispatchRoleTestBase):
     def test_missing_placeholder_rejected(self) -> None:
         self.assertIsNone(dr.build_argv({"argv": ["cli", "-p"]}, "x"))
 
+    def test_build_argv_appends_usage_flags_for_agent_profile(self) -> None:
+        """profile 含 agent 键时，在 argv 末尾追加 USAGE_FLAGS[agent]。"""
+        for agent, flags in dr.role_preferences.USAGE_FLAGS.items():
+            profile = {"agent": agent, "model": "test-model"}
+            argv = dr.build_argv(profile, "hello")
+            self.assertIsNotNone(argv)
+            base = [t if t != "{PROMPT}" else "hello" for t in dr.role_preferences.profile_argv(profile)]
+            expected = base + flags
+            self.assertEqual(argv, expected)
+    def test_build_argv_custom_argv_unchanged(self) -> None:
+        """自定义 argv profile 不追加 USAGE_FLAGS。"""
+        custom_profile = {"argv": ["my-cli", "-p", "{PROMPT}", "--flag"]}
+        argv = dr.build_argv(custom_profile, "test prompt")
+        self.assertEqual(argv, ["my-cli", "-p", "test prompt", "--flag"])
+
+    def test_carrier_ref_unchanged(self) -> None:
+        """carrier_ref 使用 profile_argv_safe，不含追加的 usage flags。"""
+        config = {
+            "command_profiles": {
+                "claude-prof": {"agent": "claude", "model": "sonnet"},
+                "custom-prof": {"argv": ["my-cli", "-p", "{PROMPT}"]},
+            }
+        }
+        ref_agent = dr._profile_command_text("claude-prof", config)
+        self.assertEqual(ref_agent, "claude --model sonnet -p {PROMPT}")
+        self.assertNotIn("--output-format", ref_agent)
+        self.assertNotIn("json", ref_agent)
+
+        ref_custom = dr._profile_command_text("custom-prof", config)
+        self.assertEqual(ref_custom, "my-cli -p {PROMPT}")
 
 class DeliverableFormTests(DispatchRoleTestBase):
     """成功判据按交付物形态取——"文件存在"对目录型和代码型角色是假门禁。"""
@@ -973,11 +1131,7 @@ class TargetChainTests(DispatchRoleTestBase):
     def test_changed_target_marks_stale(self) -> None:
         self._run()
         self.target.write_text("# 调研（修订）\n", encoding="utf-8")
-        import io, contextlib
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            dr.cmd_resolve(self.ws)
-        row = json.loads(buf.getvalue())["assignments"][0]
+        row = dr.cmd_resolve(self.ws)["assignments"][0]
         self.assertTrue(row["stale"], "依据改了，上一轮 succeeded 必须显示为 stale")
 
     def test_attempts_carry_the_input_fingerprint(self) -> None:
@@ -1025,6 +1179,128 @@ class VerifyProfileTests(DispatchRoleTestBase):
         self.assertTrue(a["deliverable_ref"].startswith(("git:", "path:")))
         self.assertNotIn("deliverable", a, "代码型角色不应被迫指一个交付物文件")
         self.assertEqual(dr.validate_manifest(man), [])
+    def test_code_direct_external_exit_zero_stops_chain_and_records_carrier(self) -> None:
+        """代码型直跑（deliverable is None）：外置 profile exit 0 即完成，不套用文档判据，不换下一 profile，carrier 记该 profile。"""
+        second_called = self.ws / "second_called.txt"
+        second_sh = _mkexe(self.scripts, "second.sh", f'#!/bin/sh\necho 1 > "{second_called}"\nexit 0\n')
+        self.write_config({"builder-1": {"argv": [self.touch, "{PROMPT}"], "timeout_s": 30},
+                           "builder-2": {"argv": [second_sh, "{PROMPT}"], "timeout_s": 30},
+                           "builder-verify": {"argv": [self.pass_sh], "timeout_s": 30}})
+        # 显式配置 Builder preferences 链
+        cfg = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        cfg["roles"]["Builder"] = {"duty": "Builder", "preferences": ["builder-1", "builder-2"]}
+        self.config.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        out_json = dr.run_direct_result(self.ws, "Builder", "代码实施", None, owner="t", verify="builder-verify")
+        self.assertEqual(out_json["exit"], dr.EXIT_OK)
+        self.assertFalse(second_called.exists(), "第一条 profile exit 0 后不得换下一个 profile 跑")
+        text = dr.render_run(out_json)
+        self.assertRegex(text.splitlines()[0], r"^outcome=succeeded role=Builder .*carrier=builder-1 .*receipt_id=rcpt-")
+        self.assertEqual(out_json["carrier"], "builder-1")
+        self.assertTrue(out_json["receipt_signed"])
+        self.assertTrue(out_json["receipt_id"].startswith("rcpt-"))
+        man = yaml.safe_load((self.ws / "capsule.yaml").read_text(encoding="utf-8"))["roles_manifest"]
+        a = man["assignments"][0]
+        self.assertEqual(a["status"], "succeeded")
+        self.assertEqual(len(a["attempts"]), 2, "应为 1 次外置尝试 + 1 次 verify")
+        self.assertEqual(a["attempts"][0]["profile"], "builder-1")
+        self.assertEqual(a["attempts"][0]["exit_code"], 0)
+        self.assertNotIn("failure_code", a["attempts"][0])
+        self.assertEqual(a["attempts"][1]["profile"], "verify:builder-verify")
+        # 回执核验
+        rc_mod = dr._receipt_module()
+        valid, why = rc_mod.verify(out_json["receipt_id"], carrier="builder-1", role="Builder")
+        self.assertTrue(valid, why)
+    def _builder_prefs(self, profiles: dict, prefs: list[str]) -> bytes:
+        self.write_config(profiles)
+        cfg = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        cfg["roles"]["Builder"] = {"duty": "Builder", "preferences": prefs}
+        self.config.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        return self.config.read_bytes()
+
+    def test_preferences_tried_in_order_first_failure_then_second_succeeds(self) -> None:
+        third_called = self.ws / "third_called.txt"
+        third_sh = _mkexe(self.scripts, "third.sh", f'#!/bin/sh\necho 1 > "{third_called}"\nexit 0\n')
+        before = self._builder_prefs(
+            {"p1": {"argv": ["no-such-bin-zzz", "{PROMPT}"], "timeout_s": 30},
+             "p2": {"argv": [self.touch, "{PROMPT}"], "timeout_s": 30},
+             "p3": {"argv": [third_sh, "{PROMPT}"], "timeout_s": 30},
+             "builder-verify": {"argv": [self.pass_sh], "timeout_s": 30}}, ["p1", "p2", "p3"])
+        res = dr.run_direct_result(self.ws, "Builder", "代码实施", None, owner="t", verify="builder-verify")
+        self.assertEqual(res["exit"], dr.EXIT_OK)
+        self.assertEqual(res["selected_preference"], 2)
+        self.assertEqual(res["carrier"], "p2")
+        self.assertFalse(third_called.exists(), "首个成功即停")
+        man = yaml.safe_load((self.ws / "capsule.yaml").read_text(encoding="utf-8"))["roles_manifest"]
+        attempts = man["assignments"][0]["attempts"]
+        self.assertEqual((attempts[0]["profile"], attempts[0]["failure_code"], attempts[0]["preference_number"]),
+                         ("p1", "NOT_EXECUTABLE", 1), "p1 必须先被尝试")
+        self.assertEqual((attempts[1]["profile"], attempts[1]["preference_number"]), ("p2", 2))
+        self.assertEqual(self.config.read_bytes(), before, "调度不得写 roles.yaml")
+
+    def test_all_preferences_fail_strict_soft_aborts_and_config_untouched(self) -> None:
+        before = self._builder_prefs(
+            {"p1": {"argv": ["no-such-bin-zzz", "{PROMPT}"], "timeout_s": 30},
+             "p2": {"argv": [self.failing, "{PROMPT}"], "timeout_s": 30}}, ["p1", "p2"])
+        res = dr.run_direct_result(self.ws, "Builder", "代码实施", None, owner="t")
+        self.assertEqual((res["outcome"], res["exit"]), ("aborted", dr.EXIT_BLOCKED))
+        self.assertEqual(dr.run_direct(self.ws, "Builder", "代码实施", None, owner="t"), 2)
+        text = dr.render_run(res)
+        self.assertIn("1. p1 NOT_EXECUTABLE", text)
+        self.assertIn("2. p2 CHAIN_EXHAUSTED", text)
+        self.assertIn("未修改配置；由用户决定调整 preferences 或重试", text)
+        self.assertEqual(self.config.read_bytes(), before, "roles.yaml 字节不变")
+
+    def test_code_direct_verify_failure_fails_entire_dispatch(self) -> None:
+        """代码型直跑：外置 profile exit 0 但 verify 失败，整体失败且不得冒记为 session-local 成功。"""
+        self.write_config({"builder-1": {"argv": [self.touch, "{PROMPT}"], "timeout_s": 30},
+                           "builder-verify": {"argv": [self.failing], "timeout_s": 30}})
+        rc = dr.run_direct(self.ws, "Builder", "代码实施", None, owner="t", verify="builder-verify")
+        self.assertEqual(rc, dr.EXIT_BLOCKED)
+        man = yaml.safe_load((self.ws / "capsule.yaml").read_text(encoding="utf-8"))["roles_manifest"]
+        a = man["assignments"][0]
+        self.assertEqual(a["status"], "failed")
+        self.assertEqual(a["attempts"][-1]["profile"], "verify:builder-verify")
+        self.assertEqual(a["attempts"][-1]["failure_code"], "VERIFY_FAILED")
+
+    def test_code_direct_nonzero_exit_tries_next_profile(self) -> None:
+        """代码型直跑：外置 profile 退出码非 0 仍换下一个 profile。"""
+        second_called = self.ws / "second_called.txt"
+        second_sh = _mkexe(self.scripts, "second.sh", f'#!/bin/sh\necho 1 > "{second_called}"\nexit 0\n')
+        self.write_config({"builder-1": {"argv": [str(self.failing), "{PROMPT}"], "timeout_s": 30},
+                           "builder-2": {"argv": [str(second_sh), "{PROMPT}"], "timeout_s": 30},
+                           "builder-verify": {"argv": [str(self.pass_sh)], "timeout_s": 30}})
+        cfg = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        cfg["roles"]["Builder"] = {"duty": "Builder", "preferences": ["builder-1", "builder-2"]}
+        self.config.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        rc = dr.run_direct(self.ws, "Builder", "代码实施", None, owner="t", verify="builder-verify")
+        self.assertEqual(rc, dr.EXIT_OK)
+        self.assertTrue(second_called.exists(), "第一条失败后必须尝试第二条 profile")
+        man = yaml.safe_load((self.ws / "capsule.yaml").read_text(encoding="utf-8"))["roles_manifest"]
+        a = man["assignments"][0]
+        self.assertEqual(a["status"], "succeeded")
+        self.assertEqual(len(a["attempts"]), 3, "2 次外置尝试 + 1 次 verify")
+        self.assertEqual(a["attempts"][0]["profile"], "builder-1")
+        self.assertEqual(a["attempts"][0]["exit_code"], 1)
+        self.assertEqual(a["attempts"][1]["profile"], "builder-2")
+        self.assertEqual(a["attempts"][1]["exit_code"], 0)
+        self.assertNotIn("failure_code", a["attempts"][1])
+        self.assertEqual(a["attempts"][2]["profile"], "verify:builder-verify")
+        self.assertEqual(a["command_profile"], "builder-1")
+        self.assertEqual(a["status"], "succeeded")
+
+    def test_non_code_role_with_cwd_deliverable_still_runs_criteria_on_exit_zero(self) -> None:
+        """非代码型角色（如 Reporter 或 Designer）以 deliverable == cwd（如 --out .）调度、外置退出码 0 时，仍执行原判据，不得判成功。"""
+        self.write_config({"reporter-1": {"argv": [self.pass_sh, "{PROMPT}"], "timeout_s": 30}})
+        cfg = yaml.safe_load(self.config.read_text(encoding="utf-8"))
+        cfg["roles"]["Reporter"] = {"duty": "Reporter", "preferences": ["reporter-1"]}
+        self.config.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        rc = dr.run_direct(self.ws, "Reporter", "汇报总结", Path("."), owner="t")
+        self.assertNotEqual(rc, dr.EXIT_OK, "非代码型角色以 cwd 为交付物即使外置 exit 0 也不得判成功")
+        man = yaml.safe_load((self.ws / "capsule.yaml").read_text(encoding="utf-8"))["roles_manifest"]
+        a = man["assignments"][0]
+        self.assertNotEqual(a["status"], "succeeded")
+        self.assertEqual(a["attempts"][0]["exit_code"], 0)
+        self.assertEqual(a["attempts"][0]["failure_code"], "NO_VALID_OUTPUT")
 
     def test_out_and_verify_both_record_revision_ref(self) -> None:
         """Builder 既产出 Spec 文档又改代码时，修订标识不得因为有 --out 就整个丢失。"""
@@ -1046,7 +1322,7 @@ class VerifyProfileTests(DispatchRoleTestBase):
         self.write_config({"builder-primary": {"argv": [writer, "{PROMPT}", str(out)], "timeout_s": 30},
                            "builder-verify": {"argv": [self.failing], "timeout_s": 30}})
         rc = dr.run_direct(self.ws, "Builder", "实施", Path("04_Spec_Tech-1.md"), owner="t", verify="builder-verify")
-        self.assertEqual(rc, dr.EXIT_LOCAL)
+        self.assertEqual(rc, dr.EXIT_BLOCKED)
         man = yaml.safe_load((self.ws / "capsule.yaml").read_text(encoding="utf-8"))["roles_manifest"]
         self.assertEqual(man["assignments"][0]["status"], "failed")
         self.assertEqual(man["assignments"][0]["attempts"][-1]["failure_code"], "VERIFY_FAILED")
@@ -1067,7 +1343,7 @@ class VerifyProfileTests(DispatchRoleTestBase):
     def test_unconfigured_verify_profile_fails_closed(self) -> None:
         self.write_config({"builder-primary": {"argv": [self.touch, "{PROMPT}"], "timeout_s": 30}})
         rc = dr.run_direct(self.ws, "Builder", "实施", None, owner="t", verify="nope-verify")
-        self.assertEqual(rc, dr.EXIT_LOCAL)
+        self.assertEqual(rc, dr.EXIT_BLOCKED)
 
 
 class CarrierTripleTests(DispatchRoleTestBase):
@@ -1140,6 +1416,145 @@ class TraceTests(DispatchRoleTestBase):
         self.assertEqual((r["role"], r["exit_code"], r["executed"]), ("Researcher", 0, True))
         self.assertIn("调研某事", " ".join(r["argv"]), "轨迹须含提示词原文，否则无法核对跑的是什么")
         self.assertTrue(r["deliverable_valid"])
+
+    def test_start_trace_has_agent_model(self) -> None:
+        """start 记录应包含 agent 和 model（自定义 argv 为 None）。"""
+        log = self.ws / "trace.jsonl"
+        out = self.ws / "01.md"
+        out.write_text(
+            "---\ntype: Research\ntopic: t\ndate: 2026-09-19\nauthor: Researcher\nstatus: draft\ncarrier: session-local\n---\n\n# t\n",
+            encoding="utf-8",
+        )
+        appender = _mkexe(self.scripts, "appender.sh", f'#!/bin/sh\ncat "{self.ok_body}" > "$2"\n')
+        old, dr.TRACE_LOG = dr.TRACE_LOG, log
+        try:
+            # 1. 自定义 argv profile: agent 和 model 均应为 None
+            self.write_config({"researcher-primary": {"argv": [appender, "{PROMPT}", str(out)], "timeout_s": 30}})
+            dr.run_direct(self.ws, "Researcher", "调研任务1", Path("01.md"), owner="t")
+            rows = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            self.assertGreaterEqual(len(rows), 1)
+            start_custom = rows[0]
+            self.assertEqual(start_custom["event"], "start")
+            self.assertIn("agent", start_custom)
+            self.assertIn("model", start_custom)
+            self.assertIsNone(start_custom["agent"])
+            self.assertIsNone(start_custom["model"])
+
+            # 2. profile 含 agent/model (mock可执行的 agent)
+            fake_claude = _mkexe(self.scripts, "claude", f'#!/bin/sh\ncat "{self.ok_body}" > "$2"\n')
+            # 把 scripts 目录放进 PATH 以便 executable 找到 claude
+            orig_path = os.environ.get("PATH", "")
+            os.environ["PATH"] = f"{self.scripts}:{orig_path}"
+            try:
+                log.unlink()
+                self.write_config({"researcher-primary": {"agent": "claude", "model": "sonnet", "timeout_s": 30}})
+                dr.run_direct(self.ws, "Researcher", "调研任务2", Path("01.md"), owner="t")
+                rows2 = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+                self.assertGreaterEqual(len(rows2), 1)
+                start_agent = rows2[0]
+                self.assertEqual(start_agent["event"], "start")
+                self.assertEqual(start_agent["agent"], "claude")
+                self.assertEqual(start_agent["model"], "sonnet")
+            finally:
+                os.environ["PATH"] = orig_path
+        finally:
+            dr.TRACE_LOG = old
+
+    def test_usage_written_to_end_trace(self) -> None:
+        """agent profile 子进程 stdout 为合法 JSON 时，end trace 的 usage 等于 parse_usage 结果且非 None。"""
+        fixture_path = (SYSTEM_ROOT / "tests" / "fixtures" / "agent_cli_usage" / "usage_claude.txt").resolve()
+        claude_stdout = fixture_path.read_text(encoding="utf-8")
+        out = self.ws / "01.md"
+        out.write_text(
+            "---\ntype: Research\ntopic: t\ndate: 2026-09-19\nauthor: Researcher\nstatus: draft\ncarrier: session-local\n---\n\n# t\n",
+            encoding="utf-8",
+        )
+        # 替身 claude：写入合规产出并向 stdout 输出 usage JSON
+        _mkexe(
+            self.scripts,
+            "claude",
+            f'#!/bin/sh\ncat "{self.ok_body}" > "{out}"\ncat "{fixture_path}"\n',
+        )
+        orig_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = f"{self.scripts}:{orig_path}"
+        try:
+            prompt = f"[交付约定] 将本次产出写入：{out}（在既有文件上原地更新）。"
+            prof = {"name": "claude-test", "agent": "claude", "model": "sonnet", "timeout_s": 30}
+            code, attempts, ok = dr.execute_chain([prof], prompt, self.ws, out, "Researcher")
+            self.assertTrue(ok)
+            self.assertEqual(code, "")
+
+            log = self.ws / "trace.jsonl"
+            rows = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            end_traces = [r for r in rows if r.get("executed") is True and "exit_code" in r]
+            self.assertEqual(len(end_traces), 1)
+            end_trace = end_traces[0]
+            self.assertIn("usage", end_trace)
+            self.assertIsNotNone(end_trace["usage"])
+            expected_usage = dr.role_preferences.parse_usage(claude_stdout, "claude")
+            self.assertEqual(end_trace["usage"], expected_usage)
+            self.assertNotIn("usage", attempts[0])
+        finally:
+            os.environ["PATH"] = orig_path
+
+    def test_usage_null_on_garbage_stdout_keeps_exit_attempts_receipt(self) -> None:
+        """stdout 为垃圾文本以及 parse_usage 抛异常时，end trace usage 为 None，且 (code, attempts, ok) 完全一致。"""
+        out1 = self.ws / "out1.md"
+        out1.write_text(
+            "---\ntype: Research\ntopic: t\ndate: 2026-09-19\nauthor: Researcher\nstatus: draft\ncarrier: session-local\n---\n\n# t\n",
+            encoding="utf-8",
+        )
+        _mkexe(
+            self.scripts,
+            "claude",
+            f'#!/bin/sh\ncat "{self.ok_body}" > "{out1}"\necho "not a json at all"\n',
+        )
+        orig_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = f"{self.scripts}:{orig_path}"
+        try:
+            prompt1 = f"[交付约定] 将本次产出写入：{out1}（在既有文件上原地更新）。"
+            prof_garbage = {"name": "claude-garbage", "agent": "claude", "model": "sonnet", "timeout_s": 30}
+
+            code1, attempts1, ok1 = dr.execute_chain([prof_garbage], prompt1, self.ws, out1, "Researcher")
+            self.assertTrue(ok1)
+            self.assertEqual(code1, "")
+            self.assertNotIn("usage", attempts1[0])
+
+            log = self.ws / "trace.jsonl"
+            rows1 = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            end_traces1 = [r for r in rows1 if r.get("executed") is True and "exit_code" in r]
+            self.assertEqual(len(end_traces1), 1)
+            self.assertIn("usage", end_traces1[0])
+            self.assertIsNone(end_traces1[0]["usage"])
+
+            # 异常情况：parse_usage 抛异常
+            log.unlink()
+            out2 = self.ws / "out2.md"
+            out2.write_text(
+                "---\ntype: Research\ntopic: t\ndate: 2026-09-19\nauthor: Researcher\nstatus: draft\ncarrier: session-local\n---\n\n# t\n",
+                encoding="utf-8",
+            )
+            _mkexe(
+                self.scripts,
+                "claude",
+                f'#!/bin/sh\ncat "{self.ok_body}" > "{out2}"\necho "not a json at all"\n',
+            )
+            prompt2 = f"[交付约定] 将本次产出写入：{out2}（在既有文件上原地更新）。"
+            with mock.patch("tools.dispatch_role.role_preferences.parse_usage", side_effect=RuntimeError("parse exploded")):
+                code2, attempts2, ok2 = dr.execute_chain([prof_garbage], prompt2, self.ws, out2, "Researcher")
+            self.assertEqual(code1, code2)
+            self.assertEqual(ok1, ok2)
+            self.assertNotIn("usage", attempts2[0])
+            self.assertEqual(attempts1[0].get("exit_code"), attempts2[0].get("exit_code"))
+            self.assertEqual(attempts1[0].get("failure_code"), attempts2[0].get("failure_code"))
+
+            rows2 = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            end_traces2 = [r for r in rows2 if r.get("executed") is True and "exit_code" in r]
+            self.assertEqual(len(end_traces2), 1)
+            self.assertIn("usage", end_traces2[0])
+            self.assertIsNone(end_traces2[0]["usage"])
+        finally:
+            os.environ["PATH"] = orig_path
 
     def test_trace_never_blocks_dispatch(self) -> None:
         """留痕失败不得反过来阻断被留痕的动作。"""
@@ -1242,7 +1657,7 @@ class ReviewRound2RegressionTests(DispatchRoleTestBase):
         out.write_text(research_doc(), encoding="utf-8")
         self.write_config({"researcher-primary": {"argv": [noop, "{PROMPT}"], "timeout_s": 30}})
         rc = dr.run_direct(self.ws, "Researcher", "调研任务", Path("01_调研.md"), owner="test")
-        self.assertEqual(rc, dr.EXIT_LOCAL)
+        self.assertEqual(rc, dr.EXIT_BLOCKED)
         self.assertNotIn("carrier: researcher-primary", out.read_text(encoding="utf-8"))
 
     def test_directory_target_fingerprinted_not_crashing(self) -> None:
@@ -1300,3 +1715,151 @@ class BindPromptTests(TestCase):
             self.assertIn("原地更新", again)
             self.assertIn("不得另存副本", again)
             self.assertNotIn("覆盖写", again)
+
+
+class WorktimeSettleTests(DispatchRoleTestBase):
+    """工时伴随签署入账：调度成功即结算活跃胶囊的 open 任务段，失败链不结算。"""
+
+    CST = timezone(timedelta(hours=8))
+
+    def _capsule_with_open_seg(self, minutes: int = 40) -> tuple[Path, str]:
+        cap = init_capsule.create_capsule(self.ws / "docs", "某主题方案", "Tech-901", "research")
+        at = (datetime.now(self.CST) - timedelta(minutes=minutes)).isoformat()
+        seg = update_capsule.start_task(cap, "架构出方案", task_id="Tech-901", stage="01_调研", at=at)
+        return cap, seg["segment"]["seg_id"]
+
+    def _dispatch(self, role: str, profiles: dict, out: Path, capsule: Path | None) -> dict:
+        self.write_config(profiles)
+        self.ok_body.write_text(proposal_doc(), encoding="utf-8")
+        res = dr.run_direct_result(self.ws, role, prompt=str(out), out=out, owner="t", capsule=capsule)
+        self.assertEqual(res["exit"], dr.EXIT_OK, res)
+        return res
+
+    def test_success_settles_open_segment(self) -> None:
+        cap, seg_id = self._capsule_with_open_seg()
+        receipt = self._dispatch(
+            "Architecture", {"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}},
+            cap / "02_方案.md", None)
+
+        self.assertEqual(receipt["worklog_refs"], [seg_id])
+        logs = update_capsule.read_worklogs(cap)
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]["ref"], seg_id)
+        self.assertEqual(logs[0]["spent"], 0.75, "40 分钟按 15 分钟步长取整")
+        self.assertIn("自动计量入账", logs[0]["summary"])
+        self.assertEqual([s["state"] for s in update_capsule.read_segments(cap)], ["logged"])
+
+    def test_capsule_hint_settles_when_deliverable_outside_capsule(self) -> None:
+        """代码型产出没有落在胶囊内的交付物文件，只能靠 --capsule 定位活跃胶囊。"""
+        cap, seg_id = self._capsule_with_open_seg(minutes=20)
+        (self.ws / "out").mkdir()
+        receipt = self._dispatch(
+            "Architecture", {"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}},
+            self.ws / "out" / "02_方案.md", cap)
+
+        self.assertEqual(receipt["worklog_refs"], [seg_id])
+        self.assertEqual(update_capsule.worklog_total(cap), 0.25, "20 分钟按 15 分钟步长取整")
+
+    def test_failed_dispatch_leaves_segment_open(self) -> None:
+        cap, _ = self._capsule_with_open_seg()
+        self.write_config({"architecture-primary": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 30}})
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = dr.run_direct(self.ws, "Architecture", prompt=str(cap / "02_方案.md"),
+                               out=cap / "02_方案.md", owner="t", capsule=cap)
+
+        self.assertNotEqual(rc, dr.EXIT_OK)
+        self.assertEqual(update_capsule.read_worklogs(cap), [], "失败链不得预先入账")
+        self.assertEqual([s["state"] for s in update_capsule.read_segments(cap)], ["open"])
+
+    def test_no_open_segment_is_silent_noop(self) -> None:
+        cap = init_capsule.create_capsule(self.ws / "docs", "某主题方案", "Tech-902", "research")
+        receipt = self._dispatch(
+            "Architecture", {"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}},
+            cap / "02_方案.md", cap)
+
+        self.assertEqual(receipt["worklog_refs"], [], "无段可结时静默放行，不阻断调度")
+        self.assertEqual(update_capsule.read_worklogs(cap), [])
+
+
+class RunFileLifecycleTests(DispatchRoleTestBase):
+    """运行态文件（RUN_DIR/<dispatch_id>.json）全生命周期测试。"""
+
+    def test_run_file_removed_on_success(self) -> None:
+        out = self.ws / "01_调研.md"
+        self.ok_body.write_text(research_doc(), encoding="utf-8")
+        prof = {"name": "p-ok", "argv": [self.ok, "{PROMPT}"], "timeout_s": 30}
+        code, attempts, ok = dr.execute_chain([prof], f"[交付约定] 将本次产出写入：{out}", self.ws, out, "Researcher")
+        self.assertTrue(ok)
+        self.assertEqual(code, "")
+        self.assertEqual(list(self.run_dir.glob("*.json")), [])
+
+    def test_run_file_removed_on_criteria_fail(self) -> None:
+        out = self.ws / "01_调研.md"
+        # bad script that creates deliverable without required sections
+        bad = _mkexe(self.scripts, "bad.sh", f'#!/bin/sh\nout=${{1#*将本次产出写入：}}\nout=${{out%%（*}}\necho "bad content" > "$out"\n')
+        prof = {"name": "p-bad", "argv": [bad, "{PROMPT}"], "timeout_s": 30}
+        code, attempts, ok = dr.execute_chain([prof], f"[交付约定] 将本次产出写入：{out}", self.ws, out, "Researcher")
+        self.assertFalse(ok)
+        self.assertEqual(code, "NO_VALID_OUTPUT")
+        self.assertEqual(list(self.run_dir.glob("*.json")), [])
+
+    def test_run_file_removed_on_timeout(self) -> None:
+        out = self.ws / "01_调研.md"
+        prof = {"name": "p-slow", "argv": [self.slow, "{PROMPT}"], "timeout_s": 1}
+        code, attempts, ok = dr.execute_chain([prof], f"[交付约定] 将本次产出写入：{out}", self.ws, out, "Researcher")
+        self.assertFalse(ok)
+        self.assertEqual(code, "TIMEOUT")
+        self.assertEqual(list(self.run_dir.glob("*.json")), [])
+
+    def test_run_file_removed_on_exception(self) -> None:
+        out = self.ws / "01_调研.md"
+        prof = {"name": "p-ok", "argv": [self.ok, "{PROMPT}"], "timeout_s": 30}
+        with mock.patch("tools.dispatch_role.subprocess.run", side_effect=RuntimeError("unexpected crash")):
+            with self.assertRaises(RuntimeError):
+                dr.execute_chain([prof], f"[交付约定] 将本次产出写入：{out}", self.ws, out, "Researcher")
+        self.assertEqual(list(self.run_dir.glob("*.json")), [])
+
+    def test_run_file_exists_with_fields_while_running(self) -> None:
+        out = self.ws / "01_调研.md"
+        _mkexe(self.scripts, "claude", f'#!/bin/sh\ncat "{self.ok_body}" > "{out}"\n')
+        orig_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = f"{self.scripts}:{orig_path}"
+        prof = {"name": "claude-run", "agent": "claude", "model": "sonnet", "timeout_s": 30}
+        captured: dict[str, Any] = {}
+
+        real_run = dr.subprocess.run
+
+        def fake_run(*args: Any, **kwargs: Any) -> Any:
+            files = list(self.run_dir.glob("*.json"))
+            self.assertEqual(len(files), 1)
+            data = json.loads(files[0].read_text(encoding="utf-8"))
+            captured.update(data)
+            return real_run(*args, **kwargs)
+
+        self.ok_body.write_text(research_doc(), encoding="utf-8")
+        try:
+            with mock.patch("tools.dispatch_role.subprocess.run", side_effect=fake_run):
+                code, attempts, ok = dr.execute_chain([prof], f"[交付约定] 将本次产出写入：{out}", self.ws, out, "Researcher")
+        finally:
+            os.environ["PATH"] = orig_path
+        self.assertTrue(ok)
+        expected_fields = {"dispatch_id", "pid", "role", "profile", "agent", "model", "cwd", "started_at"}
+        self.assertEqual(set(captured.keys()), expected_fields)
+        self.assertEqual(captured["pid"], os.getpid())
+        self.assertEqual(captured["role"], "Researcher")
+        self.assertEqual(captured["profile"], "claude-run")
+        self.assertEqual(captured["agent"], "claude")
+        self.assertEqual(captured["model"], "sonnet")
+        self.assertEqual(captured["cwd"], str(self.ws))
+        self.assertTrue(captured["dispatch_id"])
+        self.assertTrue(captured["started_at"])
+
+    def test_run_file_io_error_swallowed(self) -> None:
+        out = self.ws / "01_调研.md"
+        self.ok_body.write_text(research_doc(), encoding="utf-8")
+        prof = {"name": "p-ok", "argv": [self.ok, "{PROMPT}"], "timeout_s": 30}
+        with mock.patch("tools.dispatch_role.tempfile.NamedTemporaryFile", side_effect=OSError("disk full")):
+            code, attempts, ok = dr.execute_chain([prof], f"[交付约定] 将本次产出写入：{out}", self.ws, out, "Researcher")
+        self.assertTrue(ok)
+        self.assertEqual(code, "")

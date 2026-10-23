@@ -59,22 +59,21 @@ def report_local_role_preferences() -> list[dict]:
     if not candidates:
         print("  • 未配置外置角色 profile；当前选择保持未知，Reviewer/Maintainer 未选择时保持阻断。")
     for role in candidates:
-        selected = role.get("selected_profile") or "未选择"
         preferences = role.get("preferences") or []
         if not preferences:
-            print(f"  • {role.get('role', '?')}: {selected}（无外置偏好）")
+            print(f"  • {role.get('role', '?')}: 无外置偏好（会话内承载）")
             continue
         states = "；".join(
             f"#{item.get('number', '?')} {item.get('profile', '?')}: {item.get('status', 'unknown')}"
             for item in preferences
         )
-        print(f"  • {role.get('role', '?')}: 当前 {selected}；{states}")
+        print(f"  • {role.get('role', '?')}: {states}")
     print(
         "未选择或写入任何角色配置。若要验证实际模型，必须先在对话中说明提供商与可能成本并取得明确授权；"
     )
     print(
         "获授权后才可执行：python3 .entropaxis/tools/setup_agents.py "
-        "--check-preferences --authorize-model-check --authorization-event '<用户确认>' [--json]"
+        "--check-preferences --authorize-model-check --authorization-event '<用户确认>'"
     )
     return candidates
 
@@ -274,10 +273,11 @@ def link_skills(verbose: bool = True, *, system_dir: Path | None = None) -> bool
     return ok
 
 
-def detect_host_apps() -> set[str]:
-    """检测宿主机已安装的应用程序"""
+def detect_host_apps(platform: str | None = None) -> set[str]:
+    """检测宿主机已安装的应用程序；platform 缺省取当前平台，供测试模拟他平台。"""
+    platform = platform or sys.platform
     detected = set()
-    if sys.platform == "darwin":
+    if platform == "darwin":
         app_dirs = [Path("/Applications"), Path("/System/Applications"), Path.home() / "Applications"]
         for adir in app_dirs:
             if adir.is_dir():
@@ -285,7 +285,7 @@ def detect_host_apps() -> set[str]:
                     detected.add(p.stem.lower())
                 for p in adir.glob("*/*.app"):
                     detected.add(p.stem.lower())
-    elif sys.platform == "win32":
+    elif platform == "win32":
         prog_dirs = [
             Path(os.environ.get("ProgramFiles", "C:\\Program Files")),
             Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")),
@@ -305,20 +305,37 @@ def detect_host_apps() -> set[str]:
                     detected.add(p.stem.lower())
     return detected
 
-def _opener_cmd_key() -> str:
-    if sys.platform == "darwin":
+def _opener_cmd_key(platform: str | None = None) -> str:
+    platform = platform or sys.platform
+    if platform == "darwin":
         return "cmd_macos"
-    if sys.platform == "win32":
+    if platform == "win32":
         return "cmd_windows"
     return "cmd_linux"
 
-def _build_opener_defaults(tpl_data: dict, detected_apps: set[str], cmd_key: str, verbose: bool = False) -> dict:
-    """依据模板与本机检测结果构建全量打开器配置（纯构建，不含任何写入）。"""
-    config = {
-        "version": tpl_data.get("version", "1.0.0"),
-        "platform": sys.platform,
-        "associations": {},
-    }
+def _candidate_probe_names(cand_name: str, cand_cmd: str) -> set[str]:
+    """候选程序的安装探测名：候选名 + 该平台启动命令里的可执行 token。
+
+    Windows 探测到的是 exe 文件名 stem（WINWORD.EXE → winword、POWERPNT.EXE → powerpnt），
+    与候选名 "Microsoft Word"/"Microsoft PowerPoint" 互不为子串，只按名字匹配会把已安装的
+    Office 判成未安装；启动命令里本来就声明了各平台真实可执行名（start winword），一并取用。
+    """
+    def _clean(text: str) -> str:
+        return text.lower().replace(" ", "").replace("office", "")
+
+    names = {_clean(cand_name)}
+    for token in cand_cmd.replace('"', " ").split():
+        if token.startswith("-") or token.lower() in ("start", "open", "cmd", "/c"):
+            continue
+        names.add(_clean(token))
+    return names
+
+def _build_opener_partition(tpl_data: dict, detected_apps: set[str], cmd_key: str,
+                            verbose: bool = False, platform: str | None = None) -> dict:
+    """依据模板与本机检测结果构建**单个平台**的打开器分区（纯构建，不含任何写入）。"""
+    platform = platform or sys.platform
+    detected_clean = {dapp.replace(" ", "").replace("office", "") for dapp in detected_apps}
+    associations: dict = {}
     if verbose:
         print("🔍 正在检测本机安装的应用程序以配置默认打开程序...")
     for fmt_id, fmt_info in tpl_data.get("formats", {}).items():
@@ -330,60 +347,85 @@ def _build_opener_defaults(tpl_data: dict, detected_apps: set[str], cmd_key: str
             cand_cmd = cand.get(cmd_key, "")
             if not cand_cmd:
                 continue
-            cand_lower = cand_name.lower().replace(" ", "").replace("office", "")
-            is_installed = False
-            for dapp in detected_apps:
-                dapp_clean = dapp.replace(" ", "").replace("office", "")
-                if cand_lower in dapp_clean or dapp_clean in cand_lower:
-                    is_installed = True
-                    break
+            probe_names = _candidate_probe_names(cand_name, cand_cmd)
+            is_installed = any(probe in dapp or dapp in probe
+                               for probe in probe_names for dapp in detected_clean)
             if is_installed or "默认" in cand_name or "系统" in cand_name:
                 matched_candidates.append({"name": cand_name, "command": cand_cmd, "is_installed": is_installed})
                 if not selected_cmd and is_installed:
                     selected_cmd = cand_cmd
                     selected_app_name = cand_name
         if not selected_cmd:
-            if sys.platform == "darwin":
+            if platform == "darwin":
                 selected_cmd = "open"
-            elif sys.platform == "win32":
-                selected_cmd = "start \"\""
+            elif platform == "win32":
+                selected_cmd = 'start ""'
             else:
                 selected_cmd = "xdg-open"
             selected_app_name = "系统默认关联程序"
-        config["associations"][fmt_id] = {
+        associations[fmt_id] = {
             "name": fmt_info["name"],
             "extensions": fmt_info["extensions"],
             "selected_app": selected_app_name,
             "command": selected_cmd,
             "available_candidates": [c["name"] for c in matched_candidates if c["is_installed"]],
         }
-    return config
+    return {"associations": associations}
 
 
-def _report_opener(config: dict) -> None:
+def _report_opener(config: dict, platform: str) -> None:
     """打印**实际生效**的打开器映射，并标注每项来源。
 
     此前打印的是本机检测结果而非配置生效值——用户手工注册的程序（模板候选之外，
     如自建 CLI）不会出现在检测结果里，于是每次运行都像被重置了一样，
     进而诱导 Agent 去"修正"配置，把人工仲裁值真的覆盖掉。
     """
-    print("📖 当前生效的文件打开器映射（.entropaxis/data/templates/file-opener.json）：")
-    for info in config.get("associations", {}).values():
+    print(f"📖 当前生效的文件打开器映射（.entropaxis/data/templates/file-opener.json · {platform} 分区）：")
+    partition = config.get("platforms", {}).get(platform, {})
+    for info in partition.get("associations", {}).values():
         mark = "🔒人工仲裁" if info.get("arbitrated") else "自动匹配"
         exts = ", ".join(info.get("extensions", []))
         print(f"  • {info.get('name', '?')} ({exts}): [{info.get('selected_app', '?')}] {mark}")
 
-def _merge_opener(existing: dict, defaults: dict) -> dict:
-    """合并保留策略：人工仲裁的 selected_app/command 原样保留，仅回填缺失格式与缺失字段。
+def _normalize_opener_platforms(existing: dict, current_platform: str) -> dict:
+    """旧版单平台格式（顶层直接挂 associations）整体归入 platforms[旧 platform 字段]，
+    不改写其中任何值；platform 字段缺失时按当前平台归档。
 
-    存量配置的 command 与本机检测默认值不一致，说明有人**刻意**改过（手工注册了模板候选
-    之外的程序），据此打上 `arbitrated` 标记。该标记既让人一眼看出哪些是人工决定，
-    也让后续任何 Agent 在写这个文件前看到"此项不得覆盖"。
+    顶层 platform 字段随迁移移除：平台信息已内化为分区键，残留会误导后续读取方
+    把他平台的旧值当成当前平台配置。
     """
-    merged = json.loads(json.dumps(existing, ensure_ascii=False))
-    assoc = merged.setdefault("associations", {})
+    if isinstance(existing.get("platforms"), dict):
+        return existing
+    platforms = existing["platforms"] = {}
+    if isinstance(existing.get("associations"), dict):
+        legacy_platform = existing.get("platform")
+        if not isinstance(legacy_platform, str) or not legacy_platform:
+            legacy_platform = current_platform
+        platforms[legacy_platform] = {"associations": existing.pop("associations")}
+    existing.pop("platform", None)
+    return existing
+
+def _merge_opener(existing: dict, defaults: dict, platform: str, *, rescan: bool = False) -> dict:
+    """按平台分区的合并保留策略：只合并当前平台分区，他平台分区原样保留不动。
+
+    当前分区内：人工仲裁的 selected_app/command 原样保留，仅回填缺失格式与缺失字段；
+    分区内的 command 与**本平台**检测默认值不一致，说明有人刻意改过（手工注册了模板候选
+    之外的程序），据此打上 `arbitrated` 标记。工作区跨平台搬运带来的他平台命令差异
+    不属于人工仲裁——只比对当前平台分区，就不会把他平台的值误判成人工仲裁。该标记
+    既让人一眼看出哪些是人工决定，也让后续任何 Agent 在写这个文件前看到"此项不得覆盖"。
+    """
+    merged = _normalize_opener_platforms(json.loads(json.dumps(existing, ensure_ascii=False)), platform)
+    platforms = merged["platforms"]
+    if rescan:
+        # 全量重扫只重建当前平台分区；他平台分区本机探测不到，原样保留
+        platforms.pop(platform, None)
+    partition = platforms.get(platform)
+    if not isinstance(partition, dict):
+        platforms[platform] = json.loads(json.dumps(defaults, ensure_ascii=False))
+        return merged
+    assoc = partition.setdefault("associations", {})
     if not isinstance(assoc, dict):
-        assoc = merged["associations"] = {}
+        assoc = partition["associations"] = {}
     for fmt_id, dflt in defaults.get("associations", {}).items():
         cur = assoc.get(fmt_id)
         if not isinstance(cur, dict):
@@ -396,8 +438,6 @@ def _merge_opener(existing: dict, defaults: dict) -> dict:
             cur["available_candidates"] = dflt.get("available_candidates", [])
         if cur.get("arbitrated") is None and cur.get("command") != dflt.get("command"):
             cur["arbitrated"] = True
-    merged.setdefault("version", defaults.get("version", "1.0.0"))
-    merged.setdefault("platform", defaults.get("platform", sys.platform))
     return merged
 
 def _write_opener_config(target_file: Path, config: dict, verbose: bool) -> None:
@@ -411,15 +451,20 @@ def _write_opener_config(target_file: Path, config: dict, verbose: bool) -> None
         if verbose:
             print(f"❌ 写入 .entropaxis/data/templates/file-opener.json 失败: {e}", file=sys.stderr)
 
-def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system_dir: Path | None = None) -> dict:
+def init_file_opener(verbose: bool = True, force_rescan: bool = False, *,
+                     system_dir: Path | None = None, platform: str | None = None) -> dict:
     """
     初始化或自愈本机文件打开器关联配置 (.entropaxis/data/templates/file-opener.json)。
 
-    合并保留策略（默认）：目标配置存在且合法时，仅回填缺失的格式与字段，
+    配置按平台分区（platforms.<sys.platform>.associations）：只生成/合并当前平台分区，
+    他平台分区随工作区搬运原样保留；旧版顶层 associations 格式自动迁移归档。
+
+    合并保留策略（默认）：目标配置存在且合法时，仅回填当前平台分区缺失的格式与字段，
     人工仲裁的 selected_app/command 持久保留，内容无变化时不重写文件；
-    全量重扫仅在显式 force_rescan=True（CLI: --force-rescan-opener）时执行；
-    既有配置损坏（无法解析或结构非法）时自动重建自愈。
+    全量重扫仅在显式 force_rescan=True（CLI: --force-rescan-opener）时执行，
+    且同样只重建当前平台分区；既有配置损坏（无法解析或结构非法）时自动重建自愈。
     """
+    platform = platform or sys.platform
     tools_dir = Path(__file__).resolve().parent
     system_dir = Path(system_dir) if system_dir is not None else tools_dir.parent
     data_dir = system_dir / "data"
@@ -438,30 +483,37 @@ def init_file_opener(verbose: bool = True, force_rescan: bool = False, *, system
             print(f"❌ 读取模板失败: {e}", file=sys.stderr)
         return {}
 
-    cmd_key = _opener_cmd_key()
-
-    if target_file.exists() and not force_rescan:
+    cmd_key = _opener_cmd_key(platform)
+    existing = None
+    if target_file.exists():
         try:
             with open(target_file, "r", encoding="utf-8") as f:
                 existing = json.load(f)
         except Exception:
             existing = None
-        if isinstance(existing, dict) and isinstance(existing.get("associations"), dict):
-            # 检测过程不打印：那是候选发现结果，不是生效配置，混淆二者会诱发误"修复"
-            defaults = _build_opener_defaults(tpl_data, detect_host_apps(), cmd_key, verbose=False)
-            merged = _merge_opener(existing, defaults)
-            if merged != existing:
-                _write_opener_config(target_file, merged, verbose)
-            if verbose:
-                _report_opener(merged)
-            return merged
-        if verbose:
-            print("⚠️ 既有打开器配置损坏（无法解析或结构非法），自动重建自愈...")
+    mergeable = isinstance(existing, dict) and (
+        isinstance(existing.get("platforms"), dict) or isinstance(existing.get("associations"), dict)
+    )
+    if existing is not None and not mergeable and verbose:
+        print("⚠️ 既有打开器配置损坏（无法解析或结构非法），自动重建自愈...")
 
-    config = _build_opener_defaults(tpl_data, detect_host_apps(), cmd_key, verbose)
+    if mergeable:
+        # 检测过程不打印：那是候选发现结果，不是生效配置，混淆二者会诱发误"修复"
+        defaults = _build_opener_partition(tpl_data, detect_host_apps(platform), cmd_key,
+                                           verbose=verbose and force_rescan, platform=platform)
+        merged = _merge_opener(existing, defaults, platform, rescan=force_rescan)
+        merged.setdefault("version", tpl_data.get("version", "1.0.0"))
+        if merged != existing:
+            _write_opener_config(target_file, merged, verbose)
+        if verbose:
+            _report_opener(merged, platform)
+        return merged
+
+    partition = _build_opener_partition(tpl_data, detect_host_apps(platform), cmd_key, verbose, platform)
+    config = {"version": tpl_data.get("version", "1.0.0"), "platforms": {platform: partition}}
     _write_opener_config(target_file, config, verbose)
     if verbose:
-        _report_opener(config)
+        _report_opener(config, platform)
     return config
 
 
@@ -526,7 +578,7 @@ def main(argv: list[str] | None = None) -> int:
         counts = {key: len(items) for key, items in scanned.items()}
         if any(counts.values()):
             print("目录候选（未登记）: " + " ".join(f"{key}={n}" for key, n in counts.items())
-                  + "；用 scan_workspace.py --json 查看，确认后 --apply --select <相对目录> 登记。")
+                  + "；用 scan_workspace.py 查看，确认后 --apply --select <相对目录> 登记。")
     print("🎉 工作区初始化与自愈完成（入口已同步，实例配置就绪；角色选择保留既有值或未知，Reviewer/Maintainer 未选择时保持阻断）。")
     print("💡 进阶自定义：说「自定义角色」绑定有序模型偏好（roles.yaml） / 「配置打开方式」 / registry.yaml 登记别名 / workspace-config.yaml 组织口径")
     if sys.platform == "win32" and verbose:

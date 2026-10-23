@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shutil
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -49,7 +49,7 @@ def _validate_name(name: str) -> str:
         or "\\" in name
         or any(ord(char) < 32 for char in name)
     ):
-        raise ProjectInitError("项目名必须是安全的单层目录名")
+        raise ProjectInitError("项目名必须是安全的单层目录名\n👉 修复建议: 去掉 / \\ 与 .. ；放进子目录用 --path。")
     return name
 
 
@@ -72,14 +72,14 @@ def _validate_date(value: str | None) -> str:
     try:
         datetime.strptime(value, "%Y%m%d")
     except (TypeError, ValueError) as error:
-        raise ProjectInitError("开始日期必须使用 YYYYMMDD") from error
+        raise ProjectInitError("开始日期必须使用 YYYYMMDD\n👉 修复建议: 例如 --start 20261022。") from error
     return value
 
 
 def _validate_dashboard_project_id(value: str) -> str:
     value = value.strip() or "未关联"
     if value != "未关联" and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", value):
-        raise ProjectInitError("看板项目 ID 格式无效")
+        raise ProjectInitError("看板项目 ID 格式无效\n👉 修复建议: 只用小写字母、数字、- 和 _，以字母或数字开头，最长 64 位。")
     return value
 
 
@@ -88,7 +88,7 @@ def _render(path: Path, values: dict[str, str]) -> str:
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", value)
     if "{{" in text or "}}" in text:
-        raise ProjectInitError(f"模板含未替换变量: {path}")
+        raise ProjectInitError(f"模板含未替换变量: {path}\n👉 修复建议: 补齐模板占位符对应的参数，或修正模板。")
     return text
 
 
@@ -118,16 +118,16 @@ def init_project(
     templates = templates.expanduser().resolve()
 
     if not workspace.is_dir():
-        raise ProjectInitError(f"工作区不存在或不是目录: {workspace}")
+        raise ProjectInitError(f"工作区不存在或不是目录: {workspace}\n👉 修复建议: 在工作区根目录执行，或核对工作区路径。")
     if not templates.is_dir():
-        raise ProjectInitError(f"模板目录不存在: {templates}")
+        raise ProjectInitError(f"模板目录不存在: {templates}\n👉 修复建议: 运行 python3 .entropaxis/tools/bootstrap.py 恢复控制面。")
 
     rel_dir = f"{path}/{name}" if path else name
     if path and not (workspace / path).is_dir():
-        raise ProjectInitError(f"父目录不存在，先建父项目或修正 --path: {workspace / path}")
+        raise ProjectInitError(f"父目录不存在: {workspace / path}\n👉 修复建议: 先建父项目，或修正 --path。")
     target = workspace / rel_dir
     if target.exists():
-        raise ProjectInitError(f"项目目录已存在，拒绝覆盖: {target}")
+        raise ProjectInitError(f"项目目录已存在，拒绝覆盖: {target}\n👉 修复建议: 换一个项目名；已有目录只需登记时用 scan_workspace.py --apply --select <相对目录>。")
 
     # 动态计算从项目目录到工作区根的相对深度
     depth = len(Path(rel_dir).parts)
@@ -182,8 +182,8 @@ def _rollback(target: Path, exc: Exception) -> None:
     try:
         shutil.rmtree(target)
     except OSError as cleanup_exc:
-        raise ProjectInitError(f"登记失败且清理失败，请手动删除: {target}（{cleanup_exc}）") from exc
-    raise ProjectInitError(f"注册表登记失败，已删除新建目录: {target}") from exc
+        raise ProjectInitError(f"登记失败且清理失败: {target}（{cleanup_exc}）\n👉 修复建议: 手动删除该目录后重试。") from exc
+    raise ProjectInitError(f"注册表登记失败，已删除新建目录: {target}\n👉 修复建议: 检查 registry.yaml 是否可写、格式是否合法后重试。") from exc
 
 
 def _register_with_compensation(
@@ -267,7 +267,6 @@ def _parser() -> argparse.ArgumentParser:
         "--path",
         help="父目录相对路径（如 04A/05B）；嵌套布局才需要，平铺布局省略",
     )
-    parser.add_argument("--json", action="store_true", help="以 JSON 输出目标路径与告警")
     return parser
 
 
@@ -295,10 +294,8 @@ def main() -> None:
             warnings=warnings,
         )
     except ProjectInitError as error:
-        parser.error(str(error))
-    if args.json:
-        print(json.dumps({"target": str(target), "warnings": warnings}, ensure_ascii=False))
-        return
+        print(f"❌ {error}", file=sys.stderr)
+        raise SystemExit(2)
     print(target)
     for warning in warnings:
         print(f"⚠️ {warning}")

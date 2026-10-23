@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import json
 import os
 import re
 import subprocess
@@ -334,20 +333,66 @@ def format_markdown(data: dict[str, Any], by: str = "project") -> str:
     if not items:
         lines.append("当前时间段内无登记工时。")
         return "\n".join(lines)
+    if by == "stage":
+        stage_groups: dict[str, list[dict[str, Any]]] = {}
+        for it in items:
+            st = it.get("stage") or "misc"
+            stage_groups.setdefault(st, []).append(it)
 
-    lines.append("| 项目 | Task-ID | 主题 / 阶段 | 工时(h) | 来源 | 说明 | 登记人 |")
-    lines.append("|---|---|---|---|---|---|---|")
+        lines.append("| 阶段 | 工时(h) | 占比 | 包含记录数 | 涉及任务 |")
+        lines.append("|---|---|---|---|---|")
+        for st in sorted(stage_groups.keys()):
+            st_items = stage_groups[st]
+            st_spent = round(sum(i["spent"] for i in st_items), 2)
+            pct = f"{st_spent / data['total_hours'] * 100:.1f}%" if data["total_hours"] else "0.0%"
+            tasks = "、".join(sorted({f"`{i['task_id']}`" for i in st_items if i.get("task_id")}))
+            lines.append(f"| `{st}` | **{st_spent}** | {pct} | {len(st_items)} | {tasks} |")
+        lines.append(f"| **合计** | **{data['total_hours']}** | 100.0% | {len(items)} | |")
+    elif by == "task":
+        task_groups: dict[str, list[dict[str, Any]]] = {}
+        for it in items:
+            tid = it.get("task_id") or "未关联"
+            task_groups.setdefault(tid, []).append(it)
 
-    # 排序：项目、日期
-    sorted_items = sorted(items, key=lambda x: (x["project"], x["task_id"], x["date"]))
-    for it in sorted_items:
-        src_tag = "worklog" if it["source"] == "worklog" else "⚠️ 孤儿Trailer"
-        lines.append(
-            f"| `{it['project']}` | `{it['task_id']}` | {it['topic']} ({it['stage']}) | "
-            f"{it['spent']} | {src_tag} | {it['summary']} | {it['operator']} |"
-        )
-    lines.append(f"| **合计** | | | **{data['total_hours']}** | | | |")
+        lines.append("| Task-ID | 主题 | 阶段分布 | 工时(h) | 占比 |")
+        lines.append("|---|---|---|---|---|")
+        for tid in sorted(task_groups.keys()):
+            t_items = task_groups[tid]
+            t_spent = round(sum(i["spent"] for i in t_items), 2)
+            pct = f"{t_spent / data['total_hours'] * 100:.1f}%" if data["total_hours"] else "0.0%"
+            topic = t_items[0].get("topic", "")
+            stages_summary = " · ".join(f"{s}:{round(sum(x['spent'] for x in t_items if x.get('stage') == s), 2)}h"
+                                         for s in sorted({x.get("stage", "misc") for x in t_items}))
+            lines.append(f"| `{tid}` | {topic} | {stages_summary} | **{t_spent}** | {pct} |")
+        lines.append(f"| **合计** | | | **{data['total_hours']}** | 100.0% |")
+    elif by == "day":
+        day_groups: dict[str, list[dict[str, Any]]] = {}
+        for it in items:
+            day = it.get("date") or "未知"
+            day_groups.setdefault(day, []).append(it)
 
+        lines.append("| 日期 | 工时(h) | 占比 | 阶段分布 | 涉及任务 |")
+        lines.append("|---|---|---|---|---|")
+        for day in sorted(day_groups.keys()):
+            d_items = day_groups[day]
+            d_spent = round(sum(i["spent"] for i in d_items), 2)
+            pct = f"{d_spent / data['total_hours'] * 100:.1f}%" if data["total_hours"] else "0.0%"
+            stages_summary = " · ".join(f"{s}:{round(sum(x['spent'] for x in d_items if x.get('stage') == s), 2)}h"
+                                         for s in sorted({x.get("stage", "misc") for x in d_items}))
+            tasks = "、".join(sorted({f"`{i['task_id']}`" for i in d_items if i.get("task_id")}))
+            lines.append(f"| `{day}` | **{d_spent}** | {pct} | {stages_summary} | {tasks} |")
+        lines.append(f"| **合计** | **{data['total_hours']}** | 100.0% | | |")
+    else:
+        lines.append("| 项目 | Task-ID | 主题 / 阶段 | 工时(h) | 来源 | 说明 | 登记人 |")
+        lines.append("|---|---|---|---|---|---|---|")
+        sorted_items = sorted(items, key=lambda x: (x["project"], x["task_id"], x["date"]))
+        for it in sorted_items:
+            src_tag = "worklog" if it["source"] == "worklog" else "⚠️ 孤儿Trailer"
+            lines.append(
+                f"| `{it['project']}` | `{it['task_id']}` | {it['topic']} ({it['stage']}) | "
+                f"{it['spent']} | {src_tag} | {it['summary']} | {it['operator']} |"
+            )
+        lines.append(f"| **合计** | | | **{data['total_hours']}** | | | |")
     if data.get("warnings"):
         lines.append("\n**⚠️ 审计告警区**:")
         for w in data["warnings"]:
@@ -362,8 +407,7 @@ def main() -> int:
     parser.add_argument("--until", default=dt.date.today().isoformat(), help="统计截止日期 YYYY-MM-DD（缺省今天）")
     parser.add_argument("--project", help="指定项目 ID 过滤")
     parser.add_argument("--operator", help="指定登记人过滤")
-    parser.add_argument("--by", choices=["project", "task", "day"], default="project", help="聚合维度")
-    parser.add_argument("--format", choices=["md", "json"], default="md", help="输出格式")
+    parser.add_argument("--by", choices=["project", "task", "day", "stage"], default="project", help="聚合维度")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="工作区根目录")
     args = parser.parse_args()
 
@@ -376,10 +420,7 @@ def main() -> int:
         operator_filter=args.operator,
     )
 
-    if args.format == "json":
-        print(json.dumps(data, ensure_ascii=False, indent=2))
-    else:
-        print(format_markdown(data, by=args.by))
+    print(format_markdown(data, by=args.by))
     return 0
 
 

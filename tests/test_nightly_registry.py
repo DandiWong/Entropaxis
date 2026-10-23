@@ -3,7 +3,8 @@
 实例数据落在 data/templates/nightly.yaml（merge-only），测试全部在临时工作区里跑，
 不碰真实实例文件；launchd 状态探测用假 HOME 隔离，不断言本机真实 job。
 """
-import json
+import io
+from contextlib import redirect_stdout
 import os
 import shutil
 import subprocess
@@ -23,7 +24,7 @@ import nightly_registry as nr  # noqa: E402
 def _ns(**kw):
     base = dict(id=None, project=None, label=None, hour=2, minute=0, weekday=None,
                 carrier="launchd", repo=None, commands=None, report_dir=None,
-                note=None, disabled=False, enable=True, json=False, root=None)
+                note=None, disabled=False, enable=True, root=None)
     base.update(kw)
     return nr.argparse.Namespace(**base)
 
@@ -54,7 +55,10 @@ class NightlyRegistryTests(unittest.TestCase):
                    label=kw.pop("label", "com.org.a.nightly"),
                    commands=kw.pop("commands", ["scripts/test.sh"]),
                    root=self.root, **kw)
-        self.assertEqual(nr.add(self.root, args), 0)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            res = nr.add(self.root, args)
+        self.assertEqual(res, 0)
 
     # ── 正常路径 ──────────────────────────────────────────────────────────
     def test_add_and_list(self):
@@ -81,14 +85,19 @@ class NightlyRegistryTests(unittest.TestCase):
 
     def test_enable_disable_toggle(self):
         self._add()
-        self.assertEqual(nr.set_enabled(self.root, _ns(id="a-e2e", enable=False)), 0)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(nr.set_enabled(self.root, _ns(id="a-e2e", enable=False)), 0)
         self.assertFalse(nr.load(self.root)["jobs"][0]["enabled"])
-        self.assertEqual(nr.set_enabled(self.root, _ns(id="a-e2e", enable=True)), 0)
+        with redirect_stdout(buf):
+            self.assertEqual(nr.set_enabled(self.root, _ns(id="a-e2e", enable=True)), 0)
         self.assertTrue(nr.load(self.root)["jobs"][0]["enabled"])
 
     def test_remove_drops_entry(self):
         self._add()
-        self.assertEqual(nr.remove(self.root, _ns(id="a-e2e")), 0)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(nr.remove(self.root, _ns(id="a-e2e")), 0)
         self.assertEqual(nr.load(self.root)["jobs"], [])
 
     def test_add_requires_repo_when_project_has_no_code(self):
@@ -143,7 +152,7 @@ class NightlyRegistryTests(unittest.TestCase):
         with mock.patch.object(nr, "PLIST_DIR", self.root / "LaunchAgents"), \
              mock.patch("subprocess.run") as run:
             run.return_value = subprocess.CompletedProcess([], 1, "", "")
-            rows = json.loads(_capture(nr.status, self.root, True))
+            rows = nr.status_rows(self.root)
         self.assertEqual(len(rows), 1)
         self.assertIsNone(rows[0]["plist"])
         self.assertFalse(rows[0]["loaded"])
@@ -161,7 +170,7 @@ class NightlyRegistryTests(unittest.TestCase):
         with mock.patch.object(nr, "PLIST_DIR", plist_dir), \
              mock.patch("subprocess.run") as run:
             run.return_value = subprocess.CompletedProcess([], 0, "state = running", "")
-            rows = json.loads(_capture(nr.status, self.root, True))
+            rows = nr.status_rows(self.root)
         self.assertTrue(rows[0]["loaded"])
         self.assertEqual(rows[0]["latest_report"], "20261012_nightly_proj-a.md")
 
@@ -173,7 +182,7 @@ class NightlyRegistryTests(unittest.TestCase):
         with mock.patch.object(nr, "PLIST_DIR", plist_dir), \
              mock.patch("subprocess.run") as run:
             run.return_value = subprocess.CompletedProcess([], 113, "", "Could not find service")
-            rows = json.loads(_capture(nr.status, self.root, True))
+            rows = nr.status_rows(self.root)
         self.assertFalse(rows[0]["loaded"], "plist 在但 launchctl 报错不得算生效")
 
     # ── 实例数据契约 ─────────────────────────────────────────────────────
@@ -202,14 +211,6 @@ class NightlyRegistryTests(unittest.TestCase):
                 pass
         self.assertIn("无 nightly 作业", buf.getvalue())
 
-
-def _capture(fn, root, as_json):
-    import io
-    from contextlib import redirect_stdout
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        fn(root, as_json)
-    return buf.getvalue()
 
 
 if __name__ == "__main__":

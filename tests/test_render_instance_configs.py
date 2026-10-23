@@ -69,7 +69,7 @@ class RenderInstanceConfigsTests(TestCase):
         from tools import validate_schema as vs
         roles = yaml.safe_load((self.data_dir / "templates" / "roles.yaml").read_text(encoding="utf-8"))
         self.assertEqual(vs.validate(roles, vs.load_schema("roles_config")), [])
-        self.assertTrue(all(r["profile"] is None for r in roles["roles"].values()))
+        self.assertTrue(all("profile" not in r for r in roles["roles"].values()))
 
         # AGENTS.template.md 不在白名单 → 不应被渲染
         agents = self.data_dir / "templates" / "AGENTS.md"

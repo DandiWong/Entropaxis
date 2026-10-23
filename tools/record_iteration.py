@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import json
 import re
 import sys
 import tempfile
@@ -275,13 +274,12 @@ def main() -> int:
     parser.add_argument("--changelog", help="显式指定 Changelog.md 路径")
     parser.add_argument("--tasks", help="显式指定 Tasks.md 路径")
     parser.add_argument("--dry-run", action="store_true", help="演练模式，不产生物理写入")
-    parser.add_argument("--json", action="store_true", help="以结构化 JSON 输出")
     args = parser.parse_args()
 
     if not args.add and not args.mark_done and args.time is None and not args.from_segments:
-        parser.error("至少指定 --add、--mark-done、--time 或 --from-segments 之一")
+        parser.error("❌ 缺少动作参数\n👉 修复建议: 至少指定 --add、--mark-done、--time 或 --from-segments 之一。")
     if args.time is not None and args.from_segments:
-        parser.error("--time 与 --from-segments 互斥：有任务段的任务禁止使用 --time")
+        parser.error("❌ --time 与 --from-segments 互斥\n👉 修复建议: 有任务段的任务只用 --from-segments，去掉 --time。")
     root = args.root.expanduser().resolve()
     changes: list[dict] = []
     pending: list[tuple[Path, str]] = []
@@ -375,15 +373,10 @@ def main() -> int:
             for path, content in pending:
                 atomic_write(path, content)
 
-        result = {"ok": True, "task_id": args.task_id, "dry_run": args.dry_run,
-                  "worklog_refs": worklog_refs, "changes": changes}
-        if args.json:
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-        else:
-            prefix = "（演练）" if args.dry_run else ""
-            done = sum(1 for c in changes if c["changed"])
-            print(f"✅ {prefix}{args.task_id}: {done}/{len(changes)} 处写入 · "
-                  + " · ".join(c["note"] for c in changes))
+        prefix = "（演练）" if args.dry_run else ""
+        done = sum(1 for c in changes if c["changed"])
+        print(f"✅ {prefix}{args.task_id}: {done}/{len(changes)} 处写入 · "
+              + " · ".join(c["note"] for c in changes))
         return 0
     except IterationError as err:
         print(str(err), file=sys.stderr)

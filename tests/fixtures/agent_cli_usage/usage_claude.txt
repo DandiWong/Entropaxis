@@ -1,0 +1,1 @@
+{"type":"result","result":"test","session_id":"claude-sess-1234","total_cost_usd":0.015,"modelUsage":{"claude-3-7-sonnet-20250219":{"inputTokens":100,"outputTokens":50,"cacheReadInputTokens":200,"cacheCreationInputTokens":30,"costUSD":0.015}}}

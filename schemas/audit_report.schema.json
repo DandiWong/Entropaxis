@@ -105,6 +105,15 @@
         },
         "receipt_id": {
           "$ref": "front_matter.schema.json#/properties/receipt_id"
+        },
+        "effort": {
+          "$ref": "front_matter.schema.json#/properties/effort"
+        },
+        "duration_s": {
+          "$ref": "front_matter.schema.json#/properties/duration_s"
+        },
+        "completed_at": {
+          "$ref": "front_matter.schema.json#/properties/completed_at"
         }
       },
       "conditional_required": [

@@ -1,5 +1,4 @@
 import hashlib
-import json
 import subprocess
 import sys
 import tempfile
@@ -135,9 +134,9 @@ class UpdateCapsuleTests(unittest.TestCase):
         self.assertTrue(any("[价值回收到期]" in item for item in issues), issues)
 
     def test_cli(self) -> None:
-        ok = subprocess.run([sys.executable, str(TOOL), str(self.cap), "--json"], capture_output=True, text=True)
+        ok = subprocess.run([sys.executable, str(TOOL), str(self.cap)], capture_output=True, text=True)
         self.assertEqual(ok.returncode, 0, ok.stderr)
-        self.assertEqual(json.loads(ok.stdout)["to"], "draft")
+        self.assertIn("draft", ok.stdout)
         bad = subprocess.run([sys.executable, str(TOOL), str(self.cap / "nope")], capture_output=True, text=True)
         self.assertEqual(bad.returncode, 1)
         self.assertIn("👉", bad.stderr)

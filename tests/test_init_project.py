@@ -128,6 +128,17 @@ class InitProjectTests(TestCase):
             self.assertFalse((workspace / "试点项目").exists())
             self.assertEqual(registry.read_bytes(), before)
 
+    def test_cli_error_is_action_oriented(self) -> None:
+        """《工具设计》3.2：CLI 报错给「❌ 原因 + 👉 修复建议」，退出码 2。"""
+        import subprocess
+        import sys
+        for tool in ("init_project.py", "init_app.py"):
+            proc = subprocess.run([sys.executable, str(Path(__file__).resolve().parent.parent / "tools" / tool), "../bad"],
+                                  capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertIn("❌", proc.stderr)
+            self.assertIn("👉", proc.stderr)
+
     def test_register_false_removes_target(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)

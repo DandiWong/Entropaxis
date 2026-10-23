@@ -153,6 +153,35 @@ class LintCoverageTests(unittest.TestCase):
         self.write(f"{base}/tools/find_only.py", 'cmd = ["find", root]\n# Windows 不支持 find\n')
         self.assertEqual(lint.check_platform_fallback(self.root), [])
 
+    def test_json_flag_without_program_reader_is_flagged(self):
+        base = paths.SYSTEM_DIRNAME
+        self.write(f"{base}/tools/emit.py", 'parser.add_argument("--json", action="store_true")\n')
+        self.write(f"{base}/tools/quiet.py", 'parser.add_argument("--limit")\n')
+        issues = lint.check_json_readers(self.root)
+        self.assertEqual(len(issues), 1, issues)
+        self.assertIn("emit.py", issues[0])
+        self.write(".claude/skills/demo/scripts/run.py", 'argv = [sys.executable, "tools/emit.py", "--json"]\n')
+        self.assertEqual(lint.check_json_readers(self.root), [])
+
+    def test_external_command_without_missing_guard_is_flagged(self):
+        base = paths.SYSTEM_DIRNAME
+        self.write(f"{base}/tools/gitty.py", 'import subprocess\nsubprocess.run(["git", "status"])\nx = d["key"]\n')
+        issues = lint.check_platform_fallback(self.root)
+        self.assertEqual(len(issues), 1, issues)
+        self.assertIn("命令缺失未处理", issues[0])
+        self.write(f"{base}/tools/gitty.py", 'import subprocess\ntry:\n    subprocess.run(["git", "status"])\nexcept FileNotFoundError:\n    pass\n')
+        self.assertEqual(lint.check_platform_fallback(self.root), [])
+
+    def test_platform_branch_without_three_platform_tests_is_flagged(self):
+        base = paths.SYSTEM_DIRNAME
+        self.write(f"{base}/tools/plat.py", 'import sys\nif sys.platform == "darwin":\n    pass\n')
+        self.write(f"{base}/tests/test_plat.py", 'import plat\n# darwin\n')
+        issues = lint.check_platform_fallback(self.root)
+        self.assertEqual(len(issues), 1, issues)
+        self.assertIn("win32/linux", issues[0])
+        self.write(f"{base}/tests/test_plat.py", 'import plat\n# darwin win32 linux\n')
+        self.assertEqual(lint.check_platform_fallback(self.root), [])
+
     def test_tool_without_error_test_is_flagged(self):
         base = paths.SYSTEM_DIRNAME
         self.write(f"{base}/tools/lonely.py", "def main():\n    return 1\n")

@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import random
 import re
 import sys
@@ -38,13 +37,10 @@ def pick_tip(tips_path: Path = TIPS_PATH) -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="随机取一条工作空间 Tip 原文（无可用条目时静默退出）")
-    parser.add_argument("--json", action="store_true", help="以结构化 JSON 输出")
-    args = parser.parse_args()
+    parser.parse_args()
 
     tip = pick_tip()
-    if args.json:
-        print(json.dumps({"tip": tip}, ensure_ascii=False))
-    elif tip:
+    if tip:
         print(tip)
     return 0
 

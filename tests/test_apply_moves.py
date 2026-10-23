@@ -1,5 +1,6 @@
 import os
 import sys
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
@@ -465,3 +466,79 @@ class ApplyMovesTests(TestCase):
             self.assertEqual(apply_moves.run(manifest, root=root, apply=True), 0)
             self.assertEqual(apply_moves.run(manifest, root=root, apply=True, undo=True), 0)
             self.assertTrue((root / "a").exists())
+
+
+class PlatformBranchTests(TestCase):
+    """三平台分支（体检第 36 项）：darwin 用 fcntl F_GETPATH + renameatx_np，
+    linux（sys.platform="linux"）用 /proc/self/fd + renameat2，win32 无原子原语整单拒绝。"""
+
+    def test_platform_support_matrix(self) -> None:
+        for platform, expected in (("darwin", True), ("linux", True), ("win32", False)):
+            with self.subTest(platform=platform), mock.patch("sys.platform", platform):
+                self.assertEqual(apply_moves.platform_supported(), expected)
+
+    def test_win32_rejects_whole_batch_without_touching_files(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "a.txt").write_text("甲", encoding="utf-8")
+            manifest = _write_manifest(root, [("a.txt", "b.txt")])
+
+            with mock.patch("sys.platform", "win32"):
+                self.assertEqual(apply_moves.run(manifest, root=root, apply=True), apply_moves.EXIT_PRECHECK)
+
+            self.assertTrue((root / "a.txt").is_file())
+            self.assertFalse((root / "b.txt").exists())
+            self.assertEqual(_log_text(manifest), "")
+
+    @unittest.skipUnless(sys.platform == "darwin", "fcntl F_GETPATH 仅 darwin 内核提供")
+    def test_fd_path_darwin_reads_real_path_via_fcntl(self) -> None:
+        # F_GETPATH 是 darwin 内核 fcntl，只能在真 darwin 上执行；linux 分支另有独立模拟
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                with mock.patch("sys.platform", "darwin"):
+                    self.assertEqual(apply_moves._fd_path(fd), root)
+            finally:
+                os.close(fd)
+
+    def test_fd_path_linux_reads_proc_self_fd(self) -> None:
+        recorded = {}
+
+        def fake_readlink(link):
+            recorded["link"] = link
+            return "/tmp/elsewhere"
+
+        with mock.patch("sys.platform", "linux"), \
+                mock.patch.object(apply_moves.os, "readlink", fake_readlink):
+            self.assertEqual(apply_moves._fd_path(7), Path("/tmp/elsewhere"))
+        self.assertEqual(recorded["link"], "/proc/self/fd/7")
+
+    def test_rename_noreplace_picks_platform_syscall(self) -> None:
+        class FakeFunc:
+            def __init__(self):
+                self.calls = []
+
+            def __call__(self, *args):
+                self.calls.append(args)
+                return 0
+
+        class FakeLibc:
+            def __init__(self):
+                self.renameat2 = FakeFunc()
+                self.renameatx_np = FakeFunc()
+
+        fake = FakeLibc()
+        with mock.patch.object(apply_moves.ctypes, "CDLL", mock.Mock(return_value=fake)):
+            with mock.patch("sys.platform", "darwin"):
+                apply_moves._rename_noreplace(1, "s", 2, "d")
+            self.assertEqual(
+                fake.renameatx_np.calls, [(1, b"s", 2, b"d", apply_moves._RENAME_EXCL_DARWIN)]
+            )
+            self.assertEqual(fake.renameat2.calls, [])
+            with mock.patch("sys.platform", "linux"):
+                apply_moves._rename_noreplace(1, "s", 2, "d")
+            self.assertEqual(
+                fake.renameat2.calls, [(1, b"s", 2, b"d", apply_moves._RENAME_NOREPLACE_LINUX)]
+            )
+            self.assertEqual(len(fake.renameatx_np.calls), 1)

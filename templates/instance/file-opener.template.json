@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "description": "本机文件打开器与应用程序关联配置模板 (File Opener Association Template)",
+  "description": "本机文件打开器与应用程序关联配置模板 (File Opener Association Template)。bootstrap 渲染出的实例配置按平台分区存储于 platforms.<sys.platform>.associations（darwin/win32/linux），只生成与合并当前平台分区，其他平台分区随工作区搬运原样保留",
   "version": "1.0.0",
   "default_mode": "auto",
   "formats": {

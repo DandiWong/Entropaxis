@@ -3,17 +3,17 @@ _meta:
   managed_by: bootstrap.py render_instance_configs（仅缺失时渲染）+ setup_agents.py --set-role + 人工
   policy: merge-only
   schema: .entropaxis/schemas/roles_config.schema.json
-  note: 角色承载第 3 级默认（语义见 rules/角色协作.md）。preferences 按顺序引用 agent/model 配对，profile 为当前选中偏好；保留既有选择不代表本次已验证真实模型可用性。真实检测须另获用户授权；模型 provider 前缀原样保留。超时三层解析：profile.timeout_s > roles.<角色>.timeout_s > default_timeout_s，故同一 agent/model 配对不同角色可各自设超时。超时决策依据：2026-10-06 用户指令将 Builder 放宽至 3600s；2026-09-22 用户指令要求审计角色走 omp（异厂独立性），硬门禁 ≤1800s 约束见 rules/角色协作.md。profile 标识一经被胶囊档案引用即不可改名或删除。
+  note: 角色承载第 3 级默认（语义见 rules/角色协作.md）。preferences 按顺序引用 agent/model 配对，是唯一调节项：调度总从第 1 个起、失败依次顺延，空列表即声明会话内承载；工具只读不写本文件。真实检测须另获用户授权；模型 provider 前缀原样保留。超时三层解析：profile.timeout_s > roles.<角色>.timeout_s > default_timeout_s，故同一 agent/model 配对不同角色可各自设超时。超时决策依据：2026-10-21 用户指令将 Architecture/Builder/Reviewer 统一放宽至 3600s，硬门禁上限随之按角色化为 Reviewer 3600s / Maintainer 1800s；2026-10-06 用户指令将 Builder 放宽至 3600s；2026-09-22 用户指令要求审计角色走 omp（异厂独立性），硬门禁按角色设上限，约束见 rules/角色协作.md。profile 标识一经被胶囊档案引用即不可改名或删除。
 default_dispatch_mode: strict
 default_timeout_s: 900
 roles:
-  Architecture: {duty: 顶层架构/技术与业务方案/项目计划, timeout_s: 900, preferences: [architecture-1], profile: null}
-  Researcher: {duty: 调研（强制联网）/文献综述/竞品查新/专题学习, timeout_s: 900, preferences: [researcher-1, researcher-2], profile: null}
-  Designer: {duty: 视觉美学/UI交互原型/排版呈现/PPT配图, timeout_s: 900, preferences: [designer-1], profile: null}
-  Builder: {duty: 方案实施/核心编码/重构, timeout_s: 3600, preferences: [builder-1, builder-2], profile: null}
-  Reviewer: {duty: 方案审计/对抗评审/架构合规, timeout_s: 1800, preferences: [reviewer-1, reviewer-2, reviewer-3], profile: null}
-  Maintainer: {duty: 全流程验收/守门落盘/证据核验, timeout_s: 900, preferences: [maintainer-1], profile: null}
-  Reporter: {duty: 文稿与报告：汇报/周报/纪要/论文专利/翻译/数据分析, timeout_s: 900, preferences: [reporter-1, reporter-2], profile: null}
+  Architecture: {duty: 顶层架构/技术与业务方案/项目计划, timeout_s: 900, preferences: [architecture-1]}
+  Researcher: {duty: 调研（强制联网）/文献综述/竞品查新/专题学习, timeout_s: 900, preferences: [researcher-1, researcher-2]}
+  Designer: {duty: 视觉美学/UI交互原型/排版呈现/PPT配图, timeout_s: 900, preferences: [designer-1]}
+  Builder: {duty: 方案实施/核心编码/重构, timeout_s: 3600, preferences: [builder-1, builder-2]}
+  Reviewer: {duty: 方案审计/对抗评审/架构合规, timeout_s: 1800, preferences: [reviewer-1, reviewer-2, reviewer-3]}
+  Maintainer: {duty: 全流程验收/守门落盘/证据核验, timeout_s: 900, preferences: [maintainer-1]}
+  Reporter: {duty: 文稿与报告：汇报/周报/纪要/论文专利/翻译/数据分析, timeout_s: 900, preferences: [reporter-1, reporter-2]}
 command_profiles:
   architecture-1: {agent: claude, model: claude-opus-5.5}
   researcher-1: {agent: omp, model: google-antigravity/gemini-3.8-flash}

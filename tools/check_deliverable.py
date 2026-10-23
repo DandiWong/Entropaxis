@@ -8,7 +8,6 @@ PDF 只核结构与可inflate的文本流，不渲染页面。
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import xml.etree.ElementTree as ET
 import zipfile
@@ -160,13 +159,9 @@ def _render(result: dict) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="检查 Office/PDF 能否解析，以及是否残留占位符")
     parser.add_argument("paths", nargs="+", type=Path, help="一个或多个 .docx/.pptx/.xlsx/.pdf")
-    parser.add_argument("--json", action="store_true", help="以 JSON 输出")
     args = parser.parse_args(argv)
     result = check_paths(args.paths)
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False))
-    else:
-        print(_render(result))
+    print(_render(result))
     return 0 if result["ok"] else 1
 
 

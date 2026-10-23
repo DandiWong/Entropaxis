@@ -20,16 +20,27 @@ WORKSPACE_ROOT = paths.WORKSPACE_ROOT
 DEFAULT_CONFIG_PATH = paths.DATA_DIR / "templates" / "file-opener.json"
 
 
-def _load_config(path: Path) -> tuple[dict, str]:
+MISSING_PARTITION_REASON = "本平台未配置打开器，运行 bootstrap.py 生成"
+
+
+def _load_config(path: Path, platform: str) -> tuple[dict, str]:
+    """只读当前平台分区；分区缺失时返回空映射，由调用方降级为系统默认程序并留痕。"""
     if not path.is_file():
         return {}, f"打开器配置不存在: {path}"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         return {}, f"打开器配置无法读取: {exc}"
-    if not isinstance(data.get("associations"), dict):
-        return {}, f"打开器配置缺少 associations: {path}"
-    return data, ""
+    if isinstance(data.get("platforms"), dict):
+        partition = data["platforms"].get(platform)
+        if isinstance(partition, dict) and isinstance(partition.get("associations"), dict):
+            return partition, ""
+        return {}, MISSING_PARTITION_REASON
+    # 兼容旧版单平台格式（顶层 associations）：仅当其 platform 字段（缺失视为当前平台）
+    # 与本机一致时才生效，避免工作区跨平台搬运后把他平台的命令当本平台配置执行
+    if isinstance(data.get("associations"), dict) and data.get("platform", platform) == platform:
+        return data, ""
+    return {}, MISSING_PARTITION_REASON
 
 
 def _association_for(path: Path, config: dict) -> dict | None:
@@ -402,7 +413,7 @@ def open_paths(
     on_deliver: bool = False,
 ) -> list[dict]:
     """Open every path independently; return one observable result per path."""
-    config, config_reason = _load_config(Path(config_path))
+    config, config_reason = _load_config(Path(config_path), platform)
     return [_open_path(path, config, config_reason, platform, runner, closer=closer, on_deliver=on_deliver) for path in paths]
 
 
@@ -412,7 +423,6 @@ def main() -> int:
     )
     parser.add_argument("paths", nargs="+", help="要打开的文件或目录，可一次传入多个")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="打开器配置路径")
-    parser.add_argument("--json", action="store_true", help="输出机器可读结果")
     parser.add_argument(
         "--on-deliver",
         action="store_true",
@@ -421,19 +431,17 @@ def main() -> int:
     args = parser.parse_args()
 
     results = open_paths(args.paths, config_path=args.config, on_deliver=args.on_deliver)
-    if args.json:
-        print(json.dumps(results, ensure_ascii=False, indent=2))
-    else:
-        for result in results:
-            reload_hint = "（已刷新重新加载）" if result.get("reloaded") else ""
-            if result.get("skipped"):
-                print(f"[SKIP] {result['path']}（{result['reason']}）")
-            elif result["ok"] and result["used_fallback"]:
-                print(f"[WARN] 已使用系统默认程序打开 {result['path']}{reload_hint}；原因: {result['reason']}")
-            elif result["ok"]:
-                print(f"[OK] 已使用 {result['selected_app']} 打开 {result['path']}{reload_hint}")
-            else:
-                print(f"[ERROR] 无法打开 {result['path']}；原因: {result['reason']}", file=sys.stderr)
+    for result in results:
+        reload_hint = "（已刷新重新加载）" if result.get("reloaded") else ""
+        if result.get("skipped"):
+            print(f"[SKIP] {result['path']}（{result['reason']}）")
+        elif result["ok"] and result["used_fallback"]:
+            print(f"[WARN] 已使用系统默认程序打开 {result['path']}{reload_hint}；原因: {result['reason']}")
+        elif result["ok"]:
+            print(f"[OK] 已使用 {result['selected_app']} 打开 {result['path']}{reload_hint}")
+        else:
+            print(f"❌ 无法打开 {result['path']}；原因: {result['reason']}\n"
+                  "👉 修复建议: 核对路径；打开程序配置在 .entropaxis/data/templates/file-opener.json。", file=sys.stderr)
     return 0 if all(result["ok"] for result in results) else 1
 
 

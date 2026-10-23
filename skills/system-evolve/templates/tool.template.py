@@ -21,7 +21,6 @@ def run_{{TOOL_NAME}}(
     target_path: str,
     *,
     dry_run: bool = False,
-    output_json: bool = False,
 ) -> dict:
     """
     核心执行逻辑：
@@ -63,7 +62,7 @@ def main() -> int:
     )
     parser.add_argument("target", help="目标文件或工作目录路径")
     parser.add_argument("--dry-run", action="store_true", help="演练模式，不产生物理写入")
-    parser.add_argument("--json", action="store_true", help="以结构化 JSON 格式输出结果")
+    # 有脚本/CI 解析 stdout 时才加 --json，并在调用方写明（《工具设计》3.3 按读者定输出）
 
     args = parser.parse_args()
 
@@ -71,12 +70,8 @@ def main() -> int:
         res = run_{{TOOL_NAME}}(
             args.target,
             dry_run=args.dry_run,
-            output_json=args.json,
         )
-        if args.json:
-            print(json.dumps(res, ensure_ascii=False, indent=2))
-        else:
-            print(f"✅ {res['message']}: {res['target']}")
+        print(f"✅ {res['message']}: {res['target']}")
         return 0
     except ToolError as err:
         print(str(err), file=sys.stderr)

@@ -10,7 +10,7 @@
   2. 唯一性：id 与 label 全局唯一，冲突即拒，不静默改名；
   3. 原子写入：临时文件 + os.replace；写入后重新解析复核，不符即放弃；
   4. 状态只读探测：status 子命令跑 launchctl 与报告目录，不注册不卸载；
-  5. 默认静默高密度：list 默认单行一作业，--json 给结构化全量。
+  5. 默认静默高密度：list 单行一作业。
 """
 
 from __future__ import annotations
@@ -193,12 +193,9 @@ def set_enabled(root: Path, args: argparse.Namespace) -> int:
     return 0
 
 
-def list_jobs(root: Path, as_json: bool) -> int:
+def list_jobs(root: Path) -> int:
     data = load(root)
     jobs = data.get("jobs") or []
-    if as_json:
-        print(json.dumps(jobs, ensure_ascii=False, indent=2))
-        return 0
     if not jobs:
         print("（无 nightly 作业；用 add 子命令登记）")
         return 0
@@ -215,7 +212,7 @@ def list_jobs(root: Path, as_json: bool) -> int:
     return 0
 
 
-def status(root: Path, as_json: bool) -> int:
+def status_rows(root: Path) -> list[dict]:
     """只读探测：注册表 × 本机 launchd × 最近报告，三方对齐。"""
     data = load(root)
     projects = {p["id"]: p for p in project_registry.load_projects(root)}
@@ -240,9 +237,11 @@ def status(root: Path, as_json: bool) -> int:
             "plist": str(plist) if plist.is_file() else None, "loaded": loaded,
             "repo": repo_rel, "latest_report": latest,
         })
-    if as_json:
-        print(json.dumps(rows, ensure_ascii=False, indent=2))
-        return 0
+    return rows
+
+
+def status(root: Path) -> int:
+    rows = status_rows(root)
     if not rows:
         print("（无 nightly 作业）")
         return 0
@@ -260,8 +259,8 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="工作区根，默认当前目录")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("list", help="列出全部作业（默认静默高密度）").add_argument("--json", action="store_true")
-    sub.add_parser("status", help="只读探测注册表 × launchd × 报告三方状态").add_argument("--json", action="store_true")
+    sub.add_parser("list", help="列出全部作业（默认静默高密度）")
+    sub.add_parser("status", help="只读探测注册表 × launchd × 报告三方状态")
 
     p_add = sub.add_parser("add", help="登记一个作业")
     p_add.add_argument("--id", required=True, help="作业标识，小写连字符")
@@ -299,9 +298,9 @@ def main() -> int:
             args.enable = False
             return set_enabled(root, args)
         if args.cmd == "list":
-            return list_jobs(root, args.json)
+            return list_jobs(root)
         if args.cmd == "status":
-            return status(root, args.json)
+            return status(root)
     except NightlyError as err:
         print(str(err), file=sys.stderr)
         return 1

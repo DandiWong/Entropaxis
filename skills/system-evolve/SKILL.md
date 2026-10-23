@@ -1,9 +1,9 @@
 ---
 name: system-evolve
-description: "v2.1.1. 控制面演进入口：对规则、工具、Skill 做设计级增删改或盘点时，读现场、问答补齐，判定落成 Rule/Tool/Skill 或组合，确认后实现、测试、体检、交付。触发词：新增/修改规则、删掉工具、该做成什么、系统演进、工具化、做成 skill、toolify。错字链接类修正不触发。"
+description: "v2.1.2. 控制面演进入口：对规则、工具、Skill 做设计级增删改或盘点时，读现场、问答补齐，判定落成 Rule/Tool/Skill 或组合，确认后实现、测试、体检、交付。触发词：新增/修改规则、删掉工具、该做成什么、系统演进、工具化、做成 skill、toolify。错字链接类修正不触发。"
 metadata:
   scope: control-plane
-  version: "2.1.1"
+  version: "2.1.2"
 ---
 
 # System Evolve — 判形态 → 落地 → 体检
@@ -112,9 +112,9 @@ metadata:
 
 ### Tool
 
-1. 契约按《工具设计》第 3 节：`动词_名词.py`、argparse、`--json`、`❌ 错误原因` + `👉 修复建议`、默认静默与截断。
+1. 契约按《工具设计》第 3 节：`动词_名词.py`、argparse、按读者定输出（有程序读者才加 `--json`）、`❌ 错误原因` + `👉 修复建议`、默认静默与截断。
 2. 以 `templates/tool.template.py` 为起点写 `.entropaxis/tools/<name>.py`：纯标准库，写入走临时目录后原子替换，不出现业务系统名、本地端点或密钥。
-3. 写 `.entropaxis/tests/test_<name>.py`：覆盖正常路径、非法输入报错、`--json` 输出。
+3. 写 `.entropaxis/tests/test_<name>.py`：覆盖正常路径、非法输入报错；提供 `--json` 时测其结构。
 4. 在调用它的规则或 Skill 写明命令；要往 tips 加提示须先经用户确认。
 
 ### Skill

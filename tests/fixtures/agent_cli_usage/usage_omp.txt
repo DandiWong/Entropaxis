@@ -1,0 +1,4 @@
+{"type":"session","id":"omp-sess-9999","cwd":"/path/to/work"}
+{"type":"message_end","message":{"role":"assistant","model":"claude-3-7-sonnet","usage":{"input":100,"output":50,"cacheRead":300,"cacheWrite":20,"cost":{"total":0.012}}}}
+{"type":"message_end","message":{"role":"assistant","model":"claude-3-7-sonnet","usage":{"input":50,"output":25,"cacheRead":100,"cacheWrite":10,"cost":{"total":0.006}}}}
+{"type":"message_end","message":{"role":"assistant","model":"gpt-4o","usage":{"input":80,"output":40,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.005}}}}

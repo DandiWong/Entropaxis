@@ -8,7 +8,6 @@ agent/model 配对为调用真源；自定义命令及校验命令保留 argv。
 用法:
   # 1. 扫描当前环境已安装的 Agent CLI
   python3 .entropaxis/tools/setup_agents.py --scan
-  python3 .entropaxis/tools/setup_agents.py --scan --json
 
   # 2. 校验 roles.yaml 的 schema 与各角色承载链
   python3 .entropaxis/tools/setup_agents.py --verify
@@ -23,10 +22,10 @@ agent/model 配对为调用真源；自定义命令及校验命令保留 argv。
   # 5. 精确设置指定角色的 CLI 和启动命令
   python3 .entropaxis/tools/setup_agents.py --set-role Reviewer omp "omp --model a/b || claude -p {PROMPT}"
 
-  # 6. 角色清单：完整偏好顺序与当前选中序号
-  python3 .entropaxis/tools/setup_agents.py --list [--json]
+  # 6. 角色清单：完整偏好顺序（默认承载为第 1 偏好）
+  python3 .entropaxis/tools/setup_agents.py --list
 
-  # 7. 局部更新：选中偏好；可用 --preference NUMBER 指定其他位置
+  # 7. 局部更新：缺省第 1 偏好；可用 --preference NUMBER 指定其他位置
   python3 .entropaxis/tools/setup_agents.py --set-model Reviewer openai-codex/gpt-6.1-sol
   python3 .entropaxis/tools/setup_agents.py --set-timeout Builder 3600
   python3 .entropaxis/tools/setup_agents.py --set-duty Researcher "前沿技术选型与实测查新"
@@ -38,8 +37,8 @@ agent/model 配对为调用真源；自定义命令及校验命令保留 argv。
   # 9. 偏好编辑与两阶段检测（第二阶段必须先取得本次用户授权）
   python3 .entropaxis/tools/setup_agents.py --set-preference Researcher 2 pi google-antigravity/gemini-3.8-flash
   python3 .entropaxis/tools/setup_agents.py --move-preference Researcher 2 1
-  python3 .entropaxis/tools/setup_agents.py --detect-preferences --json
-  python3 .entropaxis/tools/setup_agents.py --check-preferences --authorize-model-check --authorization-event '<用户确认>' --json
+  python3 .entropaxis/tools/setup_agents.py --detect-preferences
+  python3 .entropaxis/tools/setup_agents.py --check-preferences --authorize-model-check --authorization-event '<用户确认>'
 """
 
 from __future__ import annotations
@@ -416,7 +415,7 @@ def command_to_argvs(cmd: str) -> list[list[str]]:
 
 def _all_preferences(data: dict[str, Any], role: str) -> list[tuple[str, dict[str, Any]]]:
     try:
-        return role_preferences.preference_profiles(data, role, selected_only=False)
+        return role_preferences.preference_profiles(data, role)
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
         raise ConfigError(str(exc)) from exc
 
@@ -435,7 +434,7 @@ def _profile_model(profile: dict[str, Any]) -> str | None:
 def _profile_references(data: dict[str, Any], name: str) -> int:
     roles = data.get("roles") or {}
     profiles = data.get("command_profiles") or {}
-    role_refs = sum(name == entry.get("profile") or name in (entry.get("preferences") or [])
+    role_refs = sum(name in (entry.get("preferences") or [])
                     for entry in roles.values())
     return role_refs + sum(1 for profile in profiles.values() if profile.get("fallback_profile") == name)
 
@@ -459,10 +458,7 @@ def _gc_profiles(data: dict[str, Any], candidates: list[str]) -> list[str]:
 
 
 def _old_role_profiles(data: dict[str, Any], entry: dict[str, Any]) -> list[str]:
-    names = [*(entry.get("preferences") or [])]
-    if entry.get("profile"):
-        names.extend(name for name, _ in profile_chain(data, entry["profile"]))
-    return list(dict.fromkeys(names))
+    return list(dict.fromkeys(entry.get("preferences") or []))
 
 
 def _raw_profile(old: dict[str, Any] | None, argv: list[str]) -> dict[str, Any]:
@@ -489,13 +485,11 @@ def set_role(data: dict[str, Any], role: str, cli: str, cmd: str) -> None:
     if not ROLE_NAME_RE.match(role):
         raise ConfigError(f"角色名须为英文 PascalCase（如 Reviewer、DataSteward），实得 {role!r}")
     roles, profiles = data["roles"], data["command_profiles"]
-    entry = roles.setdefault(role, {"duty": STANDARD_ROLES.get(role, "业务协作"), "preferences": [], "profile": None})
+    entry = roles.setdefault(role, {"duty": STANDARD_ROLES.get(role, "业务协作"), "preferences": []})
     entry.setdefault("duty", STANDARD_ROLES.get(role, "业务协作"))
     entry.setdefault("preferences", [])
-    entry.setdefault("profile", None)
     old = _old_role_profiles(data, entry)
     if cli == "subagent" or "内置" in cmd or cmd.strip() in ("", "auto", "subagent"):
-        entry["profile"] = None
         entry["preferences"] = []
         _gc_profiles(data, old)
         return
@@ -509,25 +503,20 @@ def set_role(data: dict[str, Any], role: str, cli: str, cmd: str) -> None:
         profiles[name] = _raw_profile(profiles.get(current) if current else None, argv)
         names.append(name)
     entry["preferences"] = names
-    entry["profile"] = names[0]
     role_preferences.migrate_config(data)
     _gc_profiles(data, [name for name in old if name not in names])
 
 
 def role_view(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """人读视图包含完整偏好序列；无选择时绝不把第一项伪装为选中项。"""
+    """人读视图包含完整偏好序列；默认承载即第 1 个偏好，空列表为会话内承载。"""
     view: dict[str, dict[str, Any]] = {}
     for role, entry in (data.get("roles") or {}).items():
         preferences = _all_preferences(data, role)
-        selected = entry.get("profile")
-        selected_number = next((i for i, (name, _) in enumerate(preferences, 1) if name == selected), None)
         commands = [" ".join(shlex.quote(token) for token in _profile_argv(profile)) for _, profile in preferences]
-        selected_profile = (data.get("command_profiles") or {}).get(selected) if selected else None
         view[role] = {
             "duty": entry.get("duty", ""),
-            "profile": selected or "",
-            "selected_preference": selected_number,
-            "cli": Path(_profile_argv(selected_profile)[0]).name if selected_profile else "subagent",
+            "default_preference": 1 if preferences else None,
+            "cli": Path(_profile_argv(preferences[0][1])[0]).name if preferences else "subagent",
             "cmd": " || ".join(commands) if commands else "内置 Subagent 机制 (auto)",
             "preferences": [name for name, _ in preferences],
         }
@@ -568,11 +557,7 @@ def _target_preference(data: dict[str, Any], role: str, number: int | None, acti
     if not preferences:
         raise ConfigError(f"{role} 没有外置偏好，无法{action}\n👉 先 --set-preference 或 --set-role")
     if number is None:
-        selected = entry.get("profile")
-        found = next(((name, profile) for name, profile in preferences if name == selected), None)
-        if found is None:
-            raise ConfigError(f"{role} 当前未选中偏好；请用 --preference NUMBER 明确指定")
-        return found
+        return preferences[0]  # 缺省即默认承载（第 1 个偏好）
     if not 1 <= number <= len(preferences):
         raise ConfigError(f"{role} 偏好序号须为 1~{len(preferences)}，实得 {number}")
     return preferences[number - 1]
@@ -590,8 +575,6 @@ def _editable_preference(data: dict[str, Any], role: str, name: str, profile: di
         copied["argv"] = list(copied["argv"])
     data["command_profiles"][replacement] = copied
     preferences[index] = replacement
-    if entry.get("profile") == name:
-        entry["profile"] = replacement
     return replacement, copied
 
 
@@ -614,8 +597,6 @@ def set_preference(data: dict[str, Any], role: str, number: int, agent: str, mod
     data["command_profiles"][name] = _agent_profile(data["command_profiles"].get(current) if current else None, agent, model)
     if current:
         preferences[number - 1] = name
-        if entry.get("profile") == current:
-            entry["profile"] = name
         _gc_profiles(data, [current] if current != name else [])
     else:
         preferences.append(name)
@@ -644,8 +625,8 @@ def set_timeout(data: dict[str, Any], role: str, seconds: int, preference: int |
     只用于「这条命令就是比该角色其他命令慢」的少数场景。
     """
     role_preferences.migrate_config(data)
-    if role in HARD_GATED_ROLES and seconds > role_preferences.HARD_ROLE_MAX_TIMEOUT_S:
-        raise ConfigError(f"硬门禁角色 {role} 超时须 ≤{role_preferences.HARD_ROLE_MAX_TIMEOUT_S}s，实得 {seconds}s\n👉 拆小任务或换角色承载")
+    if role in HARD_GATED_ROLES and seconds > role_preferences.hard_role_max_timeout(role):
+        raise ConfigError(f"硬门禁角色 {role} 超时须 ≤{role_preferences.hard_role_max_timeout(role)}s，实得 {seconds}s\n👉 拆小任务或换角色承载")
     if not 1 <= seconds <= role_preferences.MAX_TIMEOUT_S:
         raise ConfigError(f"timeout_s 须为 1~{role_preferences.MAX_TIMEOUT_S} 的整数，实得 {seconds}")
     if preference is None:
@@ -670,8 +651,6 @@ def remove_preference(data: dict[str, Any], role: str, number: int) -> str:
     if not 1 <= number <= len(preferences):
         raise ConfigError(f"{role} 偏好序号须为 1~{len(preferences)}，实得 {number}")
     removed = preferences.pop(number - 1)
-    if entry.get("profile") == removed:
-        entry["profile"] = None
     _gc_profiles(data, [removed])
     return removed
 
@@ -715,18 +694,16 @@ def list_roles(data: dict[str, Any]) -> list[dict[str, Any]]:
         entry = roles[role] or {}
         preferences = [_preference_item(number, name, profile, role, data)
                        for number, (name, profile) in enumerate(_all_preferences(data, role), 1)]
-        selected = entry.get("profile")
-        selected_number = next((item["number"] for item in preferences if item["profile"] == selected), None)
         gate = "hard" if role in HARD_GATED_ROLES else ("soft" if role in STANDARD_ROLES else "custom")
         item: dict[str, Any] = {
             "role": role, "standard": role in STANDARD_ROLES, "gate": gate, "duty": entry.get("duty", ""),
             "carrier": "external" if preferences else "subagent", "preferences": preferences,
-            "selected_preference": selected_number,
+            "default_preference": 1 if preferences else None,
         }
-        if selected_number:
-            selected_item = preferences[selected_number - 1]
-            item |= {key: selected_item[key] for key in ("profile", "agent", "model", "timeout_s", "executable")}
-            item["cli"] = selected_item["agent"]
+        if preferences:  # 默认承载 = 第 1 个偏好
+            first = preferences[0]
+            item |= {key: first[key] for key in ("profile", "agent", "model", "timeout_s", "executable")}
+            item["cli"] = first["agent"]
         items.append(item)
     return items
 
@@ -737,7 +714,7 @@ def _fmt_list_line(item: dict[str, Any]) -> str:
         carrier = "内置 Subagent"
     else:
         sequence = " → ".join(f"{p['number']}.{p['agent']}({p['model']})" for p in item["preferences"])
-        carrier = f"外置 [{sequence}]；选中={item['selected_preference'] or '未选择'}"
+        carrier = f"外置 [{sequence}]；默认=第1偏好"
     return f"{item['role']}: {tag} | {carrier} | duty={item['duty']}"
 
 
@@ -753,19 +730,17 @@ def verify_roles(config_path: Path) -> list[dict[str, Any]]:
         return [{"role": "ALL", "status": "schema_error", "msg": "；".join(errors)}]
     reports: list[dict[str, Any]] = []
     for item in list_roles(data):
-        base = {"role": item["role"], "selected_preference": item["selected_preference"]}
+        base = {"role": item["role"], "default_preference": item["default_preference"]}
         if not item["standard"]:
             reports.append({"role": item["role"], "status": "custom_role_note",
                             "msg": f"⚠️ {item['role']} 为非标准角色：dispatch_role.py --role 限标准角色，此条目仅作承载声明。"})
         if not item["preferences"]:
             reports.append({**base, "status": "subagent_default", "msg": "✅ 内置 Subagent 承载（默认）。"})
-        elif not item["selected_preference"]:
-            reports.append({**base, "status": "preference_unselected", "msg": "⚠️ 有外置偏好但尚未选中 profile。"})
         elif item["executable"]:
             reports.append({**base, "status": "local_executable",
-                            "msg": "✅ 选中偏好 CLI 可本地启动；此检查不验证模型权限。"})
+                            "msg": "✅ 第 1 偏好 CLI 可本地启动；此检查不验证模型权限。"})
         else:
-            reports.append({**base, "status": "external_missing", "msg": "⚠️ 选中偏好 CLI 不在 PATH。"})
+            reports.append({**base, "status": "external_missing", "msg": "⚠️ 第 1 偏好 CLI 不在 PATH。"})
     return reports
 
 
@@ -812,14 +787,10 @@ def interactive_wizard(config_path: Path) -> None:
         print(f"  • {rep['role']}: {rep['msg']}")
 
 
-def _emit(value: Any, as_json: bool) -> None:
-    if as_json:
-        print(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
-    elif isinstance(value, list):
-        for item in value:
-            print(item if isinstance(item, str) else json.dumps(item, ensure_ascii=False))
-    else:
-        print(value)
+def _emit(value: Any) -> None:
+    """一行一条：字符串原样，结构化条目压成单行 JSON。"""
+    for item in value if isinstance(value, list) else [value]:
+        print(item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, separators=(",", ":")))
 
 
 def _validation_errors(data: dict[str, Any]) -> list[str]:
@@ -833,22 +804,21 @@ def _main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--scan", "-s", action="store_true", help="扫描宿主机已安装的 Agent CLI（不查询模型目录）")
-    parser.add_argument("--json", action="store_true", help="以 JSON 输出结果")
-    parser.add_argument("--verify", "-v", action="store_true", help="校验配置与选中偏好的本地 CLI 状态")
+    parser.add_argument("--verify", "-v", action="store_true", help="校验配置与第 1 偏好的本地 CLI 状态")
     parser.add_argument("--list", action="store_true", help="角色清单及完整有序偏好")
     parser.add_argument("--detect-preferences", action="store_true", help="仅本地检查每项偏好的启动能力，不调用模型")
-    parser.add_argument("--check-preferences", action="store_true", help="按偏好顺序检查真实模型响应（须单独授权）")
+    parser.add_argument("--check-preferences", action="store_true", help="逐个检查每个偏好的真实模型响应并报告（须单独授权；只读，不写配置）")
     parser.add_argument("--authorize-model-check", action="store_true", help="确认本次允许真实模型检查")
     parser.add_argument("--authorization-event", default="", help="本次模型检查的用户授权事件标识")
     parser.add_argument("--dry-run", action="store_true", help="只预览配置改动；模型检查时只做本地检测")
-    parser.add_argument("--migrate-preferences", action="store_true", help="显式迁移旧 fallback_profile 链为有序偏好")
+    parser.add_argument("--migrate-preferences", action="store_true", help="显式迁移旧实例：fallback_profile 链转有序偏好，并删除 profile 字段（旧 profile 非首位则挪到首位）")
     parser.add_argument("--set-preference", nargs=4, metavar=("ROLE", "NUMBER", "AGENT", "MODEL"),
                         help="替换偏好位置或在末尾追加 agent/model 偏好")
     parser.add_argument("--remove-preference", nargs=2, metavar=("ROLE", "NUMBER"),
                         help="删除偏好；默认 dry-run，加 --yes 执行")
     parser.add_argument("--move-preference", nargs=3, metavar=("ROLE", "FROM", "TO"),
                         help="移动一个偏好到新序号，不改写 profile")
-    parser.add_argument("--preference", type=int, metavar="NUMBER", help="--set-model/--set-timeout 的目标偏好序号（缺省为选中偏好；--set-timeout 缺省写角色级）")
+    parser.add_argument("--preference", type=int, metavar="NUMBER", help="--set-model/--set-timeout 的目标偏好序号（缺省为第 1 偏好；--set-timeout 缺省写角色级）")
     parser.add_argument("--set-model", nargs=2, metavar=("ROLE", "MODEL"), help="更新一个偏好的模型")
     parser.add_argument("--set-timeout", nargs=2, metavar=("ROLE", "SEC"),
                         help="设置角色级 timeout_s（该角色全部偏好生效）；配 --preference NUMBER 定向覆盖单个偏好")
@@ -863,11 +833,8 @@ def _main() -> int:
 
     if args.scan:
         detected = detect_installed_agents()
-        if args.json:
-            _emit(detected, True)
-        else:
-            for item in detected:
-                print(f"{'✅' if item['installed'] else '—'} {item['id']}: {item['path'] or '未安装'}")
+        for item in detected:
+            print(f"{'✅' if item['installed'] else '—'} {item['id']}: {item['path'] or '未安装'}")
         return 0
 
     if args.list:
@@ -876,20 +843,14 @@ def _main() -> int:
         except ConfigError as exc:
             print(f"❌ {exc}", file=sys.stderr)
             return 1
-        if args.json:
-            _emit(items, True)
-        else:
-            for item in items:
-                print(_fmt_list_line(item))
+        for item in items:
+            print(_fmt_list_line(item))
         return 0
 
     if args.verify:
         reports = verify_roles(args.config)
-        if args.json:
-            _emit(reports, True)
-        else:
-            for report in reports:
-                print(f"{report.get('role')}: {report.get('msg')}")
+        for report in reports:
+            print(f"{report.get('role')}: {report.get('msg')}")
         return 1 if any(report["status"] in ("schema_error", "missing_config") for report in reports) else 0
 
     if args.detect_preferences or args.check_preferences:
@@ -907,12 +868,10 @@ def _main() -> int:
                 reports = role_preferences.select_preferences(
                     data, authorized=True, authorization_event=args.authorization_event
                 )
-                if any(report.get("outcome") == "selected" for report in reports):
-                    save_config(args.config, data)
         except (ConfigError, ValueError) as exc:
             print(f"❌ {exc}", file=sys.stderr)
             return 1
-        _emit(reports, args.json)
+        _emit(reports)
         return 0 if args.detect_preferences or args.dry_run or all(
             report.get("outcome") != "authorization_required" for report in reports
         ) else 1
@@ -920,18 +879,20 @@ def _main() -> int:
     if args.migrate_preferences:
         data = load_config(args.config)
         try:
-            role_preferences.migrate_config(data)
+            notes = role_preferences.migrate_config(data)
             errors = _validation_errors(data)
             if errors:
                 raise ConfigError("；".join(errors[:3]))
             if args.dry_run:
-                _emit({"dry_run": True, "action": "migrate_preferences", "roles": list_roles(data)}, args.json)
+                _emit({"dry_run": True, "action": "migrate_preferences", "notes": notes, "roles": list_roles(data)})
                 return 0
             save_config(args.config, data)
         except (ConfigError, ValueError, TypeError, KeyError) as exc:
             print(f"❌ {exc}\n👉 未写入；修正命令后重试。", file=sys.stderr)
             return 1
-        _emit({"migrated": str(args.config)} if args.json else f"✅ 已迁移偏好: {args.config}", args.json)
+        print(f"✅ 已迁移偏好: {args.config}")
+        for note in notes:
+            print(f"  • {note}")
         return 0
 
     if args.remove_role or args.remove_preference:
@@ -949,7 +910,7 @@ def _main() -> int:
             print(f"❌ {exc}", file=sys.stderr)
             return 1
         if not args.yes or args.dry_run:
-            _emit({"dry_run": True, "action": description} if args.json else f"dry-run：{description}；未做任何改动，加 --yes 执行", args.json)
+            print(f"dry-run：{description}；未做任何改动，加 --yes 执行")
             return 0
         data = load_config(args.config)
         try:
@@ -962,7 +923,7 @@ def _main() -> int:
         except (ConfigError, ValueError) as exc:
             print(f"❌ {exc}\n👉 未写入；修正命令后重试。", file=sys.stderr)
             return 1
-        _emit({"removed": description} if args.json else f"✅ 已执行：{description}", args.json)
+        print(f"✅ 已执行：{description}")
         return 0
 
     if args.apply_preset or args.set_role or args.set_preference or args.move_preference or args.set_model or args.set_timeout or args.set_duty:
@@ -1007,18 +968,15 @@ def _main() -> int:
             if errors:
                 raise ConfigError("；".join(errors[:3]))
             if args.dry_run:
-                _emit({"dry_run": True, "changed": changed, "roles": [role_view(data)[role] for role in changed]}, args.json)
+                _emit({"dry_run": True, "changed": changed, "roles": [role_view(data)[role] for role in changed]})
                 return 0
             save_config(args.config, data)
         except (ConfigError, ValueError) as exc:
             print(f"❌ {exc}\n👉 未写入；修正命令后重试。", file=sys.stderr)
             return 1
-        if args.json:
-            _emit({"changed": changed, "roles": [role_view(data)[role] for role in changed]}, True)
-        else:
-            view = role_view(data)
-            for role_name in changed:
-                print(f"✅ {role_name} → {view[role_name]['cmd']}")
+        view = role_view(data)
+        for role_name in changed:
+            print(f"✅ {role_name} → {view[role_name]['cmd']}")
         return 0
 
     if sys.stdin.isatty():

@@ -351,3 +351,131 @@ class DirectoryAssociationTests(unittest.TestCase):
 
     def test_reload_probe_skipped_off_macos(self) -> None:
         self.assertEqual(open_file._reload_browser_tab("http://x", "linux", closer=None), "")
+
+
+class PlatformPartitionTests(unittest.TestCase):
+    """platforms.<sys.platform>.associations 分区读取（darwin/win32/linux 三平台模拟）。"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.config = self.root / "file-opener.json"
+        self.addCleanup(self.temp_dir.cleanup)
+
+    def _write_platform_config(self, platform, associations):
+        self.config.write_text(
+            json.dumps({"platforms": {platform: {"associations": associations}}}), encoding="utf-8"
+        )
+
+    def test_windows_reads_win32_partition_command(self):
+        self._write_platform_config("win32", {
+            "word": {
+                "name": "Word文档",
+                "extensions": [".docx", ".doc"],
+                "selected_app": "Microsoft Word",
+                "command": "start winword",
+            },
+        })
+        doc = self.root / "report.docx"
+        doc.write_bytes(b"docx")
+        runner = RecordingRunner([0])
+
+        result = open_paths([str(doc)], config_path=self.config, platform="win32", runner=runner)[0]
+
+        self.assertEqual(runner.calls[0][0], ["cmd", "/c", "start", "winword", str(doc.resolve())])
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["used_fallback"])
+
+    def test_missing_current_platform_partition_falls_back_with_bootstrap_hint(self):
+        self._write_platform_config("darwin", {
+            "word": {
+                "name": "Word文档",
+                "extensions": [".docx", ".doc"],
+                "selected_app": "Microsoft Word",
+                "command": 'open -a "Microsoft Word"',
+            },
+        })
+        doc = self.root / "report.docx"
+        doc.write_bytes(b"docx")
+        runner = RecordingRunner([0])
+
+        result = open_paths([str(doc)], config_path=self.config, platform="win32", runner=runner)[0]
+
+        self.assertEqual(runner.calls[0][0], ["cmd", "/c", "start", "", str(doc.resolve())])
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["used_fallback"])
+        self.assertIn("本平台未配置打开器，运行 bootstrap.py 生成", result["reason"])
+
+    def test_legacy_config_from_other_platform_is_not_applied(self):
+        """旧版单平台配置：platform 字段与他平台不符时不得把他平台命令当本平台配置执行。"""
+        self.config.write_text(json.dumps({
+            "version": "1.0.0",
+            "platform": "darwin",
+            "associations": {
+                "word": {
+                    "name": "Word文档",
+                    "extensions": [".docx", ".doc"],
+                    "selected_app": "Microsoft Word",
+                    "command": 'open -a "Microsoft Word"',
+                },
+            },
+        }), encoding="utf-8")
+        doc = self.root / "report.docx"
+        doc.write_bytes(b"docx")
+        runner = RecordingRunner([0])
+
+        result = open_paths([str(doc)], config_path=self.config, platform="linux", runner=runner)[0]
+
+        self.assertEqual(runner.calls[0][0], ["xdg-open", str(doc.resolve())])
+        self.assertTrue(result["used_fallback"])
+        self.assertIn("本平台未配置打开器，运行 bootstrap.py 生成", result["reason"])
+
+    def test_legacy_config_without_platform_field_applies_on_current(self):
+        self.config.write_text(json.dumps({"associations": {
+            "word": {
+                "name": "Word文档",
+                "extensions": [".docx", ".doc"],
+                "selected_app": "Microsoft Word",
+                "command": 'open -a "Microsoft Word"',
+            },
+        }}), encoding="utf-8")
+        doc = self.root / "report.docx"
+        doc.write_bytes(b"docx")
+        runner = RecordingRunner([0])
+
+        result = open_paths([str(doc)], config_path=self.config, platform="darwin", runner=runner)[0]
+
+        self.assertEqual(runner.calls[0][0][:3], ["open", "-a", "Microsoft Word"])
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["used_fallback"])
+
+    def test_default_opener_argv_per_platform(self):
+        """无配置时各平台走各自的系统默认命令：darwin→open、win32→cmd /c start ""、linux→xdg-open。"""
+        note = self.root / "plain.txt"
+        note.write_text("x", encoding="utf-8")
+        target = str(note.resolve())
+        expectations = {
+            "darwin": ["open", target],
+            "win32": ["cmd", "/c", "start", "", target],
+            "linux": ["xdg-open", target],
+        }
+        for platform, expected in expectations.items():
+            with self.subTest(platform=platform):
+                runner = RecordingRunner([0])
+                result = open_paths(
+                    [str(note)], config_path=Path("/nonexistent.json"), platform=platform, runner=runner
+                )[0]
+                self.assertEqual(runner.calls[0][0], expected)
+                self.assertTrue(result["used_fallback"])
+
+    def test_windows_directory_default_opener_is_explorer(self):
+        sub_dir = self.root / "capsule_dir"
+        sub_dir.mkdir()
+        runner = RecordingRunner([0])
+
+        result = open_paths(
+            [str(sub_dir)], config_path=Path("/nonexistent.json"), platform="win32", runner=runner
+        )[0]
+
+        self.assertEqual(runner.calls[0][0], ["explorer", str(sub_dir.resolve())])
+        self.assertTrue(result["used_fallback"])

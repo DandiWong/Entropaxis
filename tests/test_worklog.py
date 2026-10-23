@@ -9,7 +9,6 @@
   AC-5: aggregate_worklog 两阶段聚合、窗外真源/窗内 Trailer 抑制、孤儿 commit 补位与纯只读性。
 """
 
-import json
 import os
 import shutil
 import subprocess
@@ -266,6 +265,14 @@ class TestWorklogSystem(unittest.TestCase):
         self.assertEqual(item["task_id"], "Tech-888")
         self.assertEqual(item["source"], "orphan_trailer")
         self.assertEqual(item["spent"], 1.5)
+
+        # 阶段聚合与任务聚合格式化验证
+        md_stage = aggregate_worklog.format_markdown(data, by="stage")
+        self.assertIn("### 工时统计汇总", md_stage)
+        self.assertIn("| 阶段 | 工时(h) |", md_stage)
+
+        md_task = aggregate_worklog.format_markdown(data, by="task")
+        self.assertIn("| Task-ID | 主题 |", md_task)
 
 
 class TestWorklogCliEntry(unittest.TestCase):

@@ -1,6 +1,7 @@
 """resolve_project 的项目解析、别名匹配与代码真源提取契约。"""
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -69,7 +70,34 @@ class ResolveProjectTests(unittest.TestCase):
         self.assertIn("04MedAIkaid/05文章发表/", text)
         self.assertIn("code: 04MedAIkaid/05文章发表/03_工程研发/PaperPro", text)
 
-    def test_cli_invocation_json(self):
+    def test_cli_invocation_default_text(self):
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        try:
+            sys.stdout = buf
+            ret = RP.main(["PaperPro", "--workspace-root", str(self.root)])
+            self.assertEqual(ret, 0)
+            out = buf.getvalue()
+            self.assertIn("[medalkaid-paper]", out)
+            self.assertIn("code: 04MedAIkaid/05文章发表/03_工程研发/PaperPro", out)
+        finally:
+            sys.stdout = old_stdout
+
+    def test_cli_invocation_list_text(self):
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        try:
+            sys.stdout = buf
+            ret = RP.main(["--list", "--workspace-root", str(self.root)])
+            self.assertEqual(ret, 0)
+            lines = [ln for ln in buf.getvalue().splitlines() if ln.strip()]
+            self.assertEqual(len(lines), 3)
+            self.assertTrue(lines[0].startswith("[medalkaid]"))
+        finally:
+            sys.stdout = old_stdout
+
+    def test_cli_json_returns_machine_contract(self):
+        """M-1：真实消费方（会议 Skill workspace_locator）读 `--json` 的 abs_dir/id 契约。"""
         buf = io.StringIO()
         old_stdout = sys.stdout
         try:
@@ -77,9 +105,34 @@ class ResolveProjectTests(unittest.TestCase):
             ret = RP.main(["PaperPro", "--json", "--workspace-root", str(self.root)])
             self.assertEqual(ret, 0)
             data = json.loads(buf.getvalue())
-            self.assertEqual(data["id"], "medalkaid-paper")
         finally:
             sys.stdout = old_stdout
+        self.assertEqual(data["id"], "medalkaid-paper")
+        self.assertEqual(data["dir"], "04MedAIkaid/05文章发表")
+        self.assertEqual(data["abs_dir"], str((self.root / "04MedAIkaid/05文章发表").resolve()))
+
+    def test_cli_list_json_outputs_array(self):
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        try:
+            sys.stdout = buf
+            ret = RP.main(["--list", "--json", "--workspace-root", str(self.root)])
+            self.assertEqual(ret, 0)
+            data = json.loads(buf.getvalue())
+        finally:
+            sys.stdout = old_stdout
+        self.assertEqual(len(data), 3)
+        self.assertEqual(data[1]["id"], "medalkaid-paper")
+
+    def test_real_cli_json_exit_code_matches_consumer_contract(self):
+        """消费方以子进程调 resolver 并按退出码分流；真实 CLI 须退出 0 且 stdout 是合法 JSON。"""
+        done = subprocess.run(
+            [sys.executable, str(SYSTEM_ROOT / "tools" / "resolve_project.py"),
+             "PaperPro", "--json", "--workspace-root", str(self.root)],
+            capture_output=True, text=True, timeout=30, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        data = json.loads(done.stdout)
+        self.assertTrue(data.get("abs_dir"))
 
 
 if __name__ == "__main__":

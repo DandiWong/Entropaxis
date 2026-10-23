@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import io
-import json
 import subprocess
 import sys
 import zipfile
@@ -116,7 +115,6 @@ def main() -> int:
     )
     parser.add_argument("--out", help=f"产物路径，默认 <工作区根>/{PAYLOAD_NAME}")
     parser.add_argument("--ref", default="HEAD", help="打包的提交或分支，默认 HEAD")
-    parser.add_argument("--json", action="store_true", help="以结构化 JSON 格式输出结果")
 
     args = parser.parse_args()
 
@@ -132,15 +130,12 @@ def main() -> int:
         )
         return 2
 
-    if args.json:
-        print(json.dumps(res, ensure_ascii=False, indent=2))
-    else:
-        print(f"载荷: {res['payload']}（{res['payload_bytes'] / 1024:.1f} KB，ref={res['ref']}）")
-        if res["uncommitted"]:
-            print(f"⚠️ 有 {len(res['uncommitted'])} 项未提交改动未进入载荷：")
-            for line in res["uncommitted"]:
-                print(f"   • {line}")
-        print("结论: ✅ 载荷导出完成，交给 PyInstaller 随包冻结即可")
+    print(f"载荷: {res['payload']}（{res['payload_bytes'] / 1024:.1f} KB，ref={res['ref']}）")
+    if res["uncommitted"]:
+        print(f"⚠️ 有 {len(res['uncommitted'])} 项未提交改动未进入载荷：")
+        for line in res["uncommitted"]:
+            print(f"   • {line}")
+    print("结论: ✅ 载荷导出完成，交给 PyInstaller 随包冻结即可")
     return 0
 
 

@@ -86,6 +86,20 @@
       "$comment": "调度回执 ID。承载事实的真源是 data/receipts/ 下由签发者 MAC 签名的回执，本字段只是指针——Front Matter 与模型同权限可写，不能作信任根（审计 C-03）。",
       "type": "string",
       "pattern": "^rcpt-[0-9a-f]{16}$"
+    },
+    "effort": {
+      "$comment": "该阶段交付当量工时（标准人时，形如 0.75h、1.5h 或纯数字字符串）",
+      "type": "string",
+      "pattern": "^\\d+(\\.\\d+)?h?$"
+    },
+    "duration_s": {
+      "$comment": "调度器自动记录的实际机器执行秒数（如 108.45）",
+      "type": "number",
+      "minimum": 0
+    },
+    "completed_at": {
+      "$comment": "阶段产物完结落盘时间（ISO 8601），随 status: completed 同步记录",
+      "type": "string"
     }
   },
   "conditional_required": [

@@ -1,5 +1,4 @@
 import io
-import json
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -131,10 +130,15 @@ class TopicYamlSafetyTests(TestCase):
 class InputValidationTests(TestCase):
     """R2-m1：路径合法性强校验先于任何目录操作，且报错含行动导向修复建议（ApX 契约）。"""
 
-    def test_rejects_non_chinese_topic(self) -> None:
+    def test_allows_english_topic(self) -> None:
+        with TemporaryDirectory() as base:
+            target = create_capsule(Path(base), "EnglishOnlyTopic", "Tech-1", "full")
+            self.assertTrue(target.is_dir())
+
+    def test_rejects_empty_topic(self) -> None:
         with TemporaryDirectory() as base:
             with self.assertRaises(CapsuleInitError) as ctx:
-                create_capsule(Path(base), "EnglishOnly", "Tech-1", "full")
+                create_capsule(Path(base), "", "Tech-1", "full")
             self.assertIn("❌", str(ctx.exception))
             self.assertIn("👉", str(ctx.exception))
 
@@ -176,12 +180,12 @@ class AtomicityTests(TestCase):
             self.assertEqual(entries, [], f"预期无残留，实得: {entries}")
 
 
-class MainJsonOutputTests(TestCase):
-    """SOP Phase 4：--json 输出必须是可解析的结构化 JSON。"""
+class MainOutputTests(TestCase):
+    """默认输出首行给出胶囊绝对路径：Agent（含 dingtalk-omp-bridge 的提示词）按「首行冒号后」读取。"""
 
-    def test_json_flag_emits_parseable_structured_result(self) -> None:
+    def test_first_line_ends_with_capsule_path(self) -> None:
         with TemporaryDirectory() as base:
-            argv = [str(Path(base)), "命令行测试方案", "--id", "Tech-14", "--mode", "research", "--json"]
+            argv = [str(Path(base)), "命令行测试方案", "--id", "Tech-14", "--mode", "research"]
             original_argv = sys.argv
             sys.argv = ["init_capsule.py", *argv]
             buffer = io.StringIO()
@@ -191,22 +195,21 @@ class MainJsonOutputTests(TestCase):
             finally:
                 sys.argv = original_argv
             self.assertEqual(exit_code, 0)
-            payload = json.loads(buffer.getvalue())
-            self.assertEqual(payload["status"], "success")
-            self.assertEqual(payload["lifecycle"], "draft")
-            self.assertEqual(payload["mode"], "research")
-            self.assertTrue(Path(payload["target"]).is_dir())
-
-    def test_invalid_input_returns_nonzero_without_json_stdout_pollution(self) -> None:
+            target = Path(buffer.getvalue().splitlines()[0].rsplit(": ", 1)[1])
+            self.assertTrue(target.is_dir() and target.parent == Path(base), target)
+    def test_invalid_input_returns_nonzero_without_stdout_pollution(self) -> None:
+        from contextlib import redirect_stderr
         with TemporaryDirectory() as base:
-            argv = [str(Path(base)), "EnglishOnly", "--json"]
+            argv = [str(Path(base)), ""]
             original_argv = sys.argv
             sys.argv = ["init_capsule.py", *argv]
             buffer = io.StringIO()
+            err_buffer = io.StringIO()
             try:
-                with redirect_stdout(buffer):
+                with redirect_stdout(buffer), redirect_stderr(err_buffer):
                     exit_code = main()
             finally:
                 sys.argv = original_argv
             self.assertEqual(exit_code, 1)
             self.assertEqual(buffer.getvalue(), "")
+            self.assertIn("主题为空", err_buffer.getvalue())

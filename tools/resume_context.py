@@ -322,7 +322,6 @@ def main() -> int:
     parser.add_argument("--exclude-session",
                         default=os.environ.get("CLAUDE_CODE_SESSION_ID"),
                         help="排除的会话 ID（默认取当前 Claude Code 会话，避免把自己当成上一轮）")
-    parser.add_argument("--json", action="store_true", help="输出 JSON")
     args = parser.parse_args()
     root = Path(args.root).expanduser()
     if not root.is_dir():
@@ -332,7 +331,7 @@ def main() -> int:
         print("❌ --days 与 --limit 必须为正整数\n👉 修复建议: 例如 --days 7 --limit 3。", file=sys.stderr)
         return 1
     res = resume_context(root, args.days, args.limit, args.exclude_session)
-    print(json.dumps(res, ensure_ascii=False, indent=2) if args.json else render(res))
+    print(render(res))
     return 0
 
 

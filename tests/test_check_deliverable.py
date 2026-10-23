@@ -1,4 +1,3 @@
-import json
 import unittest
 import zipfile
 import zlib
@@ -61,10 +60,10 @@ class CheckDeliverableTests(unittest.TestCase):
         issues = check_file(docx)
         self.assertEqual(len(issues), 1)
         self.assertIn("待回填", issues[0])
-    def test_json_and_exit_code(self):
+    def test_exit_code(self):
         bad = self.root / "bad.docx"
         bad.write_bytes(b"nope")
-        self.assertEqual(main([str(bad), "--json"]), 1)
+        self.assertEqual(main([str(bad)]), 1)
     def test_truncated_pdf_and_unsupported_suffix(self):
         pdf = self.root / "cut.pdf"
         _pdf(pdf, eof=False)
@@ -77,8 +76,8 @@ class CheckDeliverableTests(unittest.TestCase):
 
 
 
-class CliJsonTests(unittest.TestCase):
-    def test_json_payload(self):
+class CliOutputTests(unittest.TestCase):
+    def test_ok_output(self):
         import io
         from contextlib import redirect_stdout
         with tempfile.TemporaryDirectory() as td:
@@ -86,8 +85,6 @@ class CliJsonTests(unittest.TestCase):
             _office(path, ".docx", "好")
             buf = io.StringIO()
             with redirect_stdout(buf):
-                code = main([str(path), "--json"])
-            payload = json.loads(buf.getvalue())
+                code = main([str(path)])
             self.assertEqual(code, 0)
-            self.assertTrue(payload["ok"])
-            self.assertEqual(payload["files"][0]["issues"], [])
+            self.assertEqual(buf.getvalue().strip(), "ok")
