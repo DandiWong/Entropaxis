@@ -8,7 +8,7 @@
 
 - 事务/胶囊研讨与定位必先调 `find_capsule.py`，未命中才降级 `grep`/`glob`；项目解析用 `resolve_project.py`；干系人与人员消歧用 `resolve_stakeholder.py`
 - 全局/代码搜索用 `grep`/`find`（多OR词用一次 `multi_grep`）；必须走 bash 时用 `rg`，不用 `grep`
-- 打开本地文件统一执行 `python3 .entropaxis/tools/open_file.py <path>`（交付闭环加 `--on-deliver`，.md 默认不打开）；定位后用 `read` 的 offset/limit 只读命中附近；工作区外已知文件直接 `read`
+- 打开本地文件统一执行 `python3 .entropaxis/tools/open_file.py <path>`（交付闭环加 `--on-deliver`，.md 等中间产物默认不打开）；定位后用 `read` 的 offset/limit 只读命中附近；工作区外已知文件直接 `read`
 - 会话默认是 Manager，只编排不产出：任何场景下产出或修改专业交付物（调研/方案/设计/代码/审计/验收/汇报）前，除 `.entropaxis/rules/角色协作.md`「直接执行豁免」外，必先走 `python3 .entropaxis/tools/dispatch_role.py resolve` -> `run`；宿主 task/subagent 仅限只读探索，严禁替代系统设计角色
 
 ## 安全边界

@@ -107,11 +107,11 @@ DELIVERY_AUTO_OPEN_EXTENSIONS = {
     ".docx", ".doc", ".xlsx", ".xls", ".csv", ".pptx", ".ppt", ".pdf",
     # 视觉图表
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
-    # 文本与原型（排除 .md / .markdown）
-    ".asciidoc", ".adoc", ".html", ".htm",
-    # 结构化数据
-    ".yaml", ".yml", ".json",
+    # 网页原型（.md/.yaml/.json/.adoc 等中间产物不在此列，仅显式打开时才打开）
+    ".html", ".htm",
 }
+
+VERIFY_TIMEOUT_S = 20
 
 
 def _target_office_apps(suffix: str, target_cmd: str = "", selected_app: str = "") -> list[str]:
@@ -164,7 +164,8 @@ def _close_if_already_open(
     if platform == "darwin":
         # 必须先把目标进程激活到前台再枚举窗口：WPS 等 Qt/非原生应用只在 frontmost 时
         # 才惰性暴露 AX 窗口树，后台查询恒返回 0 个窗口，导致关闭逻辑静默空转。
-        # 防御机制：预先记录原前台应用；若未真正关闭任何匹配窗口，立即恢复焦点，绝不残留空前台。
+        # 防御机制：预先记录原前台应用；探针结束前无条件把前台还给原应用，绝不残留空前台
+        # （随后由打开命令自行激活目标应用）。
         script = f'''
         tell application "System Events"
             set origProc to missing value
@@ -192,14 +193,13 @@ def _close_if_already_open(
                             end repeat
                         end tell
                     end try
-                    -- 若未匹配到目标窗口，且原前台不是该应用，立即切回原应用
-                    if not closedAny and origProc is not missing value then
-                        try
-                            set frontmost of origProc to true
-                        end try
-                    end if
                 end if
             end repeat
+            if origProc is not missing value then
+                try
+                    set frontmost of origProc to true
+                end try
+            end if
             return closedAny
         end tell
         '''
@@ -211,6 +211,79 @@ def _close_if_already_open(
         except Exception:
             pass
     return False
+
+
+def _verify_window_open(
+    path: Path,
+    platform: str,
+    closer=subprocess.run,
+    target_cmd: str = "",
+    selected_app: str = "",
+) -> tuple[bool | None, str]:
+    """打开命令成功后，有界轮询确认文档窗口。返回 (True|False|None, 说明)；None 表示无法校验。不激活任何应用。"""
+    if platform != "darwin":
+        return None, "本平台仅校验命令退出码"
+    if not path.is_file() or path.suffix.lower() not in OFFICE_EXTENSIONS:
+        return None, "该文件类型不做窗口校验"
+    target_apps = _target_office_apps(path.suffix, target_cmd=target_cmd, selected_app=selected_app)
+    if not target_apps:
+        return None, "该打开程序不支持窗口校验，仅校验命令退出码"
+
+    file_name = path.name.replace("\\", "\\\\").replace('"', '\\"')
+    apps_quoted = ", ".join(f'"{a}"' for a in target_apps)
+    # 只读窗口，不设置 frontmost；就绪即返回，上限 VERIFY_TIMEOUT_S 秒。
+    script = f'''
+    set officeApps to {{{apps_quoted}}}
+    set procSeen to false
+    set bgSeen to false
+    set deadline to (current date) + {VERIFY_TIMEOUT_S}
+    repeat while (current date) < deadline
+        tell application "System Events"
+            set procSeen to false
+            set bgSeen to false
+            set procNames to name of every process
+            repeat with pn in procNames
+                if (pn as text) is in officeApps then
+                    set procSeen to true
+                    try
+                        if (count of (every window of process (pn as text) whose name contains "{file_name}")) > 0 then return "true"
+                        if not (frontmost of process (pn as text)) then set bgSeen to true
+                    end try
+                end if
+            end repeat
+        end tell
+        delay 0.5
+    end repeat
+    if procSeen and bgSeen then return "unknown"
+    return "false"
+    '''
+    try:
+        res = closer(["osascript", "-e", script], check=False, capture_output=True,
+                     text=True, timeout=VERIFY_TIMEOUT_S + 5)
+    except subprocess.TimeoutExpired:
+        return False, f"{VERIFY_TIMEOUT_S} 秒内未见文档窗口"
+    except Exception as exc:
+        return None, f"窗口校验无法执行: {exc}"
+    out = (res.stdout or "").strip().lower()
+    err = (res.stderr or "")
+    if res.returncode != 0:
+        if "-25211" in err or "assistive" in err.lower():
+            return None, "缺少辅助功能权限，无法校验"
+        return None, "窗口校验脚本出错，无法校验"
+    if out == "true":
+        return True, ""
+    if out == "unknown":
+        return None, "目标应用不在前台，无法读取窗口"
+    return False, f"{VERIFY_TIMEOUT_S} 秒内未见文档窗口（可能仍在启动）"
+
+
+def _apply_verify(result: dict, path: Path, platform: str, closer, command: str, selected_app: str) -> None:
+    """命令成功后写入 verified/verify_note；校验为 False 时 ok 降为 False 并写明原因。"""
+    verified, note = _verify_window_open(path, platform, closer, command, selected_app)
+    result["verified"], result["verify_note"] = verified, note
+    if verified is False:
+        result["ok"] = False
+        result["reason"] = note
 
 
 BROWSER_RELOAD_EXTENSIONS = {".html", ".htm"}
@@ -291,6 +364,7 @@ def _open_path(
             return {
                 "path": path_text, "ok": True, "selected_app": browser, "command": [],
                 "used_fallback": False, "reloaded": True, "reason": "", "returncode": 0,
+                "verified": True, "verify_note": "",
             }
         # 本地 dev 页面预览：URL 无扩展名映射，直接交给系统默认浏览器
         argv = {"darwin": ["open", path_text], "win32": ["cmd", "/c", "start", "", path_text]}.get(
@@ -306,6 +380,8 @@ def _open_path(
             "reloaded": False,
             "reason": detail if returncode else "",
             "returncode": returncode,
+            "verified": None,
+            "verify_note": "URL 由默认浏览器打开，不做窗口校验",
         }
     path = Path(path_text).expanduser().resolve()
     result = {
@@ -317,6 +393,8 @@ def _open_path(
         "reloaded": False,
         "reason": "",
         "returncode": 1,
+        "verified": None,
+        "verify_note": "",
     }
     if not path.exists():
         result["reason"] = f"目标不存在: {path}"
@@ -346,7 +424,7 @@ def _open_path(
     if path.is_file() and path.suffix.lower() in BROWSER_RELOAD_EXTENSIONS:
         browser = _reload_browser_tab(path.as_uri(), platform, closer)
         if browser:
-            result.update({"ok": True, "selected_app": browser, "reloaded": True, "returncode": 0})
+            result.update({"ok": True, "selected_app": browser, "reloaded": True, "returncode": 0, "verified": True})
             return result
 
     association = _association_for(path, config)
@@ -372,6 +450,7 @@ def _open_path(
         })
         if returncode == 0:
             result["ok"] = True
+            _apply_verify(result, path, platform, closer, command, selected_app)
             return result
         reason = f"配置程序执行失败（退出码 {returncode}）"
         if detail:
@@ -401,6 +480,8 @@ def _open_path(
     })
     if returncode != 0 and detail:
         result["reason"] += f"；系统默认程序也失败: {detail}"
+    if returncode == 0:
+        _apply_verify(result, path, platform, closer, "", "")
     return result
 
 def open_paths(
@@ -426,19 +507,25 @@ def main() -> int:
     parser.add_argument(
         "--on-deliver",
         action="store_true",
-        help="交付落盘模式：仅对白名单格式（办公文档/图表/原型等）自动打开，.md 与目录静默跳过",
+        help="交付落盘模式：仅对白名单格式（办公文档/图表/原型等）自动打开，.md 等中间产物（.yaml/.json/.adoc 等）与目录静默跳过",
     )
     args = parser.parse_args()
 
     results = open_paths(args.paths, config_path=args.config, on_deliver=args.on_deliver)
     for result in results:
         reload_hint = "（已刷新重新加载）" if result.get("reloaded") else ""
+        verify_hint = "（已确认文档窗口）" if result.get("verified") else (
+            f"（未确认窗口：{result['verify_note']}）" if result.get("verify_note") else "")
         if result.get("skipped"):
             print(f"[SKIP] {result['path']}（{result['reason']}）")
         elif result["ok"] and result["used_fallback"]:
-            print(f"[WARN] 已使用系统默认程序打开 {result['path']}{reload_hint}；原因: {result['reason']}")
+            print(f"[WARN] 已使用系统默认程序打开 {result['path']}{reload_hint}{verify_hint}；原因: {result['reason']}")
+        elif result["ok"] and result.get("verified") is None and result.get("verify_note"):
+            print(f"[OK] 已向 {result['selected_app']} 发出打开命令 {result['path']}（未确认窗口：{result['verify_note']}）")
         elif result["ok"]:
-            print(f"[OK] 已使用 {result['selected_app']} 打开 {result['path']}{reload_hint}")
+            print(f"[OK] 已使用 {result['selected_app']} 打开 {result['path']}{reload_hint}{verify_hint}")
+        elif result.get("verified") is False:
+            print(f"❌ 未确认打开 {result['path']}；原因: {result['reason']}", file=sys.stderr)
         else:
             print(f"❌ 无法打开 {result['path']}；原因: {result['reason']}\n"
                   "👉 修复建议: 核对路径；打开程序配置在 .entropaxis/data/templates/file-opener.json。", file=sys.stderr)

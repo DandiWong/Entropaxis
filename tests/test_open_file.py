@@ -8,6 +8,12 @@ from tools import open_file
 from tools.open_file import open_paths
 
 
+def probe_false_verify_true(argv, **kwargs):
+    """按脚本内容分流：关窗探针（含 set frontmost）返回 false，窗口校验脚本返回 true。"""
+    probe = "set frontmost" in argv[2]
+    return subprocess.CompletedProcess(argv, 0, stdout="false" if probe else "true", stderr="")
+
+
 class RecordingRunner:
     def __init__(self, returncodes=None):
         self.returncodes = list(returncodes or [0])
@@ -163,8 +169,11 @@ class OpenFileTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertTrue(result["reloaded"])
-        self.assertEqual(len(closer_calls), 1)
+        self.assertEqual(len(closer_calls), 2, "探针 + 窗口校验各一次")
         self.assertEqual(closer_calls[0][0], "osascript")
+        self.assertIn("set frontmost", closer_calls[0][2])
+        self.assertNotIn("set frontmost", closer_calls[1][2], "校验脚本不得激活应用")
+        self.assertIs(result["verified"], True)
 
     def test_non_office_files_skip_closer_hook(self):
         markdown = self.root / "readme.md"
@@ -228,7 +237,7 @@ class OpenFileTests(unittest.TestCase):
         closer_calls = []
         def fake_closer(argv, **kwargs):
             closer_calls.append(argv)
-            return subprocess.CompletedProcess(argv, 0, stdout="false", stderr="")
+            return probe_false_verify_true(argv, **kwargs)
 
         results = open_paths(
             [str(doc)],
@@ -242,7 +251,109 @@ class OpenFileTests(unittest.TestCase):
         self.assertTrue(results[0]["ok"])
         self.assertFalse(results[0].get("skipped", False))
         self.assertEqual(len(runner.calls), 1, "白名单交付格式在交付模式下应正常打开")
-        self.assertEqual(len(closer_calls), 1, "办公格式在交付时应通过 closer 钩子探测热刷新")
+        self.assertEqual(len(closer_calls), 2, "办公格式在交付时应经 closer 钩子探测热刷新并校验窗口")
+        self.assertIs(results[0]["verified"], True)
+
+    def test_on_deliver_skips_intermediate_formats(self):
+        runner = RecordingRunner([0])
+        for name in ("a.yaml", "a.yml", "a.json", "a.adoc", "a.asciidoc", "a.md", "a.markdown"):
+            with self.subTest(name=name):
+                f = self.root / name
+                f.write_text("x", encoding="utf-8")
+                r = open_paths([str(f)], config_path=self.config, platform="darwin",
+                               runner=runner, on_deliver=True)[0]
+                self.assertTrue(r["ok"] and r.get("skipped"))
+        self.assertEqual(runner.calls, [])
+
+    def test_explicit_open_still_opens_intermediate_formats(self):
+        f = self.root / "a.yaml"
+        f.write_text("a: 1", encoding="utf-8")
+        runner = RecordingRunner([0])
+        r = open_paths([str(f)], config_path=self.config, platform="darwin", runner=runner)[0]
+        self.assertTrue(r["ok"])
+        self.assertFalse(r.get("skipped", False))
+        self.assertEqual(len(runner.calls), 1)
+
+    def test_on_deliver_keeps_csv_and_html(self):
+        for name in ("a.csv", "a.html", "a.htm"):
+            with self.subTest(name=name):
+                f = self.root / name
+                f.write_text("x", encoding="utf-8")
+                runner = RecordingRunner([0])
+                r = open_paths([str(f)], config_path=self.config, platform="linux",
+                               runner=runner, on_deliver=True)[0]
+                self.assertFalse(r.get("skipped", False))
+                self.assertEqual(len(runner.calls), 1)
+
+    def _open_docx_with(self, closer, platform="darwin"):
+        self._write_config({"word": {"extensions": [".docx"], "selected_app": "WPS Office",
+                                     "command": 'open -a "wpsoffice"'}})
+        doc = self.root / "report.docx"
+        doc.write_bytes(b"docx")
+        return open_paths([str(doc)], config_path=self.config, platform=platform,
+                          runner=RecordingRunner([0]), closer=closer)[0]
+
+    def test_verify_window_confirmed(self):
+        r = self._open_docx_with(probe_false_verify_true)
+        self.assertTrue(r["ok"])
+        self.assertIs(r["verified"], True)
+
+    def test_verify_window_timeout_reports_failure(self):
+        def closer(argv, **kw):
+            return subprocess.CompletedProcess(argv, 0, stdout="false", stderr="")
+        r = self._open_docx_with(closer)
+        self.assertFalse(r["ok"])
+        self.assertIs(r["verified"], False)
+        self.assertIn("未见文档窗口", r["reason"])
+
+        def raises(argv, **kw):
+            if "set frontmost" in argv[2]:
+                return subprocess.CompletedProcess(argv, 0, stdout="false", stderr="")
+            raise subprocess.TimeoutExpired(argv, 25)
+        r = self._open_docx_with(raises)
+        self.assertFalse(r["ok"])
+        self.assertIs(r["verified"], False)
+
+    def test_verify_unknown_or_ax_denied_is_unverified(self):
+        def unknown(argv, **kw):
+            out = "false" if "set frontmost" in argv[2] else "unknown"
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+        r = self._open_docx_with(unknown)
+        self.assertTrue(r["ok"])
+        self.assertIsNone(r["verified"])
+        self.assertIn("不在前台", r["verify_note"])
+
+        def denied(argv, **kw):
+            if "set frontmost" in argv[2]:
+                return subprocess.CompletedProcess(argv, 0, stdout="false", stderr="")
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="execution error: (-25211)")
+        r = self._open_docx_with(denied)
+        self.assertTrue(r["ok"])
+        self.assertIsNone(r["verified"])
+        self.assertIn("辅助功能权限", r["verify_note"])
+
+    def test_verify_skipped_off_macos(self):
+        calls = []
+
+        def closer(argv, **kw):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout="true", stderr="")
+        r = self._open_docx_with(closer, platform="linux")
+        self.assertTrue(r["ok"])
+        self.assertIsNone(r["verified"])
+        self.assertIn("本平台仅校验命令退出码", r["verify_note"])
+        self.assertEqual(calls, [])
+
+    def test_probe_restores_front_unconditionally(self):
+        scripts = []
+
+        def closer(argv, **kw):
+            scripts.append(argv[2])
+            return probe_false_verify_true(argv, **kw)
+        self._open_docx_with(closer)
+        probe = scripts[0]
+        self.assertNotIn("if not closedAny", probe)
+        self.assertGreater(probe.rindex("set frontmost of origProc"), probe.rindex("end repeat"))
 
     def test_non_desktop_office_opener_skips_closer(self):
         """若已配置使用 Orca 等非桌面应用打开，无需触发 AX 窗口关闭探针。"""
@@ -443,7 +554,8 @@ class PlatformPartitionTests(unittest.TestCase):
         doc.write_bytes(b"docx")
         runner = RecordingRunner([0])
 
-        result = open_paths([str(doc)], config_path=self.config, platform="darwin", runner=runner)[0]
+        result = open_paths([str(doc)], config_path=self.config, platform="darwin", runner=runner,
+                            closer=probe_false_verify_true)[0]
 
         self.assertEqual(runner.calls[0][0][:3], ["open", "-a", "Microsoft Word"])
         self.assertTrue(result["ok"])
