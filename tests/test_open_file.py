@@ -9,8 +9,8 @@ from tools.open_file import open_paths
 
 
 def probe_false_verify_true(argv, **kwargs):
-    """按脚本内容分流：关窗探针（含 set frontmost）返回 false，窗口校验脚本返回 true。"""
-    probe = "set frontmost" in argv[2]
+    """按脚本内容分流：关窗探针（含 origProc 前台还原）返回 false，窗口校验脚本返回 true。"""
+    probe = "origProc" in argv[2]
     return subprocess.CompletedProcess(argv, 0, stdout="false" if probe else "true", stderr="")
 
 
@@ -172,7 +172,9 @@ class OpenFileTests(unittest.TestCase):
         self.assertEqual(len(closer_calls), 2, "探针 + 窗口校验各一次")
         self.assertEqual(closer_calls[0][0], "osascript")
         self.assertIn("set frontmost", closer_calls[0][2])
-        self.assertNotIn("set frontmost", closer_calls[1][2], "校验脚本不得激活应用")
+        self.assertIn("origProc", closer_calls[0][2], "探针还原前台")
+        self.assertIn("set frontmost", closer_calls[1][2], "校验脚本须激活应用")
+        self.assertNotIn("origProc", closer_calls[1][2], "校验脚本不得还原前台")
         self.assertIs(result["verified"], True)
 
     def test_non_office_files_skip_closer_hook(self):
@@ -307,7 +309,7 @@ class OpenFileTests(unittest.TestCase):
         self.assertIn("未见文档窗口", r["reason"])
 
         def raises(argv, **kw):
-            if "set frontmost" in argv[2]:
+            if "origProc" in argv[2]:
                 return subprocess.CompletedProcess(argv, 0, stdout="false", stderr="")
             raise subprocess.TimeoutExpired(argv, 25)
         r = self._open_docx_with(raises)
@@ -316,15 +318,15 @@ class OpenFileTests(unittest.TestCase):
 
     def test_verify_unknown_or_ax_denied_is_unverified(self):
         def unknown(argv, **kw):
-            out = "false" if "set frontmost" in argv[2] else "unknown"
+            out = "false" if "origProc" in argv[2] else "noact"
             return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
         r = self._open_docx_with(unknown)
         self.assertTrue(r["ok"])
         self.assertIsNone(r["verified"])
-        self.assertIn("不在前台", r["verify_note"])
+        self.assertIn("无法激活目标应用", r["verify_note"])
 
         def denied(argv, **kw):
-            if "set frontmost" in argv[2]:
+            if "origProc" in argv[2]:
                 return subprocess.CompletedProcess(argv, 0, stdout="false", stderr="")
             return subprocess.CompletedProcess(argv, 1, stdout="", stderr="execution error: (-25211)")
         r = self._open_docx_with(denied)
@@ -352,6 +354,10 @@ class OpenFileTests(unittest.TestCase):
             return probe_false_verify_true(argv, **kw)
         self._open_docx_with(closer)
         probe = scripts[0]
+        self.assertEqual(len(scripts), 2, "探针 1 次 + 校验 1 次，探针在前")
+        self.assertIn("set frontmost", probe)
+        self.assertIn("set frontmost", scripts[1])
+        self.assertNotIn("origProc", scripts[1])
         self.assertNotIn("if not closedAny", probe)
         self.assertGreater(probe.rindex("set frontmost of origProc"), probe.rindex("end repeat"))
 

@@ -220,7 +220,7 @@ def _verify_window_open(
     target_cmd: str = "",
     selected_app: str = "",
 ) -> tuple[bool | None, str]:
-    """打开命令成功后，有界轮询确认文档窗口。返回 (True|False|None, 说明)；None 表示无法校验。不激活任何应用。"""
+    """打开命令成功后，有界轮询确认文档窗口。返回 (True|False|None, 说明)；None 表示无法校验。会激活目标应用且不还原前台。"""
     if platform != "darwin":
         return None, "本平台仅校验命令退出码"
     if not path.is_file() or path.suffix.lower() not in OFFICE_EXTENSIONS:
@@ -231,30 +231,33 @@ def _verify_window_open(
 
     file_name = path.name.replace("\\", "\\\\").replace('"', '\\"')
     apps_quoted = ", ".join(f'"{a}"' for a in target_apps)
-    # 只读窗口，不设置 frontmost；就绪即返回，上限 VERIFY_TIMEOUT_S 秒。
+    # WPS 等 Qt 应用只在前台才暴露 AX 窗口树，故校验先激活目标应用；
+    # 结束后不还原前台，让被打开的文档留在前台可见。就绪即返回，上限 VERIFY_TIMEOUT_S 秒。
     script = f'''
     set officeApps to {{{apps_quoted}}}
     set procSeen to false
-    set bgSeen to false
+    set actOK to false
     set deadline to (current date) + {VERIFY_TIMEOUT_S}
     repeat while (current date) < deadline
         tell application "System Events"
             set procSeen to false
-            set bgSeen to false
             set procNames to name of every process
             repeat with pn in procNames
                 if (pn as text) is in officeApps then
                     set procSeen to true
                     try
-                        if (count of (every window of process (pn as text) whose name contains "{file_name}")) > 0 then return "true"
-                        if not (frontmost of process (pn as text)) then set bgSeen to true
+                        if not (frontmost of process (pn as text)) then set frontmost of process (pn as text) to true
+                        if frontmost of process (pn as text) then
+                            set actOK to true
+                            if (count of (every window of process (pn as text) whose name contains "{file_name}")) > 0 then return "true"
+                        end if
                     end try
                 end if
             end repeat
         end tell
         delay 0.5
     end repeat
-    if procSeen and bgSeen then return "unknown"
+    if procSeen and not actOK then return "noact"
     return "false"
     '''
     try:
@@ -272,8 +275,8 @@ def _verify_window_open(
         return None, "窗口校验脚本出错，无法校验"
     if out == "true":
         return True, ""
-    if out == "unknown":
-        return None, "目标应用不在前台，无法读取窗口"
+    if out == "noact":
+        return None, "无法激活目标应用读取窗口，已发出打开命令但未确认"
     return False, f"{VERIFY_TIMEOUT_S} 秒内未见文档窗口（可能仍在启动）"
 
 
