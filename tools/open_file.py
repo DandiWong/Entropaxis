@@ -213,12 +213,34 @@ def _close_if_already_open(
     return False
 
 
+# AppleScript 回传格式：<状态>RS<标题>US<标题>US…；RS/US 为 ASCII 记录/单元分隔符，标题含换行或普通标点都不会被误切。
+_RS, _US = 30, 31
+
+
+def _parse_window_report(stdout: str) -> tuple[str, list[str]]:
+    """解析窗口报告，返回 (状态, 标题列表)；状态为 noproc/noact/ok，格式异常为 bad（调用方按无法校验处理）。"""
+    text = stdout or ""
+    if text.endswith("\n"):
+        text = text[:-1]  # osascript 在结果后追加的换行；标题内部换行原样保留
+    status, sep, rest = text.partition(chr(_RS))
+    if not sep or status not in {"noproc", "noact", "ok"}:
+        return "bad", []
+    return status, [t for t in rest.split(chr(_US)) if t.strip()]
+
+
+def _title_hits(titles: list[str], file_name: str) -> bool:
+    """任一窗口标题含目标文件名即命中（不区分大小写，与 AppleScript contains 一致）。"""
+    needle = file_name.casefold()
+    return bool(needle) and any(needle in t.casefold() for t in titles)
+
+
 def _verify_window_open(
     path: Path,
     platform: str,
     closer=subprocess.run,
     target_cmd: str = "",
     selected_app: str = "",
+    timeout_s: float | None = None,
 ) -> tuple[bool | None, str]:
     """打开命令成功后，有界轮询确认文档窗口。返回 (True|False|None, 说明)；None 表示无法校验。会激活目标应用且不还原前台。"""
     if platform != "darwin":
@@ -229,53 +251,69 @@ def _verify_window_open(
     if not target_apps:
         return None, "该打开程序不支持窗口校验，仅校验命令退出码"
 
-    file_name = path.name.replace("\\", "\\\\").replace('"', '\\"')
     apps_quoted = ", ".join(f'"{a}"' for a in target_apps)
-    # WPS 等 Qt 应用只在前台才暴露 AX 窗口树，故校验先激活目标应用；
-    # 结束后不还原前台，让被打开的文档留在前台可见。就绪即返回，上限 VERIFY_TIMEOUT_S 秒。
+    # WPS 等 Qt 应用只在前台才暴露 AX 窗口树，故校验先激活目标应用；结束后不还原前台，让被打开的文档留在前台可见。
+    # AppleScript 只负责激活并回传窗口标题（单次，不轮询）；命中判定与 VERIFY_TIMEOUT_S 轮询在 Python 侧，可被单测直接覆盖。
     script = f'''
     set officeApps to {{{apps_quoted}}}
+    set RS to character id {_RS}
+    set US to character id {_US}
     set procSeen to false
     set actOK to false
-    set deadline to (current date) + {VERIFY_TIMEOUT_S}
-    repeat while (current date) < deadline
-        tell application "System Events"
-            set procSeen to false
-            set procNames to name of every process
-            repeat with pn in procNames
-                if (pn as text) is in officeApps then
-                    set procSeen to true
-                    try
-                        if not (frontmost of process (pn as text)) then set frontmost of process (pn as text) to true
-                        if frontmost of process (pn as text) then
-                            set actOK to true
-                            if (count of (every window of process (pn as text) whose name contains "{file_name}")) > 0 then return "true"
-                        end if
-                    end try
-                end if
-            end repeat
-        end tell
-        delay 0.5
-    end repeat
-    if procSeen and not actOK then return "noact"
-    return "false"
+    set titles to ""
+    tell application "System Events"
+        set procNames to name of every process
+        repeat with pn in procNames
+            if (pn as text) is in officeApps then
+                set procSeen to true
+                try
+                    if not (frontmost of process (pn as text)) then set frontmost of process (pn as text) to true
+                    if frontmost of process (pn as text) then
+                        set actOK to true
+                        -- 只有 1 个窗口时 AppleScript 返回字符串而非列表，须先包成列表再遍历
+                        set ws to name of every window of process (pn as text)
+                        if class of ws is not list then set ws to {{ws}}
+                        repeat with i from 1 to count of ws
+                            try
+                                set titles to titles & ((item i of ws) as text) & US
+                            end try
+                        end repeat
+                    end if
+                end try
+            end if
+        end repeat
+    end tell
+    if not procSeen then return "noproc" & RS
+    if not actOK then return "noact" & RS
+    return "ok" & RS & titles
     '''
-    try:
-        res = closer(["osascript", "-e", script], check=False, capture_output=True,
-                     text=True, timeout=VERIFY_TIMEOUT_S + 5)
-    except subprocess.TimeoutExpired:
-        return False, f"{VERIFY_TIMEOUT_S} 秒内未见文档窗口"
-    except Exception as exc:
-        return None, f"窗口校验无法执行: {exc}"
-    out = (res.stdout or "").strip().lower()
-    err = (res.stderr or "")
-    if res.returncode != 0:
-        if "-25211" in err or "assistive" in err.lower():
-            return None, "缺少辅助功能权限，无法校验"
-        return None, "窗口校验脚本出错，无法校验"
-    if out == "true":
-        return True, ""
-    if out == "noact":
+    deadline = time.monotonic() + (VERIFY_TIMEOUT_S if timeout_s is None else timeout_s)
+    never_activated = False
+    while True:
+        try:
+            res = closer(["osascript", "-e", script], check=False, capture_output=True, text=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            return False, f"{VERIFY_TIMEOUT_S} 秒内未见文档窗口"
+        except Exception as exc:
+            return None, f"窗口校验无法执行: {exc}"
+        err = res.stderr or ""
+        if res.returncode != 0:
+            if "-25211" in err or "assistive" in err.lower():
+                return None, "缺少辅助功能权限，无法校验"
+            return None, "窗口校验脚本出错，无法校验"
+        status, titles = _parse_window_report(res.stdout)
+        if status == "bad":
+            return None, "窗口校验输出无法解析，无法校验"
+        if status == "ok":
+            never_activated = False
+            if _title_hits(titles, path.name):
+                return True, ""
+        else:
+            never_activated = status == "noact"
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+    if never_activated:
         return None, "无法激活目标应用读取窗口，已发出打开命令但未确认"
     return False, f"{VERIFY_TIMEOUT_S} 秒内未见文档窗口（可能仍在启动）"
 
@@ -517,16 +555,19 @@ def main() -> int:
     results = open_paths(args.paths, config_path=args.config, on_deliver=args.on_deliver)
     for result in results:
         reload_hint = "（已刷新重新加载）" if result.get("reloaded") else ""
-        verify_hint = "（已确认文档窗口）" if result.get("verified") else (
-            f"（未确认窗口：{result['verify_note']}）" if result.get("verify_note") else "")
+        confirmed = result.get("verified") is True
+        # 只有 verified=True 才允许完成式「已…打开」；其余成功一律「发出打开命令，未确认窗口」
+        unverified = f"（未确认窗口：{result.get('verify_note') or '未校验'}）"
         if result.get("skipped"):
             print(f"[SKIP] {result['path']}（{result['reason']}）")
+        elif result["ok"] and result["used_fallback"] and confirmed:
+            print(f"[WARN] 已使用系统默认程序打开 {result['path']}{reload_hint}（已确认文档窗口）；原因: {result['reason']}")
         elif result["ok"] and result["used_fallback"]:
-            print(f"[WARN] 已使用系统默认程序打开 {result['path']}{reload_hint}{verify_hint}；原因: {result['reason']}")
-        elif result["ok"] and result.get("verified") is None and result.get("verify_note"):
-            print(f"[OK] 已向 {result['selected_app']} 发出打开命令 {result['path']}（未确认窗口：{result['verify_note']}）")
+            print(f"[WARN] 已用系统默认程序向 {result['path']} 发出打开命令{unverified}；原因: {result['reason']}")
+        elif result["ok"] and confirmed:
+            print(f"[OK] 已使用 {result['selected_app']} 打开 {result['path']}{reload_hint}（已确认文档窗口）")
         elif result["ok"]:
-            print(f"[OK] 已使用 {result['selected_app']} 打开 {result['path']}{reload_hint}{verify_hint}")
+            print(f"[OK] 已向 {result['selected_app']} 发出打开命令 {result['path']}{unverified}")
         elif result.get("verified") is False:
             print(f"❌ 未确认打开 {result['path']}；原因: {result['reason']}", file=sys.stderr)
         else:

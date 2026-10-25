@@ -1,17 +1,36 @@
 import json
+import re
 import subprocess
 import tempfile
+import contextlib
+import io
+import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools import open_file
 from tools.open_file import open_paths
 
 
-def probe_false_verify_true(argv, **kwargs):
-    """按脚本内容分流：关窗探针（含 origProc 前台还原）返回 false，窗口校验脚本返回 true。"""
-    probe = "origProc" in argv[2]
-    return subprocess.CompletedProcess(argv, 0, stdout="false" if probe else "true", stderr="")
+RS, US = chr(30), chr(31)
+
+
+def window_report(status="ok", titles=()):
+    """模拟 AppleScript 回传：<状态>RS<标题>US<标题>US…（末尾带 osascript 的换行）。"""
+    return status + RS + "".join(t + US for t in titles) + "\n"
+
+
+def window_closer(status="ok", titles=(), probe="false"):
+    """按脚本内容分流：关窗探针（含 origProc）返回 probe（默认 false=没关窗），窗口校验脚本回传窗口标题报告，由 Python 侧判定命中。"""
+    def closer(argv, **kwargs):
+        out = probe if "origProc" in argv[2] else window_report(status, titles)
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+    return closer
+
+
+# report.docx / report.xlsx 的窗口都在：命中判定走真实 Python 谓词
+probe_false_verify_true = window_closer("ok", ["report.docx - WPS Office", "report.xlsx - WPS Office"])
 
 
 class RecordingRunner:
@@ -157,7 +176,7 @@ class OpenFileTests(unittest.TestCase):
         closer_calls = []
         def fake_closer(argv, **kwargs):
             closer_calls.append(argv)
-            return subprocess.CompletedProcess(argv, 0, stdout="true", stderr="")
+            return window_closer("ok", ["report.xlsx - WPS Office"], probe="true")(argv, **kwargs)
 
         result = open_paths(
             [str(excel)],
@@ -174,6 +193,7 @@ class OpenFileTests(unittest.TestCase):
         self.assertIn("set frontmost", closer_calls[0][2])
         self.assertIn("origProc", closer_calls[0][2], "探针还原前台")
         self.assertIn("set frontmost", closer_calls[1][2], "校验脚本须激活应用")
+        self.assertIn("class of ws is not list", closer_calls[1][2], "单窗口时 AppleScript 返回字符串，须包成列表（真机回归）")
         self.assertNotIn("origProc", closer_calls[1][2], "校验脚本不得还原前台")
         self.assertIs(result["verified"], True)
 
@@ -301,9 +321,8 @@ class OpenFileTests(unittest.TestCase):
         self.assertIs(r["verified"], True)
 
     def test_verify_window_timeout_reports_failure(self):
-        def closer(argv, **kw):
-            return subprocess.CompletedProcess(argv, 0, stdout="false", stderr="")
-        r = self._open_docx_with(closer)
+        with mock.patch.object(open_file.time, "sleep"), mock.patch.object(open_file, "VERIFY_TIMEOUT_S", 0):
+            r = self._open_docx_with(window_closer("ok", ["other.docx - WPS Office"]))
         self.assertFalse(r["ok"])
         self.assertIs(r["verified"], False)
         self.assertIn("未见文档窗口", r["reason"])
@@ -311,16 +330,14 @@ class OpenFileTests(unittest.TestCase):
         def raises(argv, **kw):
             if "origProc" in argv[2]:
                 return subprocess.CompletedProcess(argv, 0, stdout="false", stderr="")
-            raise subprocess.TimeoutExpired(argv, 25)
+            raise subprocess.TimeoutExpired(argv, 10)
         r = self._open_docx_with(raises)
         self.assertFalse(r["ok"])
         self.assertIs(r["verified"], False)
 
     def test_verify_unknown_or_ax_denied_is_unverified(self):
-        def unknown(argv, **kw):
-            out = "false" if "origProc" in argv[2] else "noact"
-            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
-        r = self._open_docx_with(unknown)
+        with mock.patch.object(open_file.time, "sleep"), mock.patch.object(open_file, "VERIFY_TIMEOUT_S", 0):
+            r = self._open_docx_with(window_closer("noact"))
         self.assertTrue(r["ok"])
         self.assertIsNone(r["verified"])
         self.assertIn("无法激活目标应用", r["verify_note"])
@@ -597,3 +614,146 @@ class PlatformPartitionTests(unittest.TestCase):
 
         self.assertEqual(runner.calls[0][0], ["explorer", str(sub_dir.resolve())])
         self.assertTrue(result["used_fallback"])
+
+
+class WindowMatchTests(unittest.TestCase):
+    """窗口命中判定在 Python 侧：closer 只回传窗口标题，是否命中由真实谓词决定（匹配被破坏时这些用例必须失败）。"""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.doc = Path(tmp.name) / "报告 v1.docx"
+        self.doc.write_bytes(b"docx")
+        for p in (mock.patch.object(open_file.time, "sleep"), mock.patch.object(open_file, "VERIFY_TIMEOUT_S", 0)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def verify(self, status, titles, stdout=None):
+        def closer(argv, **kw):
+            out = stdout if stdout is not None else window_report(status, titles)
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+        return open_file._verify_window_open(self.doc, "darwin", closer, "", "WPS Office")
+
+    def test_title_containing_file_name_hits(self):
+        self.assertEqual(self.verify("ok", ["报告 v1.docx - WPS Office"]), (True, ""))
+        self.assertIs(self.verify("ok", ["a.docx", "报告 V1.DOCX"])[0], True, "大小写不敏感，多窗口任一命中")
+
+    def test_title_without_file_name_does_not_hit(self):
+        self.assertIs(self.verify("ok", ["报告 v2.docx - WPS Office", "文档1"])[0], False)
+        self.assertIs(self.verify("ok", ["报告 v1"])[0], False, "仅含部分名不算命中")
+
+    def test_empty_window_list_or_app_missing_does_not_hit(self):
+        self.assertIs(self.verify("ok", [])[0], False)
+        self.assertIs(self.verify("noproc", [])[0], False, "应用未启动：不命中")
+        self.assertIsNone(self.verify("noact", [])[0], "进程在但无法激活：无法校验，不误判命中")
+
+    def test_title_parsing_is_robust(self):
+        multiline = "x.docx\n报告 v1.docx\n- WPS"
+        self.assertIs(self.verify("ok", [multiline, "other"])[0], True, "标题内换行原样保留，不被切断")
+        self.assertIs(self.verify("ok", ['a"b', "c,d;e|f", "报告 v2.docx"])[0], False, "特殊字符标题不命中也不崩溃")
+        self.assertIs(self.verify("ok", ["", "  ", ""])[0], False, "空标题被丢弃")
+        for garbage in ("", "\n", "true\n", "false", "ok", "weird" + RS + "报告 v1.docx" + US, RS + "报告 v1.docx"):
+            with self.subTest(garbage=garbage):
+                self.assertIsNone(self.verify(None, None, stdout=garbage)[0], "格式异常按无法校验处理，绝不判命中")
+
+
+class CliWordingTests(unittest.TestCase):
+    """CLI 文本：只有 verified=True 才出现完成式「已…打开」；其余成功一律「发出打开命令，未确认窗口」。"""
+
+    DONE = re.compile(r"已[^，；（\n]*?打开(?!命令)")
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for p in (mock.patch.object(open_file.time, "sleep"), mock.patch.object(open_file, "VERIFY_TIMEOUT_S", 0)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def cli(self, paths, *, on_deliver=False, **kw):
+        kw.setdefault("config_path", self.root / "missing.json")
+        kw.setdefault("platform", "darwin")
+        kw.setdefault("runner", RecordingRunner([0]))
+        results = open_paths([str(p) for p in paths], on_deliver=on_deliver, **kw)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "argv", ["open_file.py", *map(str, paths)]), \
+                mock.patch.object(open_file, "open_paths", return_value=results), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = open_file.main()
+        return results[0], rc, out.getvalue(), err.getvalue()
+
+    def assert_unverified_wording(self, result, rc, out):
+        self.assertIsNone(result["verified"])
+        self.assertEqual(rc, 0)
+        self.assertIn("发出打开命令", out)
+        self.assertIn("未确认窗口", out)
+        self.assertNotIn("已确认文档窗口", out)
+        self.assertIsNone(self.DONE.search(out), out)
+
+    def _file(self, name):
+        p = self.root / name
+        p.write_bytes(b"x")
+        return p
+
+    def test_fallback_unverified_has_no_done_claim(self):
+        r, rc, out, _ = self.cli([self._file("a.yaml")])
+        self.assertTrue(r["used_fallback"])
+        self.assert_unverified_wording(r, rc, out)
+        self.assertIn("配置不存在", out, "保留降级原因")
+        self.assertIn("系统默认程序", out)
+
+    def test_fallback_office_unverified_has_no_done_claim(self):
+        r, rc, out, _ = self.cli([self._file("a.docx")], closer=window_closer("noact"))
+        self.assertTrue(r["used_fallback"])
+        self.assert_unverified_wording(r, rc, out)
+
+    def test_configured_unverified_has_no_done_claim(self):
+        cfg = self.root / "cfg.json"
+        cfg.write_text(json.dumps({"associations": {"md": {
+            "extensions": [".md"], "selected_app": "Orca", "command": "orca file open"}}}))
+        r, rc, out, _ = self.cli([self._file("a.md")], config_path=cfg)
+        self.assertFalse(r["used_fallback"])
+        self.assert_unverified_wording(r, rc, out)
+
+    def test_directory_and_url_unverified_have_no_done_claim(self):
+        d = self.root / "dir"
+        d.mkdir()
+        r, rc, out, _ = self.cli([d])
+        self.assert_unverified_wording(r, rc, out)
+        no_tab = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "false", "")
+        r, rc, out, _ = self.cli(["https://example.com/x"], closer=no_tab)
+        self.assert_unverified_wording(r, rc, out)
+
+    def test_skipped_has_no_done_claim(self):
+        r, rc, out, _ = self.cli([self._file("a.yaml")], on_deliver=True)
+        self.assertTrue(r["skipped"])
+        self.assertIn("[SKIP]", out)
+        self.assertIsNone(self.DONE.search(out), out)
+
+    def test_confirmed_must_say_confirmed(self):
+        titles = ["a.docx - WPS Office"]
+        r, rc, out, _ = self.cli([self._file("a.docx")], closer=window_closer("ok", titles))  # 降级路径
+        self.assertTrue(r["used_fallback"])
+        self.assertIs(r["verified"], True)
+        self.assertEqual(rc, 0)
+        self.assertIn("已确认文档窗口", out)
+
+        cfg = self.root / "cfg.json"
+        cfg.write_text(json.dumps({"associations": {"w": {
+            "extensions": [".docx"], "selected_app": "WPS Office", "command": 'open -a "wpsoffice"'}}}))
+        r, rc, out, _ = self.cli([self.root / "a.docx"], config_path=cfg, closer=window_closer("ok", titles))
+        self.assertFalse(r["used_fallback"])
+        self.assertIn("已使用 WPS Office 打开", out)
+        self.assertIn("已确认文档窗口", out)
+
+        reload_ok = lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "true", "")
+        r, rc, out, _ = self.cli([self._file("p.html")], closer=reload_ok)
+        self.assertIs(r["verified"], True)
+        self.assertIn("已确认文档窗口", out)
+
+    def test_not_confirmed_keeps_failure_semantics(self):
+        r, rc, out, err = self.cli([self._file("a.docx")], closer=window_closer("ok", ["other.docx"]))
+        self.assertIs(r["verified"], False)
+        self.assertEqual(rc, 1)
+        self.assertIn("未确认打开", err)
+        self.assertEqual(out, "")
