@@ -228,6 +228,23 @@ def _parse_window_report(stdout: str) -> tuple[str, list[str]]:
     return status, [t for t in rest.split(chr(_US)) if t.strip()]
 
 
+# 「取标题→标量归一为列表→RS/US 编码」的 AppleScript 片段；生产脚本与行为测试共用同一份，测试可真实 osascript 执行。
+_TITLES_PRELUDE = f"""set RS to character id {_RS}
+set US to character id {_US}
+set titles to \"\""""
+
+
+def _enum_titles_as(ws_expr: str) -> str:
+    # 只有 1 个窗口时 name of every window 返回字符串而非列表，须先包成列表再遍历
+    return f"""set ws to {ws_expr}
+if class of ws is not list then set ws to {{ws}}
+repeat with i from 1 to count of ws
+    try
+        set titles to titles & ((item i of ws) as text) & US
+    end try
+end repeat"""
+
+
 def _title_hits(titles: list[str], file_name: str) -> bool:
     """任一窗口标题含目标文件名即命中（不区分大小写，与 AppleScript contains 一致）。"""
     needle = file_name.casefold()
@@ -256,11 +273,9 @@ def _verify_window_open(
     # AppleScript 只负责激活并回传窗口标题（单次，不轮询）；命中判定与 VERIFY_TIMEOUT_S 轮询在 Python 侧，可被单测直接覆盖。
     script = f'''
     set officeApps to {{{apps_quoted}}}
-    set RS to character id {_RS}
-    set US to character id {_US}
+{_TITLES_PRELUDE}
     set procSeen to false
     set actOK to false
-    set titles to ""
     tell application "System Events"
         set procNames to name of every process
         repeat with pn in procNames
@@ -270,14 +285,7 @@ def _verify_window_open(
                     if not (frontmost of process (pn as text)) then set frontmost of process (pn as text) to true
                     if frontmost of process (pn as text) then
                         set actOK to true
-                        -- 只有 1 个窗口时 AppleScript 返回字符串而非列表，须先包成列表再遍历
-                        set ws to name of every window of process (pn as text)
-                        if class of ws is not list then set ws to {{ws}}
-                        repeat with i from 1 to count of ws
-                            try
-                                set titles to titles & ((item i of ws) as text) & US
-                            end try
-                        end repeat
+{_enum_titles_as('name of every window of process (pn as text)')}
                     end if
                 end try
             end if

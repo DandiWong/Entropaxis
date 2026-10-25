@@ -1,5 +1,6 @@
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 import contextlib
@@ -655,6 +656,37 @@ class WindowMatchTests(unittest.TestCase):
         for garbage in ("", "\n", "true\n", "false", "ok", "weird" + RS + "报告 v1.docx" + US, RS + "报告 v1.docx"):
             with self.subTest(garbage=garbage):
                 self.assertIsNone(self.verify(None, None, stdout=garbage)[0], "格式异常按无法校验处理，绝不判命中")
+
+
+@unittest.skipUnless(sys.platform == "darwin" and shutil.which("osascript"), "需要 macOS osascript（纯 AppleScript 计算，不控制其它应用）")
+class AppleScriptEnumerationTests(unittest.TestCase):
+    """真实 osascript 执行生产的标题枚举/编码片段，再交给生产解析与命中判定；去掉标量归一化语句，标量用例必须失败。"""
+
+    def run_as(self, ws_expr):
+        script = "\n".join([
+            open_file._TITLES_PRELUDE,
+            open_file._enum_titles_as(ws_expr),
+            'return "ok" & RS & titles',
+        ])
+        res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=20)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return open_file._parse_window_report(res.stdout)
+
+    def test_scalar_single_title_hits(self):
+        status, titles = self.run_as('"a.docx - WPS Office"')  # 单窗口时 AX 返回字符串而非列表
+        self.assertEqual((status, titles), ("ok", ["a.docx - WPS Office"]))
+        self.assertTrue(open_file._title_hits(titles, "a.docx"))
+
+    def test_list_of_titles_hits_any(self):
+        status, titles = self.run_as('{"b.docx", "a.docx - WPS Office"}')
+        self.assertEqual((status, titles), ("ok", ["b.docx", "a.docx - WPS Office"]))
+        self.assertTrue(open_file._title_hits(titles, "a.docx"))
+        self.assertFalse(open_file._title_hits(titles, "c.docx"))
+
+    def test_empty_title_set_does_not_hit(self):
+        status, titles = self.run_as("{}")
+        self.assertEqual((status, titles), ("ok", []))
+        self.assertFalse(open_file._title_hits(titles, "a.docx"))
 
 
 class CliWordingTests(unittest.TestCase):
