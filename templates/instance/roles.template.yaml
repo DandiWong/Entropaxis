@@ -12,7 +12,7 @@ roles:
   Designer: {duty: 视觉美学/UI交互原型/排版呈现/PPT配图, timeout_s: 900, preferences: [designer-1]}
   Builder: {duty: 方案实施/核心编码/重构, timeout_s: 3600, preferences: [builder-1, builder-2]}
   Reviewer: {duty: 方案审计/对抗评审/架构合规, timeout_s: 1800, preferences: [reviewer-1, reviewer-2, reviewer-3]}
-  Maintainer: {duty: 全流程验收/守门落盘/证据核验, timeout_s: 900, preferences: [maintainer-1]}
+  Maintainer: {duty: 全流程验收/守门落盘/证据核验, timeout_s: 900, preferences: [maintainer-1, maintainer-2, maintainer-3]}
   Reporter: {duty: 文稿与报告：汇报/周报/纪要/论文专利/翻译/数据分析, timeout_s: 900, preferences: [reporter-1, reporter-2]}
 command_profiles:
   architecture-1: {agent: claude, model: claude-opus-5.5}
@@ -25,6 +25,8 @@ command_profiles:
   reviewer-2: {agent: omp, model: zhipu-coding-plan/glm-5.3}
   reviewer-3: {agent: claude, model: claude-opus-5.5}
   maintainer-1: {agent: claude, model: claude-opus-5.5}
+  maintainer-2: {agent: omp, model: openai-codex/gpt-6.1-sol}
+  maintainer-3: {agent: omp, model: google-antigravity/gemini-3.8-flash}
   reporter-1: {agent: omp, model: google-antigravity/gemini-3.8-flash}
   reporter-2: {agent: omp, model: minimax-code-cn/MiniMax-M3}
   builder-verify:
