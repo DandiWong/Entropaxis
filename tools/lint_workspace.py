@@ -1181,7 +1181,11 @@ def check_routing_integrity(root: Path) -> list[str]:
     # 2. 注册表中的每个项目主目录物理存在
     for proj in project_registry.load_projects(root):
         if not (root / proj["path"]).is_dir():
-            issues.append(f"[注册表断链] .entropaxis/data/templates/registry.yaml 注册的项目目录 {proj['path']}/ 物理不存在。")
+            issues.append(
+                f"[注册表断链] .entropaxis/data/templates/registry.yaml 注册的项目目录 {proj['path']}/ 物理不存在；"
+                "若该目录已被人工删除或从未建成，请人工裁决：补回目录或退役该登记项，"
+                "Agent 不得自行恢复或注销（见 rules/角色协作.md「人工与 Manager 并存」）。"
+            )
 
     # 2b. 反向校验：工作区根级目录须能在注册表主目录或排除规则中找到归属，
     # 否则新目录会游离于白名单之外而不被察觉（正向校验只查"注册的目录是否存在"，不查"存在的目录是否注册"）。
