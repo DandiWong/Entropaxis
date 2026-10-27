@@ -182,6 +182,24 @@ class LintCoverageTests(unittest.TestCase):
         self.write(f"{base}/tests/test_plat.py", 'import plat\n# darwin win32 linux\n')
         self.assertEqual(lint.check_platform_fallback(self.root), [])
 
+    def test_unix_module_without_guard_is_flagged(self):
+        base = paths.SYSTEM_DIRNAME
+        self.write(f"{base}/tools/fcntl_only.py", "import fcntl\ndef main(): pass\n")
+        issues = lint.check_platform_fallback(self.root)
+        self.assertEqual(len(issues), 1, issues)
+        self.assertIn("Unix专有模块未隔离", issues[0])
+        self.write(f"{base}/tools/fcntl_only.py", "import sys\nif sys.platform == 'darwin':\n    import fcntl\n")
+        self.write(f"{base}/tests/test_fcntl.py", "import fcntl_only\n# darwin win32 linux\ndef test_fcntl(): pass\n")
+        self.assertEqual(lint.check_platform_fallback(self.root), [])
+
+    def test_hardcoded_posix_path_is_flagged(self):
+        base = paths.SYSTEM_DIRNAME
+        self.write(f"{base}/tools/posix_path.py", 'tmp = "/tmp/scratch.txt"\n')
+        issues = lint.check_platform_fallback(self.root)
+        self.assertEqual(len(issues), 1, issues)
+        self.assertIn("跨平台路径不兼容", issues[0])
+        self.write(f"{base}/tools/posix_path.py", 'import tempfile\ntmp = tempfile.gettempdir()\n')
+        self.assertEqual(lint.check_platform_fallback(self.root), [])
     def test_tool_without_error_test_is_flagged(self):
         base = paths.SYSTEM_DIRNAME
         self.write(f"{base}/tools/lonely.py", "def main():\n    return 1\n")

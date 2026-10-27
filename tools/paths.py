@@ -1,5 +1,23 @@
 """控制面与实例面的路径单一真源。任何工具不得再自行推导层级或硬编码目录名。"""
 from pathlib import Path
+import sys
+
+
+def ensure_utf8_console() -> None:
+    """中文 Windows 默认控制台代码页为 cp936/cp1252，输出中文或 emoji 易抛 UnicodeEncodeError。
+
+    本函数在导入时安全重配标准流为 UTF-8 编码，抹平三平台终端字符集差异。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
+ensure_utf8_console()
 
 SYSTEM_DIRNAME = ".entropaxis"          # 安装器/收件方重建/门禁排除项使用的字面名
 LEGACY_SYSTEM_DIRNAME = ".system"       # 仅供残留检测：旧版遗留，或写入方未按契约在根目录误建

@@ -247,6 +247,16 @@ class MachineBackendPlatformTests(unittest.TestCase):
             original_fd = FC._fd_binary
             FC._fd_binary = lambda: None
             self.addCleanup(setattr, FC, "_fd_binary", original_fd)
+            _, backend, degraded = FC.search_machine("主题", Path(self.tmp.name), timeout=5)
+        self.assertEqual(backend, "walk")
+        self.assertIn("本平台无可用系统索引", degraded)
+        self.assertIn("已降级为内置遍历", degraded)
+
+        with mock.patch.object(FC.platform, "system", return_value="Linux"):
+            self._patch_which({})  # 无 locate、无 fd
+            original_fd = FC._fd_binary
+            FC._fd_binary = lambda: None
+            self.addCleanup(setattr, FC, "_fd_binary", original_fd)
             self._patch_run([])
             _, backend, degraded = FC.search_machine("主题", Path(self.tmp.name), timeout=5)
         self.assertEqual(backend, "find")

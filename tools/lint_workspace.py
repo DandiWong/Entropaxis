@@ -1467,7 +1467,7 @@ _BANNED_IMPORT = re.compile(
     r"openai|anthropic|flask|django|fastapi|rich|typer|toml|ruamel)\b",
     re.MULTILINE,
 )
-# 第 36 项：这些命令在 Windows 上没有同名可执行文件。
+# 第 36 项：三平台适配静态约束
 _UNIX_ONLY_ARGV = re.compile(
     r"""\[\s*["'](?:find|mdfind|osascript|pbcopy|xdg-open|plocate|locate)["']"""
 )
@@ -1476,6 +1476,11 @@ _EXTERNAL_ARGV = re.compile(r"""(?:subprocess\.\w+|\b_run|\b_git)\(\s*\[\s*["'](
 _MISSING_GUARD = re.compile(r"shutil\.which|FileNotFoundError|OSError|except Exception")
 _PLATFORM_BRANCH = re.compile(r"sys\.platform|platform\.system\(\)|\bplatform\s*[!=]=|os\.name\s*[!=]=")
 _PLATFORMS = ("darwin", "win32", "linux")
+_UNIX_MODULES_TOPLEVEL = re.compile(
+    r"^(?:import\s+(?:fcntl|termios|pty|pwd|grp)\b|from\s+(?:fcntl|termios|pty|pwd|grp)\b)",
+    re.MULTILINE,
+)
+_HARDCODED_UNIX_PATHS = re.compile(r"""["']/(?:dev/null|tmp/[^"']*)["']""")
 # 第 37 项：测试名或断言里出现失败形态，才算异常路径有执行证据。
 _ERROR_TEST = re.compile(
     r"def test_\w*(?:fail|reject|error|missing|silent|invalid|refus|unreadable|unknown|mismatch|block)",
@@ -1597,6 +1602,16 @@ def check_platform_fallback(root: Path) -> list[str]:
             text = path.read_text(encoding="utf-8")
         except OSError:
             continue
+        if _UNIX_MODULES_TOPLEVEL.search(text):
+            issues.append(
+                f"[Unix专有模块未隔离] {path.relative_to(root)} 在顶层直接导入了 Unix 专用模块，"
+                "Windows 环境下导入即崩溃；须放在平台分支、函数内部或 try-except 中延迟导入。"
+            )
+        if _HARDCODED_UNIX_PATHS.search(text):
+            issues.append(
+                f"[跨平台路径不兼容] {path.relative_to(root)} 硬编码了 Unix 专用绝对路径；"
+                "应用 tempfile.gettempdir() 或 subprocess.DEVNULL 替代。"
+            )
         if _UNIX_ONLY_ARGV.search(text) and not _PLATFORM_FALLBACK.search(text):
             issues.append(
                 f"[跨平台回退缺失] {path.relative_to(root)} 调用了 Unix 专用命令，"

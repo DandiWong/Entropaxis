@@ -70,6 +70,18 @@ def _run(argv: list[str], timeout: int) -> list[str]:
     return [line for line in done.stdout.splitlines() if line.strip()]
 
 
+def _walk_dirs(query: str, root: Path) -> list[str]:
+    hits = []
+    lowered = query.lower()
+    try:
+        for p in root.rglob("*"):
+            if p.is_dir() and lowered in p.name.lower():
+                hits.append(str(p))
+    except (OSError, ValueError):
+        pass
+    return hits
+
+
 def search_workspace(query: str, root: Path, timeout: int) -> tuple[list[str], str, str | None]:
     """工作区范围：实时遍历，永不读索引。返回 (命中, 后端, 降级原因)。"""
     fd = _fd_binary()
@@ -78,6 +90,9 @@ def search_workspace(query: str, root: Path, timeout: int) -> tuple[list[str], s
         # 正好被 gitignore 排除，实测不加 -I 会从 90 个胶囊掉到 70 个。
         return _run([fd, "-H", "-I", "-t", "d", query, str(root)], timeout), fd, None
     hint = INSTALL_HINTS.get(platform.system(), {}).get("fd", "安装 fd 可显著提速")
+    if platform.system() == "Windows":
+        hits = _walk_dirs(query, root)
+        return hits, "walk", f"Windows 无内置 Unix find，未找到 fd，已降级为内置遍历（更慢）；装上更快：{hint}"
     hits = _run(["find", str(root), "-type", "d", "-name", f"*{query}*"], timeout)
     return hits, "find", f"未找到 fd，已降级为 find（更慢）；装上更快：{hint}"
 
