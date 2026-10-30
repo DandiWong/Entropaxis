@@ -1718,24 +1718,20 @@ class BindPromptTests(TestCase):
 
 
 class WorktimeSettleTests(DispatchRoleTestBase):
-    """工时伴随签署入账：调度成功即结算活跃胶囊的 open 任务段，失败链不结算。
+    """工时伴随签署入账：T9 起角色段由调度自开自结（按 dispatch_id 结段）。
 
-    T9 起角色段由调度自开自结；本轮（T6/T7）调度仍按 `end_open_task_for` 结
-    「当前 open 段」，夹具因此用无 actor 旧段（`start_task` 已只开 Manager 段，
-    其证据门槛属 T8）。
+    本类改测 `start_dispatch_segment` / `end_dispatch_segment` 两个入口本身的行为
+    （结段只认 dispatch_id、失败写 failed 段、静默契约），run 级接线（开段→执行→结段）
+    属 T10；本版 run 路径暂不自动开段，`worklog_refs` 恒为空。
     """
 
     CST = timezone(timedelta(hours=8))
 
-    def _capsule_with_open_seg(self, minutes: int = 40) -> tuple[Path, str]:
-        cap = init_capsule.create_capsule(self.ws / "docs", "某主题方案", "Tech-901", "research")
-        at = (datetime.now(self.CST) - timedelta(minutes=minutes)).isoformat()
-        seg_id = self._open_legacy_segment(cap, "架构出方案", at=at)
-        return cap, seg_id
+    def _capsule(self, topic: str = "某主题方案", cid: str = "Tech-901") -> Path:
+        return init_capsule.create_capsule(self.ws / "docs", topic, cid, "research")
 
-    @staticmethod
-    def _open_legacy_segment(cap: Path, name: str, *, at: str, stage: str = "01_调研") -> str:
-        """写一个无 actor 的 open 旧段（T7 后 start_task 只开 Manager 段）。"""
+    def _open_legacy_segment(self, cap: Path, name: str, *, at: str, stage: str = "01_调研") -> str:
+        """写一个无 actor 的 open 旧段（旧语义收尾路径的夹具）。"""
         import yaml
         seg = {"seq": 1, "seg_id": "Tech-901#1", "name": name, "taskId": "Tech-901",
                "stage": stage, "startAt": at, "lastActivityAt": at, "state": "open"}
@@ -1752,43 +1748,76 @@ class WorktimeSettleTests(DispatchRoleTestBase):
         self.assertEqual(res["exit"], dr.EXIT_OK, res)
         return res
 
-    def test_success_settles_open_segment(self) -> None:
-        cap, seg_id = self._capsule_with_open_seg()
+    def test_dispatch_segment_roundtrip_settles_role_worklog(self) -> None:
+        """自开自结：start_dispatch_segment → end_dispatch_segment → role worklog。"""
+        cap = self._capsule()
+        started = update_capsule.start_dispatch_segment(cap, dispatch_id="a" * 32,
+                                                        role="Architecture",
+                                                        deliverable="02_方案.md")
+        self.assertEqual(started["segment"]["stage"], "02_方案")
+        self.assertEqual(started["segment"]["actor"], "role")
+        self.assertEqual(update_capsule.read_segments(cap)[0]["state"], "open")
+
+        ended = update_capsule.end_dispatch_segment("a" * 32, True, capsule=cap)
+        self.assertEqual(ended["segment"]["state"], "logged")
+        logs = update_capsule.read_worklogs(cap)
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]["actor"], "role")
+        self.assertEqual(logs[0]["role"], "Architecture")
+        self.assertEqual(logs[0]["ref"], started["segment"]["seg_id"])
+        # 秒级化（Tech-176 T2）：spent 由整数秒派生
+        self.assertEqual(logs[0]["spent"],
+                         update_capsule._seconds_to_spent(ended["segment"]["effective_seconds"]))
+
+    def test_failed_dispatch_writes_failed_segment_without_worklog(self) -> None:
+        """失败链：failed 段计机时、无 worklog，退出码不受影响（AC-7）。"""
+        cap = self._capsule()
+        update_capsule.start_dispatch_segment(cap, dispatch_id="b" * 32, role="Architecture",
+                                              deliverable="02_方案.md")
+        ended = update_capsule.end_dispatch_segment("b" * 32, False,
+                                                    failure_code="CHAIN_EXHAUSTED", capsule=cap)
+        seg = ended["segment"]
+        self.assertEqual(seg["state"], "failed")
+        self.assertGreaterEqual(seg["machine_seconds"], 1)
+        self.assertNotIn("effective_seconds", seg)
+        self.assertEqual(update_capsule.read_worklogs(cap), [], "失败链不得入账")
+
+    def test_only_own_dispatch_id_is_closed(self) -> None:
+        """P-2：两个 open 角色段，只结本 dispatch_id 的那一段。"""
+        cap = self._capsule()
+        d1 = update_capsule.start_dispatch_segment(cap, dispatch_id="c" * 32, role="Designer",
+                                                   deliverable="03_设计.md")["segment"]
+        d2 = update_capsule.start_dispatch_segment(cap, dispatch_id="d" * 32, role="Designer",
+                                                   deliverable="03_设计.md")["segment"]
+        ended = update_capsule.end_dispatch_segment("d" * 32, True, capsule=cap)
+        self.assertEqual(ended["segment"]["seg_id"], d2["seg_id"])
+        states = {s["dispatch_id"]: s["state"] for s in update_capsule.read_segments(cap)}
+        self.assertEqual(states["d" * 32], "logged")
+        self.assertEqual(states["c" * 32], "open", "别人的段不得被结")
+
+    def test_no_open_segment_is_silent_noop(self) -> None:
+        """无同 dispatch_id 的 open 段 → 结段返回 None，调度不报错。"""
+        cap = self._capsule(topic="某主题方案", cid="Tech-902")
+        self.assertIsNone(update_capsule.end_dispatch_segment("e" * 32, True, capsule=cap))
+
+    def test_success_dispatch_does_not_settle_legacy_segment(self) -> None:
+        """旧段（无 actor）不再被调度自动结段：run 路径本版不接线段，旧段保持 open。"""
+        cap = self._capsule()
+        at = (datetime.now(self.CST) - timedelta(minutes=40)).isoformat()
+        seg_id = self._open_legacy_segment(cap, "架构出方案", at=at)
         receipt = self._dispatch(
             "Architecture", {"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}},
             cap / "02_方案.md", None)
 
-        self.assertEqual(receipt["worklog_refs"], [seg_id])
-        logs = update_capsule.read_worklogs(cap)
-        self.assertEqual(len(logs), 1)
-        self.assertEqual(logs[0]["ref"], seg_id)
-        segs = update_capsule.read_segments(cap)
-        self.assertEqual([s["state"] for s in segs], ["logged"])
-        # 秒级化（Tech-176 T2）：约 40 分钟不再取整到 0.75h，spent 由整数秒派生
-        span_s = round((datetime.fromisoformat(segs[0]["endAt"])
-                        - datetime.fromisoformat(segs[0]["startAt"])).total_seconds())
-        self.assertEqual(logs[0]["spent"], update_capsule._seconds_to_spent(span_s))
-        self.assertAlmostEqual(logs[0]["spent"], 0.6667, delta=0.01)
-        self.assertIn("自动计量入账", logs[0]["summary"])
+        self.assertEqual(receipt["worklog_refs"], [], "T10 才把开段/结段接进 run 路径")
+        self.assertEqual([s["state"] for s in update_capsule.read_segments(cap)], ["open"])
+        self.assertEqual(update_capsule.read_segments(cap)[0]["seg_id"], seg_id)
 
-    def test_capsule_hint_settles_when_deliverable_outside_capsule(self) -> None:
-        """代码型产出没有落在胶囊内的交付物文件，只能靠 --capsule 定位活跃胶囊。"""
-        cap, seg_id = self._capsule_with_open_seg(minutes=20)
-        (self.ws / "out").mkdir()
-        receipt = self._dispatch(
-            "Architecture", {"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}},
-            self.ws / "out" / "02_方案.md", cap)
-
-        self.assertEqual(receipt["worklog_refs"], [seg_id])
-        # 秒级化（Tech-176 T2）：约 20 分钟不再取整到 0.25h，spent 由整数秒派生
-        seg20 = update_capsule.read_segments(cap)[0]
-        span_s = round((datetime.fromisoformat(seg20["endAt"])
-                        - datetime.fromisoformat(seg20["startAt"])).total_seconds())
-        self.assertEqual(update_capsule.worklog_total(cap), update_capsule._seconds_to_spent(span_s))
-        self.assertAlmostEqual(update_capsule.worklog_total(cap), 0.3333, delta=0.01)
-
-    def test_failed_dispatch_leaves_segment_open(self) -> None:
-        cap, _ = self._capsule_with_open_seg()
+    def test_failed_dispatch_leaves_legacy_segment_open(self) -> None:
+        """失败链不结算：旧段保持 open，无 worklog。"""
+        cap = self._capsule()
+        at = (datetime.now(self.CST) - timedelta(minutes=40)).isoformat()
+        self._open_legacy_segment(cap, "架构出方案", at=at)
         self.write_config({"architecture-primary": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 30}})
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -1799,14 +1828,15 @@ class WorktimeSettleTests(DispatchRoleTestBase):
         self.assertEqual(update_capsule.read_worklogs(cap), [], "失败链不得预先入账")
         self.assertEqual([s["state"] for s in update_capsule.read_segments(cap)], ["open"])
 
-    def test_no_open_segment_is_silent_noop(self) -> None:
-        cap = init_capsule.create_capsule(self.ws / "docs", "某主题方案", "Tech-902", "research")
-        receipt = self._dispatch(
-            "Architecture", {"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}},
-            cap / "02_方案.md", cap)
-
-        self.assertEqual(receipt["worklog_refs"], [], "无段可结时静默放行，不阻断调度")
-        self.assertEqual(update_capsule.read_worklogs(cap), [])
+    def test_legacy_segment_still_settles_by_hand(self) -> None:
+        """旧段按旧语义收尾：人工 --end-task --at 按墙钟秒数入账，不写 actor。"""
+        cap = self._capsule()
+        self._open_legacy_segment(cap, "架构出方案",
+                                  at="2026-10-15T09:00:00+08:00", stage="01_调研")
+        res = update_capsule.end_task(cap, at="2026-10-15T09:07:00+08:00")
+        self.assertEqual(res["segment"]["machine_seconds"], 420)
+        self.assertNotIn("actor", res["entry"], "旧段结算不推断执行主体")
+        self.assertEqual(res["entry"]["seconds"], 420)
 
 
 class RunFileLifecycleTests(DispatchRoleTestBase):

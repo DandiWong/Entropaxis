@@ -1,4 +1,5 @@
 import contextlib
+import datetime as dt
 import hashlib
 import os
 import subprocess
@@ -7,7 +8,9 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid
 from pathlib import Path
+from unittest import mock
 
 from tools import lint_workspace as lw
 from tools import update_audit_state as uas
@@ -685,6 +688,522 @@ class ManagerSegmentTests(unittest.TestCase):
         payload = {"id": "Tech-1", "lifecycle": "active", **data}
         (self.cap / "capsule.yaml").write_text(
             yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+class ManagerEndSegmentTests(unittest.TestCase):
+    """Tech-176 T8（方案 4.4 判定 7、4.4.2）：Manager 结段的证据门槛、尾空档截断与扣 role 段重叠。
+
+    固定时钟注入：monkeypatch `dt.datetime.now` 让「现在」可预测，尾空档与区间秒断言
+    才不会随真实时间漂移。
+    """
+
+    CST = dt.timezone(dt.timedelta(hours=8))
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.cap = Path(self._td.name) / "20261029_Manager结段"
+        self.cap.mkdir()
+        (self.cap / "capsule.yaml").write_text(MANIFEST.format(lifecycle="active"), encoding="utf-8")
+        (self.cap / "02_方案.md").write_text("方案\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    # ---------- 夹具 ----------
+
+    def _write_manifest(self, data: dict) -> None:
+        import yaml
+        payload = {"id": "Tech-1", "lifecycle": "active", **data}
+        (self.cap / "capsule.yaml").write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    def _start(self, *, at: str = "2026-10-15T09:00:00+08:00",
+               last_activity: str | None = None, **kw) -> dict:
+        res = uc.start_task(self.cap, name="事务", task_id="Tech-1", at=at, **kw)
+        if last_activity:
+            self._write_manifest({"task_segments": uc.read_segments(self.cap),
+                                  "worklogs": [], "seq_next": 2})
+            # 直接改 lastActivityAt 以模拟「最后一次工具事件」与开段时刻分离
+            import yaml
+            data = yaml.safe_load((self.cap / "capsule.yaml").read_text(encoding="utf-8"))
+            data["task_segments"][-1]["lastActivityAt"] = last_activity
+            (self.cap / "capsule.yaml").write_text(
+                yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        return res
+
+    def _freeze(self, now_iso: str):
+        """把 update_capsule 的「现在」固定到 now_iso：替换模块内的 dt 引用。
+
+        只覆盖本测试用到的 now / timezone，其余 datetime 语义仍走真实 datetime，
+        避免 mock 整个模块把 normalize_to_cst 等路径一起换掉。
+        """
+        fixed = dt.datetime.fromisoformat(now_iso)
+
+        class _FrozenDatetime(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+        fake = mock.Mock(wraps=uc.dt)
+        fake.datetime = _FrozenDatetime
+        return mock.patch.object(uc, "dt", fake)
+
+    def _evidence(self, name: str = "04_Spec_Tech-1.md", body: str = "产出\n") -> Path:
+        p = self.cap / name
+        p.write_text(body, encoding="utf-8")
+        return p
+
+    def _worklogs(self) -> list[dict]:
+        return uc.read_worklogs(self.cap)
+
+    def _segments(self) -> dict:
+        return {s["seg_id"]: s for s in uc.read_segments(self.cap)}
+
+    # ---------- (a)/(b) 证据门槛 ----------
+
+    def test_missing_evidence_unmeasured(self) -> None:
+        """(a) 不传 --evidence → unmeasured、无 worklog、退出码 0。"""
+        self._start()
+        before = (self.cap / "capsule.yaml").read_bytes()
+        res = uc.end_task(self.cap)
+        seg = res["segment"]
+        self.assertEqual(seg["state"], "unmeasured")
+        self.assertIn("未带 --evidence", seg["note"])
+        self.assertEqual(self._worklogs(), [])
+        self.assertEqual(res["worklog_refs"], [])
+        self.assertNotEqual((self.cap / "capsule.yaml").read_bytes(), before, "作废须落盘")
+
+    def test_unchanged_evidence_unmeasured(self) -> None:
+        """(b) 证据文件指纹与 baseline 相同 → unmeasured。"""
+        self._start()
+        with self._freeze("2026-10-15T09:30:00+08:00"):
+            res = uc.end_task(self.cap, evidence="02_方案.md")
+        self.assertEqual(res["segment"]["state"], "unmeasured")
+        self.assertIn("指纹", res["segment"]["note"])
+        self.assertEqual(self._worklogs(), [])
+
+    def test_evidence_outside_capsule_unmeasured(self) -> None:
+        """证据路径逃出胶囊（../x.md）→ unmeasured，不读胶囊外文件。"""
+        (self._td.name + "/outside.md").write_text("x", encoding="utf-8") if False else None
+        outside = Path(self._td.name) / "outside.md"
+        outside.write_text("胶囊外\n", encoding="utf-8")
+        self._start()
+        res = uc.end_task(self.cap, evidence="../outside.md")
+        self.assertEqual(res["segment"]["state"], "unmeasured")
+        self.assertIn("无效", res["segment"]["note"])
+
+    def test_missing_evidence_file_unmeasured(self) -> None:
+        """证据文件不存在 → unmeasured。"""
+        self._start()
+        res = uc.end_task(self.cap, evidence="07_验收报告.md")
+        self.assertEqual(res["segment"]["state"], "unmeasured")
+        self.assertIn("无效", res["segment"]["note"])
+
+    def test_new_evidence_logs_manager_worklog(self) -> None:
+        """(c) 新证据文件 → logged、actor=manager、evidence_sha256、effective_seconds。"""
+        self._start(last_activity="2026-10-15T09:30:00+08:00")
+        self._evidence()
+        with self._freeze("2026-10-15T09:30:00+08:00"):
+            res = uc.end_task(self.cap, evidence="04_Spec_Tech-1.md")
+        seg = res["segment"]
+        self.assertEqual(seg["state"], "logged")
+        self.assertEqual(seg["machine_seconds"], 1800)
+        self.assertEqual(seg["effective_seconds"], 1800)
+        self.assertEqual(seg["actor"], "manager")
+        self.assertEqual(seg["evidence"], "04_Spec_Tech-1.md")
+        self.assertRegex(seg["evidence_sha256"], r"^[0-9a-f]{16}$")
+        self.assertEqual(seg["evidence_sha256"],
+                         hashlib.sha256((self.cap / "04_Spec_Tech-1.md").read_bytes()).hexdigest()[:16])
+        entry = res["entry"]
+        self.assertEqual(entry["actor"], "manager")
+        self.assertNotIn("role", entry)
+        self.assertEqual(entry["seconds"], 1800)
+        self.assertEqual(entry["spent"], 0.5)
+        self.assertEqual(len(self._worklogs()), 1)
+
+    # ---------- (d) 扣 role 段重叠 ----------
+
+    def test_role_overlap_subtracted(self) -> None:
+        """(d) 30m 段内扣掉 10m role 段 → effective_seconds=1200，machine_seconds=1800。"""
+        # 先开 Manager 段（baseline 记 02_方案.md），再造 role 段与证据
+        mgr_id = self._start(at="2026-10-15T09:00:00+08:00",
+                             last_activity="2026-10-15T09:30:00+08:00")["segment"]["seg_id"]
+        mgr = self._segments()[mgr_id]  # _start 已把 lastActivityAt 改到 09:30，重读生效值
+        role_seg = {"seq": 2, "seg_id": "Tech-1#2", "name": "Architecture→02_方案.md",
+                    "startAt": "2026-10-15T09:10:00+08:00", "lastActivityAt": "2026-10-15T09:20:00+08:00",
+                    "endAt": "2026-10-15T09:20:00+08:00", "state": "logged", "actor": "role",
+                    "role": "Architecture", "dispatch_id": "a" * 32, "trigger": "dispatch",
+                    "stage": "02_方案", "machine_seconds": 600, "effective_seconds": 600}
+        entry = {"date": "2026-10-15", "stage": "02_方案", "spent": 0.1667, "seconds": 600,
+                 "summary": "角色段", "operator": "t", "ref": "Tech-1#2", "actor": "role",
+                 "role": "Architecture"}
+        segs = [s for s in uc.read_segments(self.cap) if s["seg_id"] != mgr_id]
+        self._write_manifest({"task_segments": [role_seg, mgr],
+                              "worklogs": [entry], "seq_next": 4})
+        before_role = self._segments()["Tech-1#2"]
+        self._evidence()
+        with self._freeze("2026-10-15T09:30:00+08:00"):
+            res = uc.end_task(self.cap, evidence="04_Spec_Tech-1.md")
+        seg = res["segment"]
+        self.assertEqual(seg["seg_id"], mgr_id)
+        self.assertEqual(seg["machine_seconds"], 1800)
+        self.assertEqual(seg["effective_seconds"], 1200)
+        self.assertEqual(res["entry"]["seconds"], 1200)
+        self.assertEqual(len(self._worklogs()), 2, "role 段原有 worklog 不得被改动")
+        after = self._segments()
+        self.assertEqual(after["Tech-1#2"]["state"], "logged")
+        self.assertEqual(after["Tech-1#2"]["machine_seconds"], 600)
+        self.assertEqual(after["Tech-1#2"], before_role, "role 段事实层不得被 Manager 结段改动")
+
+    def test_fully_covered_by_role_segments_unmeasured(self) -> None:
+        """(f) Manager 段完全被 role 段覆盖 → unmeasured。"""
+        mgr_id = self._start(at="2026-10-15T09:00:00+08:00",
+                             last_activity="2026-10-15T09:30:00+08:00")["segment"]["seg_id"]
+        mgr = self._segments()[mgr_id]  # _start 已把 lastActivityAt 改到 09:30，重读生效值
+        role_seg = {"seq": 2, "seg_id": "Tech-1#2", "name": "Designer→03_设计.md",
+                    "startAt": "2026-10-15T09:00:00+08:00", "lastActivityAt": "2026-10-15T09:30:00+08:00",
+                    "endAt": "2026-10-15T09:30:00+08:00", "state": "logged", "actor": "role",
+                    "role": "Designer", "dispatch_id": "b" * 32, "trigger": "dispatch",
+                    "stage": "03_设计", "machine_seconds": 1800, "effective_seconds": 1800}
+        entry = {"date": "2026-10-15", "stage": "03_设计", "spent": 0.5, "seconds": 1800,
+                 "summary": "角色段", "operator": "t", "ref": "Tech-1#2", "actor": "role",
+                 "role": "Designer"}
+        segs = [s for s in uc.read_segments(self.cap) if s["seg_id"] != mgr_id]
+        self._write_manifest({"task_segments": [role_seg, mgr],
+                              "worklogs": [entry], "seq_next": 4})
+        self._evidence()
+        with self._freeze("2026-10-15T09:30:00+08:00"):
+            res = uc.end_task(self.cap, evidence="04_Spec_Tech-1.md")
+        self.assertEqual(res["segment"]["state"], "unmeasured")
+        self.assertIn("重叠", res["segment"]["note"])
+        self.assertEqual([w for w in self._worklogs() if w.get("actor") != "role"], [])
+        self.assertNotIn("machine_seconds", res["segment"])
+
+    def test_open_role_segment_overlap_counts(self) -> None:
+        """未收尾的 open role 段也计入重叠（无 endAt 视为持续到结段时刻）。"""
+        mgr_id = self._start(at="2026-10-15T09:00:00+08:00",
+                             last_activity="2026-10-15T09:20:00+08:00")["segment"]["seg_id"]
+        mgr = self._segments()[mgr_id]  # _start 已把 lastActivityAt 改到 09:20，重读生效值
+        role_seg = {"seq": 2, "seg_id": "Tech-1#2", "name": "Researcher→01_调研.md",
+                    "startAt": "2026-10-15T09:10:00+08:00", "lastActivityAt": "2026-10-15T09:15:00+08:00",
+                    "state": "open", "actor": "role", "role": "Researcher",
+                    "dispatch_id": "c" * 32, "trigger": "dispatch", "stage": "01_调研"}
+        segs = [s for s in uc.read_segments(self.cap) if s["seg_id"] != mgr_id]
+        self._write_manifest({"task_segments": [role_seg, mgr],
+                              "worklogs": [], "seq_next": 4})
+        self._evidence()
+        with self._freeze("2026-10-15T09:20:00+08:00"):
+            res = uc.end_task(self.cap, evidence="04_Spec_Tech-1.md")
+        self.assertEqual(res["segment"]["seg_id"], mgr_id)
+        # 区间 09:00–09:20 共 1200s，open role 段 09:10 起无 endAt 视为持续到 end → 重叠 600s
+        self.assertEqual(res["segment"]["effective_seconds"], 600)
+
+    # ---------- (e) 尾部空档 ----------
+
+    def test_idle_gap_over_threshold_truncates_to_last_activity(self) -> None:
+        """(e) 尾空档 2h（>600s）→ 结束时刻取最后一次工具事件。"""
+        self._start(last_activity="2026-10-15T09:30:00+08:00")
+        self._evidence()
+        with self._freeze("2026-10-15T11:30:00+08:00"):
+            res = uc.end_task(self.cap, evidence="04_Spec_Tech-1.md")
+        seg = res["segment"]
+        self.assertIn("09:30:00", seg["endAt"])
+        self.assertEqual(seg["machine_seconds"], 1800)
+        self.assertEqual(seg["effective_seconds"], 1800)
+
+    def test_idle_gap_within_threshold_takes_now(self) -> None:
+        """(e) 尾空档 5m（≤600s）→ 结束时刻取 now。"""
+        self._start(last_activity="2026-10-15T09:25:00+08:00")
+        self._evidence()
+        with self._freeze("2026-10-15T09:30:00+08:00"):
+            res = uc.end_task(self.cap, evidence="04_Spec_Tech-1.md")
+        seg = res["segment"]
+        self.assertIn("09:30:00", seg["endAt"])
+        self.assertEqual(seg["machine_seconds"], 1800)
+
+    # ---------- (g) 拒绝 --at ----------
+
+    def test_manager_segment_rejects_at(self) -> None:
+        """(g) 对 Manager 段传 --at → 退出码 1、文件字节不变。"""
+        self._start()
+        before = (self.cap / "capsule.yaml").read_bytes()
+        with self.assertRaises(uc.ToolError):
+            uc.end_task(self.cap, at="2026-10-15T09:30:00+08:00", evidence="02_方案.md")
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
+
+    def test_role_segment_rejected_by_end_task(self) -> None:
+        """方案 4.4.1：--end-task 拒绝结算 open role 段（退出码 1）。"""
+        role_seg = {"seq": 2, "seg_id": "Tech-1#2", "name": "Architecture→02_方案.md",
+                    "startAt": "2026-10-15T09:00:00+08:00", "lastActivityAt": "2026-10-15T09:00:00+08:00",
+                    "state": "open", "actor": "role", "role": "Architecture",
+                    "dispatch_id": "d" * 32, "trigger": "dispatch", "stage": "02_方案"}
+        self._write_manifest({"task_segments": [role_seg], "worklogs": [], "seq_next": 3})
+        before = (self.cap / "capsule.yaml").read_bytes()
+        with self.assertRaises(uc.ToolError) as ctx:
+            uc.end_task(self.cap, at="2026-10-15T09:07:00+08:00")
+        self.assertIn("actor=role", str(ctx.exception))
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
+
+    def test_long_manager_segment_pending_approval(self) -> None:
+        """门槛按 effective_seconds 判定（4.4.2）：>8h 的 Manager 段待批，不写 worklog。"""
+        self._start(last_activity="2026-10-15T18:00:00+08:00")
+        self._evidence()
+        with self._freeze("2026-10-15T18:00:00+08:00"):
+            res = uc.end_task(self.cap, evidence="04_Spec_Tech-1.md")
+        seg = res["segment"]
+        self.assertEqual(seg["state"], "pending_approval")
+        self.assertEqual(seg["effective_seconds"], 32400)
+        self.assertEqual(res["worklog_refs"], [])
+        self.assertEqual(self._worklogs(), [])
+
+    def test_cli_unmeasured_prints_warning_and_exits_zero(self) -> None:
+        """D-4：无证据结段在 CLI 上退出码 0 并打印 ⚠️。"""
+        self._start()
+        proc = subprocess.run([sys.executable, str(TOOL), str(self.cap), "--end-task"],
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("⚠️", proc.stdout)
+        self.assertEqual([s["state"] for s in uc.read_segments(self.cap)], ["unmeasured"])
+
+    def test_cli_manager_at_rejected_exit_one(self) -> None:
+        """CLI：Manager 段 --end-task --at → 退出码 1 且字节不变。"""
+        self._start()
+        before = (self.cap / "capsule.yaml").read_bytes()
+        proc = subprocess.run([sys.executable, str(TOOL), str(self.cap), "--end-task",
+                               "--at", "2026-10-15T09:30:00+08:00", "--evidence", "02_方案.md"],
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
+
+
+class DispatchSegmentTests(unittest.TestCase):
+    """Tech-176 T9（方案 4.4 判定 3/4、4.4.2）：角色段自开自结、ROLE_STAGE 映射与失败段。"""
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.cap = Path(self._td.name) / "20261029_调度段"
+        self.cap.mkdir()
+        (self.cap / "capsule.yaml").write_text(MANIFEST.format(lifecycle="active"), encoding="utf-8")
+        (self.cap / "02_方案.md").write_text("方案\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    def _segments(self) -> dict:
+        return {s["seg_id"]: s for s in uc.read_segments(self.cap)}
+
+    def _open(self, dispatch_id: str, role: str, deliverable: str | None = None,
+              at: str | None = None) -> dict:
+        if at:
+            # 直接构造指定开始时刻的 open role 段（固定时钟场景），追加到既有段之后
+            import yaml
+            data = yaml.safe_load((self.cap / "capsule.yaml").read_text(encoding="utf-8"))
+            segs = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
+            seq = 1 + max([int(s.get("seq", 0)) for s in segs], default=0)
+            seg = {"seq": seq, "seg_id": f"Tech-1#{seq}",
+                   "name": f"{role}→{deliverable or 'verify'}",
+                   "startAt": at, "lastActivityAt": at, "state": "open", "actor": "role",
+                   "role": role, "dispatch_id": dispatch_id, "trigger": "dispatch",
+                   "stage": uc._dispatch_stage(role, deliverable)}
+            segs.append(seg)
+            data["task_segments"] = segs
+            data["seq_next"] = seq + 1
+            (self.cap / "capsule.yaml").write_text(
+                yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            return seg
+        return uc.start_dispatch_segment(self.cap, dispatch_id=dispatch_id, role=role,
+                                         deliverable=deliverable)["segment"]
+
+    # ---------- (a) P-2 复现：只结同 dispatch_id 的段 ----------
+
+    def test_p2_only_own_dispatch_id_is_closed(self) -> None:
+        """同一胶囊先后开 d1、d2 两个 Designer 段：先结 d2 只结 d2，d1 仍 open。"""
+        d1 = self._open("a" * 32, "Designer", "03_设计.md")
+        d2 = self._open("b" * 32, "Designer", "03_设计.md")
+        self.assertNotEqual(d1["seg_id"], d2["seg_id"])
+        self.assertEqual(len(uc.read_segments(self.cap)), 2)
+
+        res2 = uc.end_dispatch_segment("b" * 32, True, capsule=self.cap)
+        self.assertEqual(res2["segment"]["state"], "logged")
+        segs = uc.read_segments(self.cap)
+        states = {s["dispatch_id"]: s["state"] for s in segs}
+        self.assertEqual(states["b" * 32], "logged")
+        self.assertEqual(states["a" * 32], "open", "先结 d2 不得碰 d1")
+        self.assertEqual(len(uc.read_worklogs(self.cap)), 1)
+
+        res1 = uc.end_dispatch_segment("a" * 32, True, capsule=self.cap)
+        self.assertEqual(res1["segment"]["state"], "logged")
+        states = {s["dispatch_id"]: s["state"] for s in uc.read_segments(self.cap)}
+        self.assertEqual(states["a" * 32], "logged")
+        self.assertEqual(len(uc.read_worklogs(self.cap)), 2, "两段各自入账一条 worklog")
+
+    def test_p2_each_segment_duration_is_own(self) -> None:
+        """两段时长各自正确：d1 与 d2 的开始时刻不同，结段时刻各取当时 now。"""
+        d1 = self._open("a" * 32, "Designer", "03_设计.md",
+                        at="2026-10-15T09:00:00+08:00")
+        d2 = self._open("b" * 32, "Designer", "03_设计.md",
+                        at="2026-10-15T09:10:00+08:00")
+        fixed = dt.datetime.fromisoformat("2026-10-15T09:20:00+08:00")
+
+        class _Frozen(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+        fake = mock.Mock(wraps=uc.dt)
+        fake.datetime = _Frozen
+        with mock.patch.object(uc, "dt", fake):
+            r2 = uc.end_dispatch_segment("b" * 32, True, capsule=self.cap)
+            r1 = uc.end_dispatch_segment("a" * 32, True, capsule=self.cap)
+        self.assertEqual(r2["segment"]["machine_seconds"], 600, "d2 自 09:10 起 10 分钟")
+        self.assertEqual(r1["segment"]["machine_seconds"], 1200, "d1 自 09:00 起 20 分钟")
+        self.assertEqual(r2["entry"]["seconds"], 600)
+        self.assertEqual(r1["entry"]["seconds"], 1200)
+        by_ref = {w["ref"]: w["seconds"] for w in uc.read_worklogs(self.cap)}
+        self.assertEqual(by_ref[d1["seg_id"]], 1200)
+        self.assertEqual(by_ref[d2["seg_id"]], 600)
+
+    # ---------- (b) 失败段 ----------
+
+    def test_failed_dispatch_writes_failed_segment_without_worklog(self) -> None:
+        """succeeded=False → state=failed、有 machine_seconds、无 worklog。"""
+        self._open("c" * 32, "Architecture", "02_方案.md",
+                   at="2026-10-15T09:00:00+08:00")
+        fixed = dt.datetime.fromisoformat("2026-10-15T09:05:00+08:00")
+
+        class _Frozen(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+        fake = mock.Mock(wraps=uc.dt)
+        fake.datetime = _Frozen
+        with mock.patch.object(uc, "dt", fake):
+            res = uc.end_dispatch_segment("c" * 32, False, failure_code="CHAIN_EXHAUSTED", capsule=self.cap)
+        seg = res["segment"]
+        self.assertEqual(seg["state"], "failed")
+        self.assertEqual(seg["machine_seconds"], 300)
+        self.assertIn("CHAIN_EXHAUSTED", seg["note"])
+        self.assertNotIn("effective_seconds", seg, "失败段不计有效工时")
+        self.assertEqual(uc.read_worklogs(self.cap), [])
+        self.assertEqual(res["worklog_refs"], [])
+
+    # ---------- (c) Reviewer 前缀映射 ----------
+
+    def test_reviewer_stage_by_deliverable_prefix(self) -> None:
+        """Reviewer：03_方案审计报告.md → 03_方案审计；05_实施审计报告.md → 05_实施审计。"""
+        s1 = uc.start_dispatch_segment(self.cap, dispatch_id="d" * 32, role="Reviewer",
+                                       deliverable="03_方案审计报告.md")["segment"]
+        self.assertEqual(s1["stage"], "03_方案审计")
+        self.assertEqual(s1["name"], "Reviewer→03_方案审计报告.md")
+        uc.end_dispatch_segment("d" * 32, True, capsule=self.cap)
+        s2 = uc.start_dispatch_segment(self.cap, dispatch_id="e" * 32, role="Reviewer",
+                                       deliverable="05_实施审计报告.md")["segment"]
+        self.assertEqual(s2["stage"], "05_实施审计")
+        self.assertEqual(s2["name"], "Reviewer→05_实施审计报告.md")
+
+    def test_role_stage_mapping_table(self) -> None:
+        """ROLE_STAGE 全表映射（方案 4.4 判定 3）。"""
+        self.assertEqual(uc.ROLE_STAGE["Researcher"], "01_调研")
+        self.assertEqual(uc.ROLE_STAGE["Architecture"], "02_方案")
+        self.assertEqual(uc.ROLE_STAGE["Designer"], "03_设计")
+        self.assertEqual(uc.ROLE_STAGE["Builder"], "04_实施")
+        self.assertEqual(uc.ROLE_STAGE["Maintainer"], "07_验收")
+        self.assertEqual(uc.ROLE_STAGE["Reporter"], "08_汇报")
+        for role, stage in uc.ROLE_STAGE.items():
+            seg = uc.start_dispatch_segment(self.cap, dispatch_id=uuid.uuid4().hex, role=role,
+                                            deliverable="x.md")["segment"]
+            self.assertEqual(seg["stage"], stage, role)
+            self.assertEqual(seg["actor"], "role")
+            self.assertEqual(seg["role"], role)
+            self.assertEqual(seg["trigger"], "dispatch")
+            uc.end_dispatch_segment(seg["dispatch_id"], True, capsule=self.cap)
+
+    # ---------- (d) 静默契约 ----------
+
+    def test_no_capsule_or_terminal_returns_none(self) -> None:
+        """无胶囊、胶囊终态、无同 dispatch_id open 段 → 返回 None，不抛异常。"""
+        with tempfile.TemporaryDirectory() as td:
+            empty = Path(td) / "empty"
+            empty.mkdir()
+            self.assertIsNone(uc.start_dispatch_segment(empty, dispatch_id="f" * 32,
+                                                        role="Builder", deliverable="x.md"))
+            self.assertIsNone(uc.end_dispatch_segment("f" * 32, True, capsule=empty))
+
+        self.assertIsNone(uc.end_dispatch_segment("9" * 32, True, capsule=self.cap),
+                          "无同 dispatch_id 的 open 段时静默返回 None")
+
+        import yaml
+        (self.cap / "capsule.yaml").write_text(
+            yaml.safe_dump({"id": "Tech-1", "lifecycle": "archived", "task_segments": [],
+                            "worklogs": [], "seq_next": 1}, allow_unicode=True), encoding="utf-8")
+        self.assertIsNone(uc.start_dispatch_segment(self.cap, dispatch_id="f" * 32,
+                                                    role="Builder", deliverable="x.md"))
+        self.assertIsNone(uc.end_dispatch_segment("f" * 32, True, capsule=self.cap))
+
+    def test_effective_seconds_subtracts_failed_attempts(self) -> None:
+        """4.4.2：effective_seconds = machine_seconds − 失败 attempt 时长，最少 1 秒。"""
+        self._open("1" * 32, "Builder", "04_Spec_Tech-1.md",
+                   at="2026-10-15T09:00:00+08:00")
+        fixed = dt.datetime.fromisoformat("2026-10-15T09:01:40+08:00")
+
+        class _Frozen(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+        fake = mock.Mock(wraps=uc.dt)
+        fake.datetime = _Frozen
+        with mock.patch.object(uc, "dt", fake):
+            res = uc.end_dispatch_segment("1" * 32, True, failed_attempt_seconds=40, capsule=self.cap)
+        self.assertEqual(res["segment"]["machine_seconds"], 100)
+        self.assertEqual(res["segment"]["effective_seconds"], 60)
+        self.assertEqual(res["entry"]["seconds"], 60)
+        self.assertEqual(res["entry"]["actor"], "role")
+        self.assertEqual(res["entry"]["role"], "Builder")
+
+    def test_effective_seconds_floor_is_one(self) -> None:
+        """失败 attempt 时长不小于总时长时，有效秒取 1（4.4.2 最少 1 秒）。"""
+        self._open("2" * 32, "Builder", "04_Spec_Tech-1.md",
+                   at="2026-10-15T09:00:00+08:00")
+        fixed = dt.datetime.fromisoformat("2026-10-15T09:00:30+08:00")
+
+        class _Frozen(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+        fake = mock.Mock(wraps=uc.dt)
+        fake.datetime = _Frozen
+        with mock.patch.object(uc, "dt", fake):
+            res = uc.end_dispatch_segment("2" * 32, True, failed_attempt_seconds=9999,
+                                          capsule=self.cap)
+        self.assertEqual(res["segment"]["machine_seconds"], 30)
+        self.assertEqual(res["segment"]["effective_seconds"], 1)
+
+    def test_manager_segment_not_blocked_by_open_role_segment(self) -> None:
+        """open 的 role 段不阻塞 Manager 开段；I-9 同 dispatch_id 不重复开段。"""
+        self._open("3" * 32, "Designer", "03_设计.md")
+        mgr = uc.start_task(self.cap, name="事务", task_id="Tech-1")
+        self.assertEqual(mgr["segment"]["actor"], "manager")
+        self.assertIsNone(uc.start_dispatch_segment(self.cap, dispatch_id="3" * 32,
+                                                    role="Designer", deliverable="03_设计.md"),
+                          "同 dispatch_id 已有 open 段，不重复开段")
+
+    def test_duplicate_dispatch_id_blocked_by_i9(self) -> None:
+        """I-9：同一胶囊内 dispatch_id 唯一，重复写入被拒且字节不变。"""
+        self._open("4" * 32, "Designer", "03_设计.md")
+        seg2 = {"seq": 2, "seg_id": "Tech-1#2", "name": "Designer→03_设计.md",
+                "startAt": "2026-10-15T09:10:00+08:00", "lastActivityAt": "2026-10-15T09:10:00+08:00",
+                "state": "open", "actor": "role", "role": "Designer",
+                "dispatch_id": "4" * 32, "trigger": "dispatch", "stage": "03_设计"}
+        import yaml
+        before = (self.cap / "capsule.yaml").read_bytes()
+        with self.assertRaises(uc.ToolError) as ctx:
+            uc._check_invariants({"task_segments": [uc.read_segments(self.cap)[0], seg2],
+                                  "worklogs": [], "seq_next": 3})
+        self.assertIn("dispatch_id 重复", str(ctx.exception))
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
 
 
 if __name__ == "__main__":

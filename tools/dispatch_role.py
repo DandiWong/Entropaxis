@@ -1020,8 +1020,9 @@ def run_assignment_result(cwd: Path, assignment_id: str, prompt: str, ack: str |
     finally:
         store.release()
 
-    # 工时伴随签署入账：调度成功即本棒工时事实，结算交付物所在胶囊的 open 任务段（无段静默跳过）
-    worktime = update_capsule.end_open_task_for(path=deliverable) if succeeded else None
+    # 角色段自开自结（Tech-176 T9）：run 级 dispatch_id 开段/结段的接线属 T10；
+    # 本版先移除 end_open_task_for 调用点，失败链不结算的语义由 T10 的 failed 段承接。
+    worktime: dict[str, Any] | None = None
 
     if succeeded:
         return {"outcome": "succeeded", "tier": tier, "role": role, "gate": gate, "mode": mode, "source": source,
@@ -1100,8 +1101,9 @@ def run_direct_result(cwd: Path, role: str, prompt: str, out: Path | None, owner
     fallback_reason = "" if succeeded else _FAILURE_TO_REASON.get(failure, "")
     verdict = {"outcome": "succeeded", "exit": EXIT_OK} if succeeded else adjudicate(mode, gate, failure)
     status = "succeeded" if succeeded else ("blocked" if verdict["outcome"] == "blocked" else "failed")
-    # 工时伴随签署入账：代码型产出无交付物文件，只能靠 --capsule 定位活跃胶囊（交付物路径优先）
-    worktime = update_capsule.end_open_task_for(capsule=capsule, path=deliverable or cwd) if succeeded else None
+    # 角色段自开自结（Tech-176 T9）：run 级 dispatch_id 开段/结段的接线属 T10；
+    # 本版先移除 end_open_task_for 调用点（旧段由人工 --end-task 或 T10 的 failed 段收尾）。
+    worktime: dict[str, Any] | None = None
     # 先盖章再取指纹，否则档案记的是盖章前的文件
     receipt = _issue_receipt(role, attempts, deliverable, target_file, carrier, carrier_ref) if succeeded else {}
     duration_s = ok_attempt.get("duration_s") if (succeeded and ok_attempt) else None

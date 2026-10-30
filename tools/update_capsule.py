@@ -63,6 +63,9 @@ UNMEASURABLE_SOURCES = ("open", "pending_approval")
 # >24h 只能修正或拆段。判定不取整：8h01m（28860s）不得被归成 8h 而绕过待批。
 AUTO_LIMIT_S = 28800
 APPROVAL_LIMIT_S = 86400
+# Manager 段尾部空档阈值（方案 4.4 判定 7、D-3）：最后一次工具事件之后超过 600 秒
+# 视为空档，结束时刻取最后一次事件；不超过则取 now。
+IDLE_GAP_S = 600
 # 胶囊写锁：所有写函数在「读→改→写」全程持有 `.capsule.yaml.lock` 目录锁，
 # 复用 dispatch_role.ManifestStore 的过期接管逻辑，最长等待 10 秒（Tech-176 T6）。
 CAPSULE_LOCK_WAIT_S = 10.0
@@ -194,9 +197,9 @@ def _capsule_lock(capsule: Path):
     ToolError 且不落盘。
 
     不重入：调用方不得在已持有 ManifestStore 锁时再取本锁。现有调用顺序已满足
-    ——`run_direct` 的 `end_open_task_for`（:1024）在 ManifestStore 释放之后，
-    另两处（`execute_chain` 的 `sync_for` :875、`run_assignment` 的
-    `end_open_task_for` :1104）都在 ManifestStore 获取之前。
+    ——`run_assignment_result` 的段操作（T9 起走 `start/end_dispatch_segment`）在
+    ManifestStore 释放之后，`execute_chain` 的 `sync_for`（:875）在 ManifestStore
+    获取之前。T10 接线时保持该顺序。
     """
     store = _manifest_store(capsule / "capsule.yaml")
     owner = f"update_capsule:{os.getpid()}"
@@ -487,6 +490,16 @@ def _invariant_errors(data: dict[str, Any]) -> list[str]:
         if s.get("actor") == "role" and not s.get("role"):
             errs.append(f"段 {s.get('seg_id')} 的 actor=role 但缺少 role（I-8 不变量被破坏）")
 
+    # 8) I-9：同一胶囊内 dispatch_id 唯一（角色段按 dispatch_id 结段的前提）。
+    seen_dispatch: set[str] = set()
+    for s in segments:
+        did = s.get("dispatch_id")
+        if not did:
+            continue
+        if did in seen_dispatch:
+            errs.append(f"dispatch_id 重复: {did}（I-9 不变量被破坏）")
+        seen_dispatch.add(did)
+
     # 7) I-10：actor 段一旦入账（logged / pending_approval）必须有 effective_seconds；
     #    actor=manager 的这类段还必须有 evidence_sha256（方案 4.4.1 兜底）。
     for s in segments:
@@ -566,16 +579,21 @@ def _close_segment(capsule: Path, data: dict[str, Any], seg: dict, end_dt: dt.da
     return _settle_segment(data, seg, max(1, round((end_dt - start_dt).total_seconds())))
 
 
-def _settle_segment(data: dict[str, Any], seg: dict, seconds: int) -> dict | None:
+def _settle_segment(data: dict[str, Any], seg: dict, seconds: int,
+                    machine_seconds: int | None = None) -> dict | None:
     """按整数秒把已收尾段结算为 logged / pending_approval，返回新 worklog（若有）。
 
     门槛按原始秒数判定（方案 4.4.2）：28860 秒（8h01m）不得被归成 8h 而绕过待批。
     段写 machine_seconds；旧段（无 actor）的 effective_seconds 不写，worklog seconds
     等于 machine_seconds（4.4.2 末行）。spent 由 seconds 派生（round(秒/3600, 4)）。
-    角色/Manager 段的 actor、role、effective_seconds 由 T8/T9 写入，T3 只兜底派生。
+    角色/Manager 段由 T8/T9 先写 effective_seconds 与各自的 machine_seconds，本函数
+    只按门槛判定状态并生成 worklog。
     """
     seconds = max(1, round(seconds))
-    seg["machine_seconds"] = seconds
+    if machine_seconds is not None:
+        seg["machine_seconds"] = max(1, round(machine_seconds))
+    else:
+        seg["machine_seconds"] = seconds
     actor = seg.get("actor")
     effective = seg.get("effective_seconds")
     effective = max(0, round(effective)) if isinstance(effective, (int, float)) else seconds
@@ -876,6 +894,66 @@ def touch_task(capsule_dir: str | Path, at: str | None = None, dry_run: bool = F
     return {"capsule": str(capsule), "status": "touched", "segment": open_seg, "dry_run": dry_run}
 
 
+def _sha256_prefix(path: Path) -> str:
+    """文件 sha256 前 16 位（与 baseline / evidence_sha256 同口径）。"""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def _manager_evidence_sha256(capsule: Path, evidence: str | None) -> str | None:
+    """Manager 段证据指纹：证据须是胶囊内可见文件，且指纹与开段 baseline 不同。
+
+    返回 16hex 指纹；缺 --evidence、路径在胶囊外、文件不存在或指纹未变返回 None
+    （调用方据此转 unmeasured）。只判产出、不推时长（方案 4.4 判定 7 末行）。
+    """
+    if not evidence or not str(evidence).strip():
+        return None
+    rel = str(evidence).strip()
+    target = (capsule / rel).resolve()
+    if not target.is_file() or capsule not in target.parents:
+        return None
+    try:
+        sha = _sha256_prefix(target)
+    except OSError:
+        return None
+    return sha
+
+
+def _manager_end_moment(seg: dict, now: dt.datetime) -> dt.datetime:
+    """Manager 段结束时刻：尾空档 > IDLE_GAP_S 取最后一次工具事件，否则取 now（D-3）。"""
+    last_raw = seg.get("lastActivityAt")
+    last_dt = normalize_to_cst(last_raw) if last_raw else None
+    if last_dt is not None and (now - last_dt).total_seconds() > IDLE_GAP_S:
+        return last_dt
+    return now
+
+
+def _role_segment_overlap_seconds(segments: list[dict], start: dt.datetime,
+                                  end: dt.datetime) -> int:
+    """本胶囊所有 role 段与 [start, end] 的整数秒重叠（按并集计，不重复扣）。"""
+    ranges: list[tuple[dt.datetime, dt.datetime]] = []
+    for s in segments:
+        if s.get("actor") != "role" or not s.get("startAt"):
+            continue
+        s_start = normalize_to_cst(s["startAt"])
+        s_end = normalize_to_cst(s["endAt"]) if s.get("endAt") else end
+        lo, hi = max(start, s_start), min(end, s_end)
+        if hi > lo:
+            ranges.append((lo, hi))
+    if not ranges:
+        return 0
+    ranges.sort()
+    total = 0.0
+    cur_lo, cur_hi = ranges[0]
+    for lo, hi in ranges[1:]:
+        if lo > cur_hi:
+            total += (cur_hi - cur_lo).total_seconds()
+            cur_lo, cur_hi = lo, hi
+        else:
+            cur_hi = max(cur_hi, hi)
+    total += (cur_hi - cur_lo).total_seconds()
+    return int(round(total))
+
+
 @_locked  # T6：读→改→写全程持胶囊目录锁
 def end_task(capsule_dir: str | Path, trigger: str = "deliver", at: str | None = None,
              inferred: bool = False, evidence: str | None = None, note: str | None = None,
@@ -890,9 +968,26 @@ def end_task(capsule_dir: str | Path, trigger: str = "deliver", at: str | None =
     _check_invariants(data)
 
     segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
-    open_seg = _find_open_segment(segments)
+    # Manager 段优先取本胶囊 open 的 manager 段；没有则退回首个 open 段（旧段或 role 段，
+    # 后者按 4.4.1 拒绝结算）。
+    open_seg = next((s for s in segments if s.get("state") == "open" and s.get("actor") == "manager"),
+                    None) or _find_open_segment(segments)
     if not open_seg:
         raise ToolError("❌ 胶囊当前没有进行中的 open 任务段，无需收尾。")
+
+    # T8 段：actor 政策（方案 4.4.1）。Manager 段走证据门槛 + 尾空档 + 扣 role 段重叠；
+    # role 段只由调度按 dispatch_id 结段，本入口拒绝结算（残留段用 --unmeasure-segment）。
+    actor = open_seg.get("actor")
+    if actor == "role":
+        raise ToolError(
+            f"❌ 段 {open_seg['seg_id']} 是角色调度段（actor=role），不能由 --end-task 结算\n"
+            "👉 修复建议: 角色段由 dispatch_role.py run 自开自结；"
+            f"残留段请用 --unmeasure-segment {open_seg['seg_id']} --reason <原因> 收尾。"
+        )
+    if actor == "manager":
+        return _end_manager_task(capsule, data, text, open_seg, segments,
+                                 trigger=trigger, evidence=evidence, note=note,
+                                 at=at, dry_run=dry_run)
 
     # IMP-M2：使用显式 --at 回填或更正时必须提供 --evidence；
     # 若未传 --at 而仅以 Tool 记录的 lastActivityAt 中断回填，允许省略证据（恢复 AC-5(b)）。
@@ -939,6 +1034,81 @@ def end_task(capsule_dir: str | Path, trigger: str = "deliver", at: str | None =
         "worklog_refs": worklog_refs,
         "dry_run": dry_run
     }
+
+
+def _end_manager_task(capsule: Path, data: dict[str, Any], text: str, seg: dict,
+                      segments: list[dict], *, trigger: str, evidence: str | None,
+                      note: str | None, at: str | None, dry_run: bool) -> dict:
+    """Manager 段结段（Tech-176 T8，方案 4.4 判定 7、4.4.2）。
+
+    ① 不接受 --at / --inferred：结束时刻由尾空档规则决定；
+    ② 证据门槛：--evidence 须指向胶囊内文件且指纹与开段 baseline 不同，否则段转
+       unmeasured、退出码 0、不写 worklog；
+    ③ 有效秒 = (尾空档截断后的区间) − 与同胶囊 role 段的重叠秒；≤0 → unmeasured
+       （「全部与角色调度重叠」）；
+    ④ 否则按 effective_seconds 走 ≤8h / 8–24h / >24h 门槛（4.4.2：结果 ≤0 不取最少 1 秒）。
+    """
+    if at or trigger not in ("deliver", "delivered"):
+        # --at 会绕过尾空档与重叠扣除的口径；Manager 段结束时刻只由工具事件决定。
+        raise ToolError(
+            "❌ Manager 段不接受 --at（结束时刻由最后一次工具事件与尾空档阈值决定）\n"
+            "👉 修复建议: 去掉 --at 重试；确需修正结束时间请先用 --unmeasure-segment 收尾再人工补登。"
+        )
+
+    seg_id = seg["seg_id"]
+    evidence_rel = str(evidence).strip() if evidence and str(evidence).strip() else None
+    sha = _manager_evidence_sha256(capsule, evidence_rel)
+    baseline = seg.get("baseline") or {}
+    unchanged = sha is not None and any(v == sha for v in baseline.values())
+
+    def finish(state: str, *, reason: str, seconds: int | None = None) -> dict:
+        seg["state"] = state
+        seg["trigger"] = trigger
+        seg["note"] = (seg.get("note") or "") + f" {reason}".rstrip()
+        if evidence_rel:
+            seg["evidence"] = evidence_rel
+        if sha:
+            seg["evidence_sha256"] = sha
+        if not dry_run:
+            _check_invariants(data)
+            _save_capsule_yaml(capsule, data, text)
+        return {"capsule": str(capsule), "status": "ended", "segment": seg, "entry": None,
+                "worklog_refs": [], "dry_run": dry_run}
+
+    if evidence_rel is None:
+        return finish("unmeasured", reason="未带 --evidence <产出物>：无产出证据，段作废不入账")
+    if sha is None:
+        return finish("unmeasured", reason=f"证据文件无效（不在胶囊内或不存在）: {evidence_rel}")
+    if unchanged:
+        return finish("unmeasured", reason=f"证据文件指纹与开段 baseline 相同，无新产出: {evidence_rel}")
+
+    now = dt.datetime.now(TZ_CST)
+    end_dt = _manager_end_moment(seg, now)
+    start_dt = normalize_to_cst(seg["startAt"])
+    if end_dt <= start_dt:
+        return finish("unmeasured", reason="区间非正：开段时间晚于最后一次工具事件")
+    seg["endAt"] = end_dt.isoformat()
+    seg["lastActivityAt"] = end_dt.isoformat()
+    seg["evidence"] = evidence_rel
+    seg["evidence_sha256"] = sha
+
+    span_s = int(round((end_dt - start_dt).total_seconds()))
+    overlap_s = _role_segment_overlap_seconds(segments, start_dt, end_dt)
+    effective = span_s - overlap_s
+    if effective <= 0:
+        return finish("unmeasured",
+                      reason=f"全部与角色调度重叠（区间 {span_s}s，重叠 {overlap_s}s）")
+    seg["machine_seconds"] = max(1, span_s)
+    seg["effective_seconds"] = effective
+    if note:
+        seg["note"] = note
+    entry = _settle_segment(data, seg, effective, machine_seconds=max(1, span_s))
+    worklog_refs = [seg_id] if entry is not None else []
+    if not dry_run:
+        _check_invariants(data)
+        _save_capsule_yaml(capsule, data, text)
+    return {"capsule": str(capsule), "status": "ended", "segment": seg, "entry": entry,
+            "worklog_refs": worklog_refs, "dry_run": dry_run}
 
 
 @_locked  # T6：读→改→写全程持胶囊目录锁
@@ -1439,27 +1609,163 @@ def sync_for(path: Path) -> dict | None:
     return None
 
 
-def end_open_task_for(capsule: str | Path | None = None, path: str | Path | None = None,
-                      trigger: str = "dispatch") -> dict | None:
-    """供调度器调用：结算目标胶囊当前 open 任务段（工时伴随角色签署入账）。
+ROLE_STAGE: dict[str, str] = {
+    "Researcher": "01_调研",
+    "Architecture": "02_方案",
+    "Designer": "03_设计",
+    "Builder": "04_实施",
+    "Reviewer": "05_实施审计",
+    "Maintainer": "07_验收",
+    "Reporter": "08_汇报",
+}
 
-    与 sync_for 同构的静默契约：capsule 显式优先，其次 path 向上就近定位；
-    无胶囊、无 open 段、胶囊终态或数据异常一律返回 None——工时缺失不得反向
-    阻断角色调用的成功判定。
-    """
-    cdir: Path | None = None
+
+def _dispatch_stage(role: str, deliverable: str | None) -> str:
+    """角色段阶段：按 ROLE_STAGE 映射；Reviewer 按交付物文件名前缀分方案/实施审计（D-9）。"""
+    if role == "Reviewer":
+        name = Path(deliverable).name if deliverable else ""
+        return "03_方案审计" if name.startswith("03_") else "05_实施审计"
+    return ROLE_STAGE.get(role, "misc")
+
+
+def _dispatch_segment_name(role: str, deliverable: str | None) -> str:
+    """段名：`<角色>→<交付物文件名或 verify>`（方案 4.4 判定 3）。"""
+    target = Path(deliverable).name if deliverable else "verify"
+    return f"{role}→{target}"
+
+
+def _find_capsule_for_dispatch(capsule: str | Path | None,
+                               path: str | Path | None) -> Path | None:
+    """定位目标胶囊：capsule 显式优先，其次 path 向上就近；找不到返回 None。"""
     if capsule is not None:
         cand = Path(capsule).expanduser().resolve()
-        cdir = cand if (cand / "capsule.yaml").is_file() else None
-    elif path is not None:
+        return cand if (cand / "capsule.yaml").is_file() else None
+    if path is not None:
         p = Path(path).resolve()
-        cdir = next((d for d in [p.parent, *p.parents] if (d / "capsule.yaml").is_file()), None)
+        return next((d for d in [p.parent, *p.parents] if (d / "capsule.yaml").is_file()), None)
+    return None
+
+
+def start_dispatch_segment(capsule: str | Path | None = None, path: str | Path | None = None,
+                           dispatch_id: str = "", role: str = "",
+                           deliverable: str | Path | None = None,
+                           stage: str | None = None) -> dict | None:
+    """开角色调度段（Tech-176 T9，方案 4.4 判定 3、4.2 第 4 步）。
+
+    写 `actor: role` / `role` / `dispatch_id` / `trigger: dispatch`，阶段按
+    `ROLE_STAGE` 映射（Reviewer 按交付物前缀分方案/实施审计，D-9）。沿用
+    `end_open_task_for` 的静默契约：无胶囊、胶囊终态、数据异常或锁超时一律返回
+    None——工时缺失不得反向阻断调度（方案 9.4）。open 的 Manager 段或旧段不阻塞：
+    Manager 段与角色段是不同 actor 的并行事实。
+    """
+    if not dispatch_id or not role:
+        return None
+    cdir = _find_capsule_for_dispatch(capsule, path)
     if cdir is None:
         return None
     try:
-        return end_task(cdir, trigger=trigger)
+        with _capsule_lock(cdir):
+            return _start_dispatch_segment_locked(cdir, dispatch_id, role, deliverable, stage)
     except (ToolError, OSError):
         return None
+
+
+def _start_dispatch_segment_locked(cdir: Path, dispatch_id: str, role: str,
+                                   deliverable: str | Path | None,
+                                   stage: str | None) -> dict | None:
+    """`start_dispatch_segment` 的持锁实现：读→改→写全程在 `.capsule.yaml.lock` 内。"""
+    data, text = _load_capsule_data(cdir)
+    if (_read_key(text, "lifecycle") or "draft") in TERMINAL:
+        return None
+    _check_invariants(data)
+    segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
+    if any(s.get("state") == "open" and s.get("dispatch_id") == dispatch_id for s in segments):
+        return None  # 同 dispatch_id 已有 open 段，不重复开段
+    allocated_seq, _ = _alloc_seq(data)
+    cid = _capsule_id(cdir, text)
+    now = dt.datetime.now(TZ_CST).isoformat()
+    seg = {
+        "seq": allocated_seq,
+        "seg_id": f"{cid}#{allocated_seq}",
+        "name": _dispatch_segment_name(role, str(deliverable) if deliverable else None),
+        "startAt": now,
+        "lastActivityAt": now,
+        "state": "open",
+        "actor": "role",
+        "role": role,
+        "dispatch_id": dispatch_id,
+        "trigger": "dispatch",
+        "stage": stage or _dispatch_stage(role, str(deliverable) if deliverable else None),
+    }
+    errs = _validate_segment(seg)
+    if errs:
+        return None
+    segments.append(seg)
+    data["task_segments"] = segments
+    _check_invariants(data)
+    _save_capsule_yaml(cdir, data, text)
+    return {"capsule": str(cdir), "status": "started", "segment": seg,
+            "dry_run": False, "worklog_refs": []}
+
+
+def end_dispatch_segment(dispatch_id: str, succeeded: bool,
+                         failed_attempt_seconds: int = 0,
+                         failure_code: str = "",
+                         capsule: str | Path | None = None,
+                         path: str | Path | None = None,
+                         deliverable: str | Path | None = None) -> dict | None:
+    """按 dispatch_id 结角色调度段（Tech-176 T9，方案 4.4 判定 3/4、4.2 第 7 步）。
+
+    只结本胶囊内 `dispatch_id` 相同的 open 段（P-2：并发不错结别人的段）。
+    `succeeded=False` → `state: failed`，写 `machine_seconds` 与 `note: <failure_code>`，
+    不生成 worklog（AC-7：计机时不计有效工时）。成功时 `effective_seconds =
+    machine_seconds − failed_attempt_seconds`（4.4.2，最少 1 秒），worklog
+    `seconds` 等于它。静默契约同 `start_dispatch_segment`。
+    """
+    if not dispatch_id:
+        return None
+    cdir = _find_capsule_for_dispatch(capsule, path)
+    if cdir is None:
+        return None
+    try:
+        with _capsule_lock(cdir):
+            return _end_dispatch_segment_locked(cdir, dispatch_id, succeeded,
+                                                failed_attempt_seconds, failure_code)
+    except (ToolError, OSError):
+        return None
+
+
+def _end_dispatch_segment_locked(cdir: Path, dispatch_id: str, succeeded: bool,
+                                 failed_attempt_seconds: int, failure_code: str) -> dict | None:
+    """`end_dispatch_segment` 的持锁实现：读→改→写全程在 `.capsule.yaml.lock` 内。"""
+    data, text = _load_capsule_data(cdir)
+    segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
+    seg = next((s for s in segments if s.get("state") == "open"
+                and s.get("dispatch_id") == dispatch_id), None)
+    if seg is None:
+        return None
+    _check_invariants(data)
+    now = dt.datetime.now(TZ_CST)
+    seg["endAt"] = now.isoformat()
+    seg["lastActivityAt"] = now.isoformat()
+    seg["trigger"] = "dispatch"
+    machine = _segment_duration_seconds(seg, default_end=now)
+    if not succeeded:
+        seg["machine_seconds"] = machine
+        seg["state"] = "failed"
+        seg["note"] = (seg.get("note") or "") + f" 调度失败: {failure_code or 'unknown'}".rstrip()
+        _check_invariants(data)
+        _save_capsule_yaml(cdir, data, text)
+        return {"capsule": str(cdir), "status": "failed", "segment": seg,
+                "entry": None, "worklog_refs": [], "dry_run": False}
+    effective = max(1, machine - max(0, int(failed_attempt_seconds)))
+    seg["machine_seconds"] = machine
+    seg["effective_seconds"] = effective
+    entry = _settle_segment(data, seg, effective, machine_seconds=machine)
+    _check_invariants(data)
+    _save_capsule_yaml(cdir, data, text)
+    return {"capsule": str(cdir), "status": "ended", "segment": seg, "entry": entry,
+            "worklog_refs": [seg["seg_id"]] if entry is not None else [], "dry_run": False}
 
 
 def main() -> int:
@@ -1549,6 +1855,8 @@ def main() -> int:
         ent = res.get("entry")
         if ent:
             print(f"{prefix}任务段收尾并入账: {seg['seg_id']} [{seg['state']}] {ent['spent']}h | ref: {ent.get('ref')}")
+        elif seg.get("state") == "unmeasured":
+            print(f"{prefix}⚠️ 任务段作废，未入账: {seg['seg_id']} ({seg.get('note') or '无证据'})")
         else:
             print(f"{prefix}任务段收尾: {seg['seg_id']} [{seg['state']}] ({seg.get('note') or '待审批'})")
     elif status == "approved":
