@@ -1,6 +1,6 @@
 """Tech-175 M1 契约：本地 HTTP 服务 `tools/workbench.py` 的路由、令牌与工具转调。
 
-依据：`02_方案.md` 6.1（本地服务层：标准库 http.server 绑 127.0.0.1 + 随机端口 + 启动令牌，
+依据：`02_方案.md` 6.1（本地服务层：标准库 http.server 绑回环地址 + 随机端口 + 启动令牌，
 读接口转调只读工具，写接口只转调现有写工具）与 Spec 第一节 API 契约。
 
 M1-1（只读路由）：每个路由返回 200 且内容与对应工具 `--json` 输出一致；无令牌请求 401；
@@ -21,6 +21,7 @@ SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SYSTEM_ROOT / "tools"))
 
 WORKBENCH = SYSTEM_ROOT / "tools" / "workbench.py"
+TOKEN_HEADER = "X-Entropaxis-Token"
 
 
 def _run(argv: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
@@ -210,6 +211,170 @@ class ReadOnlyRouteTests(_WorkspaceCase):
         self.assertEqual(status, 404, f"/api/sync 不应存在: {body}")
         status, body, _ = self._get(self.base + "/api/leases", self.token)
         self.assertEqual(status, 404, f"/api/leases 不应存在: {body}")
+
+
+class WriteRouteTests(_WorkspaceCase):
+    """M1-2：写路由只转调既有写工具，字节变化与 CLI 直调一致，失败原样透出。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.proc, self.base, self.token = self.start_server()
+        self.capsule = self.root / "项目" / "docs" / "20261030_某主题"
+
+    def _post(self, path: str, body: dict, token: str | None = "use") -> tuple[int, object]:
+        url = self.base + path
+        data = json.dumps(body).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if token == "use":
+            headers[TOKEN_HEADER] = self.token
+        elif token:
+            headers[TOKEN_HEADER] = token
+        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=60) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as err:
+            return err.code, json.loads(err.read().decode("utf-8"))
+
+    @staticmethod
+    def _cli(argv: list[str]) -> subprocess.CompletedProcess:
+        return _run(argv)
+
+    def test_post_capsule_creates_capsule_identical_to_cli(self) -> None:
+        """POST /api/capsules → init_capsule.py：新建胶囊与 CLI 直调一致。
+
+        两侧用不同主题目录（init_capsule 按 `日期_主题` 建目录，同主题会撞 no-clobber）、
+        同一 Task ID：除 `topic` 一行外其余字节必须相同——参数转调没有走样。
+        """
+        cli = self._cli([str(SYSTEM_ROOT / "tools" / "init_capsule.py"),
+                         str(self.root / "项目" / "docs"), "CLI 主题", "--id", "Tech-901"])
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        via_cli = (self.root / "项目" / "docs" / "20261030_CLI 主题" / "capsule.yaml").read_text(encoding="utf-8")
+
+        status, payload = self._post("/api/capsules", {
+            "target_dir": str(self.root / "项目" / "docs"), "topic": "HTTP 主题", "id": "Tech-901"})
+        self.assertEqual(status, 200, payload)
+        via_http = (self.root / "项目" / "docs" / "20261030_HTTP 主题" / "capsule.yaml").read_text(encoding="utf-8")
+        self.assertEqual(via_http.replace('topic: "HTTP 主题"', 'topic: "X"'),
+                         via_cli.replace('topic: "CLI 主题"', 'topic: "X"'),
+                         "同一组参数下 HTTP 路由与 CLI 直调生成的 capsule.yaml 必须一致（topic 行除外）")
+        self.assertEqual(payload["exit_code"], 0)
+        self.assertIn("初始化成功", payload["stdout"])
+
+    def test_post_capsule_without_token_is_401(self) -> None:
+        status, payload = self._post("/api/capsules", {"target_dir": str(self.root), "topic": "x"},
+                                     token=None)
+        self.assertEqual(status, 401)
+        status, payload = self._post("/api/capsules", {"target_dir": str(self.root), "topic": "x"},
+                                     token="wrong")
+        self.assertEqual(status, 401)
+
+    def test_post_capsule_missing_field_is_400(self) -> None:
+        status, payload = self._post("/api/capsules", {"target_dir": str(self.root)})
+        self.assertEqual(status, 400)
+        self.assertIn("topic", str(payload))
+
+    def test_post_capsule_failure_passes_through_exit_code_and_stderr(self) -> None:
+        """失败时非零退出码与 stderr 原文透出，不吞异常、不伪装成功。"""
+        status, payload = self._post("/api/capsules", {
+            "target_dir": str(self.capsule.parent), "topic": "某主题", "id": "Tech-9"})
+        self.assertEqual(status, 502)
+        self.assertEqual(payload["exit_code"], 1)
+        cli = self._cli([str(SYSTEM_ROOT / "tools" / "init_capsule.py"),
+                         str(self.capsule.parent), "某主题", "--id", "Tech-9"])
+        self.assertEqual(cli.returncode, 1)
+        self.assertIn("目标胶囊已存在", str(payload))
+        self.assertIn("目标胶囊已存在", cli.stderr)
+
+    def test_post_segment_open_matches_cli_bytes(self) -> None:
+        """POST /api/segments/open → update_capsule.py --start-task：与 CLI 逐字节一致。
+
+        `_save_capsule_yaml` 会把 open Manager 段的 `lastActivityAt` 刷成写入时刻
+        （方案 §3.2 活动生产者），墙钟必然不同；因此比对的是「段结构 + startAt + baseline」，
+        而不是含 lastActivityAt 的全文字节。
+        """
+        fixed_at = "2026-10-30T10:00:00+08:00"
+        blank = _capsule_yaml("Tech-9", "某主题").encode("utf-8")
+
+        cli_capsule = self.root / "项目" / "docs" / "20261030_CLI段"
+        cli_capsule.mkdir(parents=True)
+        (cli_capsule / "capsule.yaml").write_bytes(blank)
+        cli = self._cli([str(SYSTEM_ROOT / "tools" / "update_capsule.py"),
+                         str(cli_capsule), "--start-task", "--name", "写实现",
+                         "--stage", "04_Spec", "--at", fixed_at])
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+
+        (self.capsule / "capsule.yaml").write_bytes(blank)
+        status, payload = self._post("/api/segments/open", {
+            "capsule": str(self.capsule), "name": "写实现", "stage": "04_Spec", "at": fixed_at})
+        self.assertEqual(status, 200, payload)
+
+        import yaml
+        via_cli = yaml.safe_load((cli_capsule / "capsule.yaml").read_text(encoding="utf-8"))
+        via_http = yaml.safe_load((self.capsule / "capsule.yaml").read_text(encoding="utf-8"))
+        for data in (via_cli, via_http):
+            for seg in data["task_segments"]:
+                seg.pop("lastActivityAt", None)  # 写入时刻，墙钟相关
+        self.assertEqual(via_http, via_cli,
+                         "同一组参数下 HTTP 路由与 CLI 直调的 capsule.yaml 必须一致")
+
+    def test_post_segment_open_failure_passes_through(self) -> None:
+        """缺 --name 时 CLI 报错：退出码与 stderr 原文透出，服务不返回 200。"""
+        status, payload = self._post("/api/segments/open", {"capsule": str(self.capsule)})
+        self.assertEqual(status, 400)
+        self.assertIn("name", str(payload))
+
+        cli = self._cli([str(SYSTEM_ROOT / "tools" / "update_capsule.py"),
+                         str(self.capsule), "--start-task"])
+        self.assertNotEqual(cli.returncode, 0)
+        self.assertIn("name", cli.stderr)
+
+    def test_post_worklog_matches_cli_bytes(self) -> None:
+        """POST /api/worklog → update_capsule.py --log-time：工时条目与 CLI 逐字节一致。"""
+        status, payload = self._post("/api/worklog", {
+            "capsule": str(self.capsule), "spent": "1.5", "stage": "04_Spec",
+            "summary": "HTTP 登记", "operator": "tester", "date": "2026-10-30"})
+        self.assertEqual(status, 200, payload)
+        self.assertIn("HTTP 登记", (self.capsule / "capsule.yaml").read_text(encoding="utf-8"))
+
+        cli_capsule = self.root / "项目" / "docs" / "20261030_CLI工时"
+        cli_capsule.mkdir(parents=True)
+        (cli_capsule / "capsule.yaml").write_bytes(
+            _capsule_yaml("Tech-9", "某主题").encode("utf-8"))
+        cli = self._cli([str(SYSTEM_ROOT / "tools" / "update_capsule.py"),
+                         str(cli_capsule), "--log-time", "1.5", "--stage", "04_Spec",
+                         "--summary", "HTTP 登记", "--operator", "tester", "--date", "2026-10-30"])
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        self.assertEqual((self.capsule / "capsule.yaml").read_bytes(),
+                         (cli_capsule / "capsule.yaml").read_bytes(),
+                         "同一组参数下 HTTP 路由与 CLI 直调的 capsule.yaml 必须逐字节一致")
+
+    def test_post_worklog_failure_passes_through(self) -> None:
+        status, payload = self._post("/api/worklog", {
+            "capsule": str(self.capsule), "spent": "not-a-duration"})
+        self.assertEqual(status, 502)
+        self.assertEqual(payload.get("exit_code"), 1)
+        self.assertIn("时长格式不合法", str(payload))
+
+    def test_post_segment_end_failure_without_open_segment(self) -> None:
+        """没有 open 段时 --end-task 报错：退出码与原文透出，服务不返回 200。"""
+        status, payload = self._post("/api/segments/end", {"capsule": str(self.capsule)})
+        self.assertEqual(status, 502)
+        self.assertEqual(payload.get("exit_code"), 1)
+        self.assertIn("detail", payload)
+
+    def test_post_files_open_missing_path_is_400(self) -> None:
+        status, payload = self._post("/api/files/open", {})
+        self.assertEqual(status, 400)
+        self.assertIn("path", str(payload))
+
+    def test_post_files_open_reports_exit_code(self) -> None:
+        """open_file.py 对不存在的目标返回非零：服务原样透出，不伪装成功。"""
+        status, payload = self._post("/api/files/open", {
+            "path": str(self.root / "不存在.md")})
+        self.assertEqual(status, 502, payload)
+        self.assertEqual(payload["exit_code"], 1)
+        self.assertIn("无法打开", str(payload))
 
 
 if __name__ == "__main__":

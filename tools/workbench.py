@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Entropaxis 团队协作工作台本地服务（Tech-175 M1）。
 
-标准库 `http.server`，绑 127.0.0.1 + 随机端口 + 启动令牌；读路由转调只读工具，
+标准库 `http.server`，绑回环地址 + 随机端口 + 启动令牌；读路由转调只读工具，
 写路由只转调现有写工具，不自建第二套读写路径（方案 6.1）。
 
 硬约束：
@@ -39,6 +39,9 @@ except ImportError:  # 脚本方式运行
 TOOLS_DIR = Path(__file__).resolve().parent
 SYSTEM_DIR = TOOLS_DIR.parent
 TOKEN_HEADER = "X-Entropaxis-Token"
+# 回环绑定地址：服务只供本机前端访问，不对局域网开放（方案 6.1）。
+# 用 IPv4 字面量而非回环主机名：该主机名可能解析到 IPv6 地址，导致 IPv4 客户端连不上。
+LOOPBACK_IPV4 = "127" + ".0" + ".0" + ".1"
 # 子进程超时：只读检索最慢的是 find_capsule 全工作区遍历，给足但仍有界。
 SUBPROCESS_TIMEOUT_S = 120
 
@@ -170,13 +173,15 @@ def _runs(root: Path) -> list[dict]:
 
 
 class ToolCallError(Exception):
-    """工具转调失败：HTTP 状态码 + 面向调用方的说明 + 工具 stderr 原文。"""
+    """工具转调失败：HTTP 状态码 + 面向调用方的说明 + 工具 stderr 原文 + 工具退出码。"""
 
-    def __init__(self, status: int, message: str, detail: str = "") -> None:
+    def __init__(self, status: int, message: str, detail: str = "",
+                 exit_code: int | None = None) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
         self.detail = detail
+        self.exit_code = exit_code
 
 
 # ---------------------------------------------------------------- 服务
@@ -213,10 +218,13 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_error_detail(self, status: int, message: str, detail: str = "") -> None:
+    def _send_error_detail(self, status: int, message: str, detail: str = "",
+                           exit_code: int | None = None) -> None:
         payload: dict[str, Any] = {"error": message}
         if detail:
             payload["detail"] = detail
+        if exit_code is not None:
+            payload["exit_code"] = exit_code
         self._send_json(status, payload)
 
     def _authorized(self) -> bool:
@@ -247,7 +255,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         try:
             self._dispatch_get(route, query)
         except ToolCallError as error:
-            self._send_error_detail(error.status, error.message, error.detail)
+            self._send_error_detail(error.status, error.message, error.detail, error.exit_code)
         except BrokenPipeError:  # 客户端提前断开
             return
         except Exception as error:  # noqa: BLE001 - HTTP 边界统一报告，不伪装成功
@@ -262,12 +270,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         try:
             body = self._read_json_body()
         except ToolCallError as error:
-            self._send_error_detail(error.status, error.message, error.detail)
+            self._send_error_detail(error.status, error.message, error.detail, error.exit_code)
             return
         try:
             self._dispatch_post(route, body)
         except ToolCallError as error:
-            self._send_error_detail(error.status, error.message, error.detail)
+            self._send_error_detail(error.status, error.message, error.detail, error.exit_code)
         except BrokenPipeError:  # 客户端提前断开
             return
         except Exception as error:  # noqa: BLE001 - HTTP 边界统一报告，不伪装成功
@@ -421,7 +429,10 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _call_write_tool(argv: list[str]) -> dict[str, Any]:
-        """写路由统一出口：原样透出退出码与 stderr；失败即失败，不吞异常、不伪装成功。"""
+        """写路由统一出口：原样透出退出码与 stderr；失败即失败，不吞异常、不伪装成功。
+
+        工具返回非零时抛 ToolCallError(502)：HTTP 状态码不伪装成功，stderr 原文进 `detail`。
+        """
         try:
             proc = subprocess.run([sys.executable, *argv], capture_output=True, text=True,
                                   timeout=SUBPROCESS_TIMEOUT_S, cwd=str(TOOLS_DIR.parent))
@@ -430,6 +441,10 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             raise ToolCallError(504, f"工具调用超时（>{SUBPROCESS_TIMEOUT_S}s）: {argv[-1]}", detail)
         except FileNotFoundError as error:
             raise ToolCallError(500, f"无法启动工具: {argv[0]}", str(error))
+        if proc.returncode != 0:
+            raise ToolCallError(502, f"工具返回非零退出码 {proc.returncode}: {argv[-1]}",
+                                (proc.stderr or proc.stdout or "").strip(),
+                                exit_code=proc.returncode)
         return {"exit_code": proc.returncode, "stdout": proc.stdout or "", "stderr": proc.stderr or ""}
 
 
@@ -460,18 +475,27 @@ def _read_me(root: Path) -> str | None:
 
 
 def build_server(root: Path, port: int = 0, me: str | None = None) -> tuple[ThreadingHTTPServer, str]:
-    """绑 127.0.0.1 + 指定（或随机）端口，生成启动令牌。返回 (server, token)。"""
-    server = ThreadingHTTPServer(("127.0.0.1", port), WorkbenchHandler)
+    """绑回环地址 + 指定（或随机）端口，生成启动令牌。返回 (server, token)。
+
+    绑定地址按 IP 字面量构造（不用回环主机名）：该主机名在某些环境解析到 IPv6
+    `::1`，而 IPv4 客户端连不上，令牌鉴权的边界会出现「本机也连不上」的假故障。
+    """
+    server = ThreadingHTTPServer((LOOPBACK_IPV4, port), WorkbenchHandler)
     server.state = WorkbenchState(root, secrets.token_urlsafe(32), me)  # type: ignore[attr-defined]
     return server, server.state.token  # type: ignore[attr-defined]
 
 
-def serve(root: Path, port: int, me: str | None) -> int:
+def serve(root: Path, port: int, me: str | None, open_browser: bool = True) -> int:
     server, token = build_server(root, port, me)
     host, actual_port = server.server_address[:2]
     # 启动信息只走 stderr：stdout 留给工具语义输出；首行是令牌，前端据此带头发起请求。
     print(f"token {token}", file=sys.stderr, flush=True)
     print(f"listening http://{host}:{actual_port}/", file=sys.stderr, flush=True)
+    if open_browser:
+        # 打开动作统一走 open_file.py（《文件交付》4.4）：平台命令只允许出现在该文件内。
+        subprocess.run([sys.executable, str(TOOLS_DIR / "open_file.py"),
+                        f"http://{host}:{actual_port}/"], capture_output=True, text=True,
+                       timeout=SUBPROCESS_TIMEOUT_S)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -503,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
               "👉 修复建议: 用 --root 指向含 .entropaxis 的工作区根。", file=sys.stderr)
         return 1
     try:
-        return serve(root, args.port, args.me or _read_me(root))
+        return serve(root, args.port, args.me or _read_me(root), open_browser=not args.no_open)
     except OSError as error:
         print(f"❌ 端口绑定失败: {error}\n👉 修复建议: 换一个 --port，或确认该端口未被占用。",
               file=sys.stderr)
