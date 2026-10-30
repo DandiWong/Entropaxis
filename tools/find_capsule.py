@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import platform
 import re
 import shutil
@@ -252,6 +253,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--latest-artifact", choices=tuple(ARTIFACT_PATTERNS),
                         help="定位最新的方案/Spec/审计报告候选（审计与修正的受审对象定位）")
     parser.add_argument("--limit", type=int, default=20, help="交付物候选返回上限，默认 20")
+    parser.add_argument("--json", action="store_true",
+                        help="输出机器可读 JSON（Tech-175 M0：本地服务与看板消费；默认仍是极简文本行）")
     return parser
 
 
@@ -261,6 +264,9 @@ def main() -> None:
 
     if args.doctor:
         report = doctor()
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return
         found = [f"{k}={v}" for k, v in report["available"].items() if v]
         print(f"{report['platform']} 可用后端: {', '.join(found) or '（无）'}")
         for name, hint in report["install_hints"].items():
@@ -278,6 +284,9 @@ def main() -> None:
             print(f"❌ 未找到 {args.latest_artifact} 类交付物（范围 {report['scopes'][0]}）", file=sys.stderr)
             print("👉 换主题词收敛范围，或确认该胶囊内确已产出该阶段文档", file=sys.stderr)
             raise SystemExit(1)
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return
         for item in report["results"]:
             print(item["path"])
         if report["truncated"]:
@@ -300,6 +309,9 @@ def main() -> None:
         print(f"❌ 未命中「{report['query']}」（后端 {report['backend']}，范围 {report['search_root']}）", file=sys.stderr)
         print("👉 换更短的主题词，或用 --scope machine 扩到全机器，或加 --any 放宽到非胶囊目录", file=sys.stderr)
         raise SystemExit(1)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
     for item in report["results"]:
         print(item)
 
