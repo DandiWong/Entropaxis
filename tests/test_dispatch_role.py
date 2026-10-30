@@ -2049,7 +2049,9 @@ class RunFileLifecycleTests(DispatchRoleTestBase):
         finally:
             os.environ["PATH"] = orig_path
         self.assertTrue(ok)
-        expected_fields = {"dispatch_id", "pid", "role", "profile", "agent", "model", "cwd", "started_at"}
+        expected_fields = {"dispatch_id", "pid", "role", "profile", "agent", "model", "cwd", "started_at",
+                           # M0（AC-12）：只增不改，采集器按键名取值，新增三个键不进入它的输出
+                           "capsule", "preference_number", "timeout_s"}
         self.assertEqual(set(captured.keys()), expected_fields)
         self.assertEqual(captured["pid"], os.getpid())
         self.assertEqual(captured["role"], "Researcher")
@@ -2068,6 +2070,105 @@ class RunFileLifecycleTests(DispatchRoleTestBase):
             code, attempts, ok = dr.execute_chain([prof], f"[交付约定] 将本次产出写入：{out}", self.ws, out, "Researcher")
         self.assertTrue(ok)
         self.assertEqual(code, "")
+
+
+class RunFileCapsuleFieldTests(DispatchRoleTestBase):
+    """AC-12（Tech-175 M0，方案 11.4 Q-4）：run 文件补 capsule/preference_number/timeout_s。
+
+    只增不改：胶囊路径取本次 run 实际使用的胶囊目录（无胶囊时 null），不从 cwd 或
+    交付物路径反推；偏好序号与超时上限即链上该 profile 的实值。
+    """
+
+    def _capture_run_file(self, prof, out, capsule=None, role="Researcher"):
+        out.parent.mkdir(parents=True, exist_ok=True)
+        self.ok_body.write_text(research_doc(), encoding="utf-8")
+        captured: dict[str, Any] = {}
+
+        real_run = dr.subprocess.run
+
+        def fake_run(*args: Any, **kwargs: Any) -> Any:
+            files = list(self.run_dir.glob("*.json"))
+            self.assertEqual(len(files), 1)
+            captured.update(json.loads(files[0].read_text(encoding="utf-8")))
+            return real_run(*args, **kwargs)
+
+        with mock.patch("tools.dispatch_role.subprocess.run", side_effect=fake_run):
+            dr.execute_chain([prof], f"[交付约定] 将本次产出写入：{out}", self.ws, out, role,
+                             capsule=capsule)
+        return captured
+
+    def test_capsule_field_is_absolute_path_of_actual_capsule(self) -> None:
+        cap = self.ws / "20261030_主题"
+        cap.mkdir()
+        (cap / "capsule.yaml").write_text("id: Tech-1\n", encoding="utf-8")
+        out = cap / "01_调研.md"
+        prof = {"name": "p-ok", "argv": [self.ok, "{PROMPT}"], "timeout_s": 30}
+        captured = self._capture_run_file(prof, out, capsule=cap)
+        # capsule 原样透传（调用方传什么写什么），只在 None 时置 null
+        self.assertEqual(captured["capsule"], str(cap))
+        self.assertEqual(captured["preference_number"], 1)
+        self.assertEqual(captured["timeout_s"], 30)
+
+    def test_capsule_null_without_capsule(self) -> None:
+        out = self.ws / "01_调研.md"
+        prof = {"name": "p-ok", "argv": [self.ok, "{PROMPT}"], "timeout_s": 45}
+        captured = self._capture_run_file(prof, out)
+        self.assertIsNone(captured["capsule"])
+        self.assertEqual(captured["preference_number"], 1)
+        self.assertEqual(captured["timeout_s"], 45)
+
+    def test_preference_number_and_timeout_follow_chain_profile(self) -> None:
+        """链上第 2 条：序号与超时取该条自己的值，不是首条。"""
+        out = self.ws / "01_调研.md"
+        first = {"name": "p-bad", "argv": ["/nonexistent-cli", "{PROMPT}"], "timeout_s": 30}
+        second = {"name": "p-ok", "argv": [self.ok, "{PROMPT}"], "timeout_s": 77,
+                  "preference_number": 2}
+        self.ok_body.write_text(research_doc(), encoding="utf-8")
+        captured: dict[str, Any] = {}
+
+        real_run = dr.subprocess.run
+
+        def fake_run(*args: Any, **kwargs: Any) -> Any:
+            files = list(self.run_dir.glob("*.json"))
+            self.assertEqual(len(files), 1)
+            captured.update(json.loads(files[0].read_text(encoding="utf-8")))
+            return real_run(*args, **kwargs)
+
+        with mock.patch("tools.dispatch_role.subprocess.run", side_effect=fake_run):
+            dr.execute_chain([first, second], f"[交付约定] 将本次产出写入：{out}",
+                             self.ws, out, "Researcher")
+        self.assertEqual(captured["preference_number"], 2)
+        self.assertEqual(captured["timeout_s"], 77)
+
+    def test_live_dispatch_items_keys_unchanged(self) -> None:
+        """AC-12：采集器 live_dispatch_items 输出与改造前逐键一致（新增键不进入）。"""
+        import importlib.util
+        scripts_dir = (SYSTEM_ROOT / "skills" / "fosunpharma-dashboard" / "scripts")
+        sys.path.insert(0, str(scripts_dir))  # 采集器按脚本目录 import perf_state
+        collector_path = scripts_dir / "collect_agent_perf.py"
+        spec = importlib.util.spec_from_file_location("collect_agent_perf", collector_path)
+        collector = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(collector)
+
+        data_dir = self.ws / "data"
+        run_dir = data_dir / "logs" / "run"
+        run_dir.mkdir(parents=True)
+        payload = {"dispatch_id": "a" * 32, "pid": os.getpid(), "role": "Builder",
+                   "profile": "x", "agent": "claude", "model": "google-antigravity/gemini-3.8-flash",
+                   "cwd": str(self.ws), "started_at": "2026-10-30T12:00:00+08:00",
+                   # M0 新增三键：胶囊、偏好序号、超时上限
+                   "capsule": None, "preference_number": 1, "timeout_s": 30}
+        (run_dir / f"{'a' * 32}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        items = collector.live_dispatch_items(data_dir)
+        self.assertEqual(len(items), 1)
+        item = items[0]
+        self.assertEqual(set(item), {"key", "status", "role", "agent", "model", "project",
+                                     "task", "started_at", "tokens"})
+        self.assertEqual(item["key"], "a" * 32)
+        self.assertEqual(item["status"], "running")
+        self.assertEqual(item["model"], "gemini-3.8-flash")
+        self.assertEqual((item["task"], item["tokens"]), (None, None))
 
 
 class OutLockTests(DispatchRoleTestBase):

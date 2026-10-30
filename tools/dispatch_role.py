@@ -949,12 +949,15 @@ def _timeout_error(profile: dict[str, Any], role: str | None) -> str | None:
 
 def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverable: Path,
                   role: str | None = None,
-                  dispatch_id: str = "") -> tuple[str, list[dict[str, Any]], bool]:
+                  dispatch_id: str = "",
+                  capsule: Path | None = None) -> tuple[str, list[dict[str, Any]], bool]:
     """执行备选链，返回 (聚合失败码, attempts, succeeded)。
 
     `dispatch_id` 是 run 级调度 ID（Tech-176 T10）：一次 run 的所有 attempt 共用它，
     trace 记录的 id 升级为 `<dispatch_id>.<n>`（D-1），按前缀即可从轨迹关联到胶囊任务段。
     缺省时自取 uuid4——直接调用 `execute_chain` 的调用方（测试、脚本）不因此失去唯一性。
+    `capsule` 是本次 run 实际使用的胶囊目录（Tech-175 M0，Q-4）：只作 run 文件的
+    `capsule` 字段，不参与交付物判据，也不从 cwd 或路径反推；为 None 时写 null。
     """
     run_id = dispatch_id or uuid.uuid4().hex
     invalid = [(prof, _timeout_error(prof, role)) for prof in chain]
@@ -1009,6 +1012,12 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
             "model": prof.get("model"),
             "cwd": str(cwd),
             "started_at": started,
+            # M0（AC-12，方案 11.4 Q-4）：只增不改。胶囊取本次 run 实际使用的目录
+            # （调用方传入，不从 cwd/交付物路径反推）；偏好序号与超时即链上该条实值。
+            # 采集器 live_dispatch_items 按键名取值，新增键不影响它的输出。
+            "capsule": str(capsule) if capsule is not None else None,
+            "preference_number": prof.get("preference_number", ordinal_no),
+            "timeout_s": prof["timeout_s"],
         })
         try:
             # stdin 必须显式给 DEVNULL：不给就继承调用者的 stdin，而被调度的 CLI 见 stdin
@@ -1181,7 +1190,8 @@ def run_assignment_result(cwd: Path, assignment_id: str, prompt: str, ack: str |
     # 中间整段执行链都算在本 dispatch_id 的段里。
     def run_chain(chain_dispatch_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         failure, chain_attempts, chain_ok = execute_chain(
-            chain, bound, cwd, deliverable, role, dispatch_id=chain_dispatch_id)
+            chain, bound, cwd, deliverable, role, dispatch_id=chain_dispatch_id,
+            capsule=seg_capsule)
         return ({"succeeded": chain_ok, "failure_code": failure, "attempts": chain_attempts}, chain_attempts)
 
     chain_result, ended = _run_with_segment(cwd, role, deliverable, seg_capsule, run_chain,
@@ -1295,7 +1305,8 @@ def run_direct_result(cwd: Path, role: str, prompt: str, out: Path | None, owner
             # 无交付物文件（代码型）：先让外置 CLI 跑完，判据交给 verify
             chain_target = cwd if deliverable is None else deliverable
             failure, chain_attempts, succeeded = execute_chain(chain, bound, cwd, chain_target, role,
-                                                              dispatch_id=chain_dispatch_id)
+                                                              dispatch_id=chain_dispatch_id,
+                                                              capsule=seg_capsule)
         else:
             # preferences 为空：配置声明会话内承载，没有外部执行（D-7 不开段）
             failure, succeeded = source, False
