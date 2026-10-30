@@ -4,7 +4,7 @@
 
 硬约束：
 - 纯函数：不写任何文件、不扫盘、不读当前时间以外的隐式状态；运行态（`runs`）、审计门禁数据
-  （`audit_gate`）与云效账本（`ledger`）都由调用方注入，`now` 可注入以便固定时钟。
+  （`audit_gate`）与工时同步账本（`ledger`）都由调用方注入，`now` 可注入以便固定时钟。
 - 只读 `roles_manifest.assignments[]`、`task_segments` 中 `actor=role` 的段与注入的运行态；
   不读 Front Matter `status`，不读无 `actor` 的旧段及其 `stage`（P-1 根因是旧段 stage 错位）。
 - 角色 → 阶段只取 `update_capsule.ROLE_STAGE`（Reviewer 按交付物前缀分方案/实施审计）。
@@ -193,7 +193,7 @@ def pending_gates(capsule: dict, *, audit_gate: dict | None = None, ledger: list
     """「待我拍板」六类卡片（方案 11.3）。只对 `lifecycle ∈ {draft, active}` 的胶囊出卡。
 
     `audit_gate`：调用方解析审计报告后注入 `{phase: plan|impl, issues: [...], max_rounds?: int}`；
-    缺省时不推断阻断数，方案待确认与审计熔断两类不出卡。`ledger`：云效同步账本条目列表。
+    缺省时不推断阻断数，方案待确认与审计熔断两类不出卡。`ledger`：工时同步账本条目列表。
     `runs`：本机 run 文件列表，用于判定「残留待处置」。
     """
     if capsule.get("lifecycle") not in LIVE_LIFECYCLES:
@@ -231,7 +231,7 @@ def pending_gates(capsule: dict, *, audit_gate: dict | None = None, ledger: list
                      for e in ledger or [])
     if seg_pending or residual or ledger_bad:
         cards.append(_card("worktime_review", "工时待核决", None,
-                           "待核决段 / 残留角色段 / 云效账本异常"))
+                           "待核决段 / 残留角色段 / 工时同步账本异常"))
 
     for a in _assignments(capsule):
         if a.get("status") not in ("failed", "blocked"):
