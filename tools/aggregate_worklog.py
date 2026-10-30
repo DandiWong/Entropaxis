@@ -29,10 +29,12 @@ from typing import Any
 try:
     from . import paths
     from . import project_registry
+    from . import resolve_stakeholder
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import paths  # type: ignore
     import project_registry  # type: ignore
+    import resolve_stakeholder  # type: ignore
 
 try:
     import yaml
@@ -159,6 +161,10 @@ def parse_capsule_file(path: Path) -> dict[str, Any] | None:
                 for seg in role_segments:
                     if seg.get("taskId"):
                         seg_task_ids.append(str(seg["taskId"]))
+                manifest = data.get("roles_manifest") or {}
+                assignments = [a for a in (manifest.get("assignments") or [])
+                               if isinstance(a, dict)] if isinstance(manifest, dict) else []
+                members = [str(m) for m in (data.get("members") or []) if m]
                 return {
                     "id": str(data.get("id") or ""),
                     "topic": str(data.get("topic") or path.parent.name),
@@ -166,6 +172,12 @@ def parse_capsule_file(path: Path) -> dict[str, Any] | None:
                     "worklogs": clean_logs,
                     "task_ids": seg_task_ids,
                     "role_segments": role_segments,
+                    # M0（Tech-175 方案 6.4 P0）：归属与指派只读透传，聚合层不写回胶囊。
+                    "owner": str(data["owner"]) if data.get("owner") else None,
+                    "members": members,
+                    "assignments": assignments,
+                    "review_due_at": str(data["review_due_at"]) if data.get("review_due_at") else None,
+                    "closure_deadline": str(data["closure_deadline"]) if data.get("closure_deadline") else None,
                     "path": path.parent,
                 }
         except Exception:
@@ -185,6 +197,11 @@ def parse_capsule_file(path: Path) -> dict[str, Any] | None:
         "worklogs": [],
         "task_ids": [],
         "role_segments": [],
+        "owner": None,
+        "members": [],
+        "assignments": [],
+        "review_due_at": None,
+        "closure_deadline": None,
         "path": path.parent,
     }
 
@@ -418,6 +435,247 @@ def aggregate(
     }
 
 
+def _active_tasks(path: Path) -> list[str]:
+    """Tasks.md 的 `## Active` 条目（判据同 rules/看板联动.md:14）；缺失或无该节返回空表。"""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    m = re.search(r"^## Active\s*\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+    if not m:
+        return []
+    return [ln.strip()[2:].strip() for ln in m.group(1).splitlines() if ln.strip().startswith("- ")]
+
+
+def _segment_operator(seg: dict[str, Any]) -> str:
+    """段的登记人：actor=role 段没有 operator，取胶囊内首个非角色段的 worklog operator。
+
+    「我的」过滤的 operator 命中路径（方案 6.3）按此推导；推导不回写胶囊。
+    """
+    return str(seg.get("operator") or "")
+
+
+def _derived_owner(cap: dict[str, Any], handle_index: dict[str, str]) -> str | None:
+    """缺 owner 时的推导：首个 actor≠role 的段 operator → handles.git → people.id。"""
+    for seg in cap.get("role_segments", []):
+        if seg.get("actor") in (None, "", "manager"):
+            operator = _segment_operator(seg)
+            if operator and operator in handle_index:
+                return handle_index[operator]
+    for log in cap.get("worklogs", []):
+        operator = log.get("operator") or ""
+        if operator in handle_index:
+            return handle_index[operator]
+    return None
+
+
+def _handle_index(root: Path) -> dict[str, str]:
+    """{git user.name: people.id}；人员主库缺失或不可读时返回空表（过滤退化为显式字段）。"""
+    try:
+        raw = resolve_stakeholder.load_stakeholders_raw(root)
+    except Exception:
+        return {}
+    index: dict[str, str] = {}
+    for person in raw.get("people") or []:
+        if not isinstance(person, dict) or not person.get("id"):
+            continue
+        handles = person.get("handles")
+        if isinstance(handles, dict):
+            git = handles.get("git")
+            if git:
+                index[str(git)] = str(person["id"])
+    return index
+
+
+def _usage_add(target: dict[str, dict[str, int]], usage: Any) -> None:
+    """把一条 usage 累加进 {in,out,cache_read,cache_write}；非对象用量不计数值。"""
+    if not isinstance(usage, dict):
+        return
+    models = usage.get("models")
+    if not isinstance(models, dict):
+        return
+    for model_usage in models.values():
+        if not isinstance(model_usage, dict):
+            continue
+        for field in ("in", "out", "cache_read", "cache_write"):
+            value = model_usage.get(field)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                target[field] = target.get(field, 0) + int(value)
+
+
+def _zero_usage() -> dict[str, int]:
+    return {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0}
+
+
+def capsule_index(root: Path, since: str, until: str, me: str | None = None,
+                  project_filter: str | None = None) -> list[dict[str, Any]]:
+    """一次拿全胶囊摘要（方案 6.3）：id/topic/项目/lifecycle/open 段/指派/owner/members/工时与 token 合计。
+
+    复用 `scan_capsules()` / `parse_capsule_file()`，实时扫描、不落盘缓存（沿用
+    `find_capsule.py:4-10` 的理由）。token 按 6.5.1 分「角色调度 / Manager 会话」两个
+    小计再求合计；`usage == "unknown"` 不计数值，单列 `unknown_count`。
+    """
+    root = Path(root)
+    projects = project_registry.load_projects(root)
+    excludes = project_registry.load_excludes(root)
+    capsules = scan_capsules(root, projects, excludes)
+    handles = _handle_index(root)
+    sessions = _manager_session_usage(root, since, until)
+
+    rows: list[dict[str, Any]] = []
+    for cap in capsules:
+        proj_id = attribute_project(cap["path"], root, projects)
+        if project_filter and proj_id != project_filter:
+            continue
+        owner = cap.get("owner")
+        owner_source = "declared"
+        if not owner:
+            owner = _derived_owner(cap, handles)
+            owner_source = "derived" if owner else "none"
+        members = cap.get("members") or []
+        operators = {str(log.get("operator") or "") for log in cap.get("worklogs", [])}
+        operator_owners = {handles[o] for o in operators if o in handles}
+        is_mine = bool(me) and (owner == me or me in members or me in operator_owners)
+        if me and not is_mine:
+            continue
+
+        usage_role, unknown_count = _zero_usage(), 0
+        for a in cap.get("assignments", []):
+            for attempt in a.get("attempts") or []:
+                if not isinstance(attempt, dict):
+                    continue
+                started = str(attempt.get("started_at") or "")
+                if not (since <= started[:10] <= until):
+                    continue
+                usage = attempt.get("usage")
+                if usage == "unknown" or usage is None:
+                    unknown_count += 1
+                    continue
+                _usage_add(usage_role, usage)
+        usage_manager = dict(sessions.get(cap["id"], _zero_usage()))
+        usage_total = {k: usage_role.get(k, 0) + usage_manager.get(k, 0)
+                       for k in ("in", "out", "cache_read", "cache_write")}
+
+        open_segments = [{"seg_id": s.get("seg_id"), "name": s.get("name"), "state": s.get("state"),
+                          "actor": s.get("actor"), "role": s.get("role"),
+                          "dispatch_id": s.get("dispatch_id"), "stage": s.get("stage"),
+                          "startAt": s.get("startAt"), "lastActivityAt": s.get("lastActivityAt")}
+                         for s in cap.get("role_segments", []) if s.get("state") == "open"]
+        assignments = [{"assignment_id": a.get("assignment_id"), "role": a.get("role"),
+                        "status": a.get("status"), "deliverable": a.get("deliverable"),
+                        "attempts": len(a.get("attempts") or [])}
+                       for a in cap.get("assignments", [])]
+
+        rows.append({
+            "id": cap["id"],
+            "topic": cap["topic"],
+            "project": proj_id,
+            "lifecycle": cap.get("lifecycle"),
+            "owner": owner,
+            "owner_source": owner_source,
+            "members": members,
+            "is_mine": is_mine,
+            "open_segments": open_segments,
+            "assignments": assignments,
+            "worklog_seconds": sum(int(log.get("seconds") or 0) for log in cap.get("worklogs", [])),
+            "machine_seconds": sum(m for m in (_segment_machine_seconds(s, since, until)
+                                               for s in cap.get("role_segments", [])) if m is not None),
+            "review_due_at": cap.get("review_due_at"),
+            "closure_deadline": cap.get("closure_deadline"),
+            "usage": {"role": usage_role, "manager": usage_manager, "total": usage_total,
+                      "unknown_count": unknown_count},
+            "path": str(cap["path"]),
+        })
+    # 新胶囊在前：与 find_capsule.py 的排序同口径，按 ID 字符串倒序（Tech-10 先于 Tech-9）。
+    rows.sort(key=lambda r: r["id"], reverse=True)
+    return rows
+
+
+def _manager_session_usage(root: Path, since: str, until: str) -> dict[str, dict[str, int]]:
+    """GUI 会话索引 → {capsule_id: usage}（方案 6.4、6.5.1）。
+
+    索引是本机私有文件（`.entropaxis/data/workbench/sessions.jsonl`，M1 由 GUI 写）；
+    缺失、损坏或无 PyYAML 之外的问题一律按空表处理——聚合层不因索引缺失而失败。
+    去重键 `(session_id, turn_seq)`：同一轮次重复两行只计一次。
+    """
+    index = Path(root) / ".entropaxis" / "data" / "workbench" / "sessions.jsonl"
+    out: dict[str, dict[str, int]] = {}
+    if not index.is_file():
+        return out
+    seen: set[tuple[str, str]] = set()
+    try:
+        lines = index.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        ended_at = str(row.get("ended_at") or "")
+        if not (since <= ended_at[:10] <= until):
+            continue
+        capsule_id = row.get("capsule_id")
+        if not capsule_id:
+            continue
+        key = (str(row.get("session_id") or ""), str(row.get("turn_seq") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        target = out.setdefault(str(capsule_id), _zero_usage())
+        _usage_add(target, row.get("usage"))
+    return out
+
+
+def todo_index(root: Path, me: str | None = None) -> list[dict[str, Any]]:
+    """TODO 合并（方案 6.3）：Tasks.md Active、我持有的未结角色段、我被指派的待办、到期提醒。
+
+    按来源分组输出；M0 只提供数据，GUI（M1）负责呈现与勾选。
+    """
+    root = Path(root)
+    rows = capsule_index(root, "0000-01-01", "9999-12-31", me=me)
+    groups: list[dict[str, Any]] = []
+
+    tasks: list[dict[str, Any]] = []
+    for row in rows:
+        docs = Path(row["path"]).parent / "Tasks.md"
+        if not docs.is_file():
+            continue
+        for text in _active_tasks(docs):
+            tasks.append({"capsule_id": row["id"], "path": str(docs), "text": text})
+    if tasks:
+        groups.append({"source": "tasks_md", "items": tasks})
+
+    segments: list[dict[str, Any]] = []
+    for row in rows:
+        for seg in row["open_segments"]:
+            if seg.get("actor") == "role":
+                segments.append({"capsule_id": row["id"], **seg})
+    if segments:
+        groups.append({"source": "open_segment", "items": segments})
+
+    pending: list[dict[str, Any]] = []
+    for row in rows:
+        for a in row["assignments"]:
+            if a.get("status") in ("pending", "running"):
+                pending.append({"capsule_id": row["id"], **a})
+    if pending:
+        groups.append({"source": "assignment_pending", "items": pending})
+
+    due: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("review_due_at") or row.get("closure_deadline"):
+            due.append({"capsule_id": row["id"], "review_due_at": row.get("review_due_at"),
+                        "closure_deadline": row.get("closure_deadline")})
+    if due:
+        groups.append({"source": "capsule_due", "items": due})
+    return groups
+
+
 def format_markdown(data: dict[str, Any], by: str = "project") -> str:
     """格式化输出 Markdown 表格。
 
@@ -517,6 +775,14 @@ def format_markdown(data: dict[str, Any], by: str = "project") -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="跨项目工时聚合与汇报生成工具（Tech-120）")
+    sub = parser.add_subparsers(dest="command")
+    index_p = sub.add_parser("capsule-index",
+                             help="一次拿全胶囊摘要（Tech-175 M0）：归属、open 段、指派、工时与 token 小计；不落盘缓存")
+    index_p.add_argument("--me", help="本机人员 id（stakeholders.yaml::people[].id）；给出时只返回「我的」胶囊")
+    index_p.add_argument("--project", help="指定项目 ID 过滤")
+    todo_p = sub.add_parser("todo-index",
+                            help="TODO 合并（Tech-175 M0）：Tasks.md Active、未结角色段、待办指派、到期提醒，按来源分组")
+    todo_p.add_argument("--me", help="本机人员 id；给出时只返回「我的」胶囊来源")
     parser.add_argument("--since", default=_default_since(), help="统计起始日期 YYYY-MM-DD（缺省本周一）")
     parser.add_argument("--until", default=dt.date.today().isoformat(), help="统计截止日期 YYYY-MM-DD（缺省今天）")
     parser.add_argument("--project", help="指定项目 ID 过滤")
@@ -528,6 +794,16 @@ def main() -> int:
     args = parser.parse_args()
 
     root = _find_workspace_root(args.root)
+
+    if args.command == "capsule-index":
+        rows = capsule_index(root, args.since, args.until, me=args.me, project_filter=args.project)
+        print(json.dumps(rows, ensure_ascii=False, indent=2, default=str))
+        return 0
+
+    if args.command == "todo-index":
+        print(json.dumps(todo_index(root, me=args.me), ensure_ascii=False, indent=2, default=str))
+        return 0
+
     data = aggregate(
         root=root,
         since=args.since,
