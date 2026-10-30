@@ -14,6 +14,17 @@
       "minimum": 1,
       "description": "胶囊内段与工时条目单调递增序号计数器"
     },
+    "owner": {
+      "$comment": "胶囊归属（Tech-175 M0，方案 6.4 P0）：取值 = stakeholders.yaml::people[].id。可选，缺省时由聚合层按首个 actor≠role 的段 operator 经 handles.git 映射推导，只展示不回写。",
+      "type": "string",
+      "minLength": 1
+    },
+    "members": {
+      "$comment": "胶囊成员（Tech-175 M0，方案 6.4 P0）：people.id 列表；「我的」过滤按 owner 或 members 命中。",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
     "task_segments": {
       "type": "array",
       "description": "会话事件时间戳驱动的任务段事实集合",

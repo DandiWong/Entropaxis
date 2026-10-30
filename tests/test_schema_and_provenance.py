@@ -167,6 +167,78 @@ class CapsuleSecondsContractTests(TestCase):
         errs = VS.validate({**base, "usage": "unknown", "dispatch_id": "nothex"}, items)
         self.assertTrue(any("dispatch_id" in e for e in errs), "dispatch_id 32 位 hex")
 
+class OwnershipContractTests(TestCase):
+    """Tech-175 M0（方案 6.4 P0 行）：胶囊归属、人员 handles、项目 remote、workspace remotes。
+
+    四个字段全部可选：旧胶囊、旧人员、旧注册表与旧配置零改动即可通过校验。
+    """
+
+    def _capsule_schema(self) -> dict:
+        return VS.load_schema("capsule")
+
+    def test_capsule_owner_members_optional_and_typed(self) -> None:
+        schema = self._capsule_schema()
+        self.assertNotIn("owner", schema.get("required", []))
+        self.assertNotIn("members", schema.get("required", []))
+        self.assertEqual(VS.validate({"id": "Tech-1", "topic": "t", "mode": "full",
+                                      "lifecycle": "draft", "owner": "dandi",
+                                      "members": ["dandi", "ling"]}, schema), [])
+        self.assertTrue(VS.validate({"id": "Tech-1", "topic": "t", "mode": "full",
+                                     "lifecycle": "draft", "owner": ""}, schema),
+                        "owner 必须是人员 id，不得为空串")
+        self.assertTrue(VS.validate({"id": "Tech-1", "topic": "t", "mode": "full",
+                                     "lifecycle": "draft", "members": "dandi"}, schema),
+                        "members 必须是数组")
+        self.assertTrue(VS.validate({"id": "Tech-1", "topic": "t", "mode": "full",
+                                     "lifecycle": "draft", "members": [""]}, schema),
+                        "members 元素不得为空串")
+
+    def test_old_capsule_without_owner_validates(self) -> None:
+        """旧胶囊零改动可校验：无 owner/members 的实测样本仍整体通过。"""
+        sample = CapsuleSecondsContractTests._p7_sample(self)
+        errs = VS.validate(sample, self._capsule_schema())
+        self.assertEqual(errs, [], f"旧胶囊无归属字段也应通过: {errs}")
+
+    def test_stakeholders_people_handles_optional(self) -> None:
+        schema = VS.load_schema("stakeholders")
+        items = schema["properties"]["people"]["items"]
+        self.assertNotIn("handles", items.get("required", []))
+        self.assertEqual(VS.validate({"id": "dandi", "name": "Dandi Wong",
+                                      "handles": {"git": "Dandi Wong", "dashboard": "dandi"}}, items), [])
+        self.assertEqual(VS.validate({"id": "dandi", "name": "Dandi Wong"}, items), [],
+                         "旧人员条目无 handles 也应通过")
+
+    def test_registry_project_remote_optional(self) -> None:
+        schema = VS.load_schema("registry")
+        items = schema["properties"]["projects"]["items"]
+        self.assertNotIn("remote", items.get("required", []))
+        self.assertEqual(VS.validate({"id": "p", "path": "p/", "remote": "oss-cn:ep/proj/"}, items), [])
+        self.assertEqual(VS.validate({"id": "p", "path": "p/"}, items), [],
+                         "旧注册表无 remote 也应通过")
+
+    def test_workspace_config_remotes_optional(self) -> None:
+        schema = VS.load_schema("workspace-config")
+        props = schema["properties"]
+        self.assertNotIn("remotes", schema.get("required", []))
+        remotes = props["remotes"]
+        self.assertEqual(remotes["type"], "array")
+        item = remotes["items"]
+        for key in ("id", "protocol", "endpoint", "bucket_or_root"):
+            self.assertIn(key, item["required"], f"{key} 必填")
+        self.assertIn("s3", item["properties"]["protocol"]["enum"])
+        self.assertIn("oss", item["properties"]["protocol"]["enum"])
+        self.assertIn("webdav", item["properties"]["protocol"]["enum"])
+        # 凭据不进 schema：remotes 只描述连接目标与开关
+        for banned in ("secret", "access_key", "password", "token", "credential"):
+            self.assertNotIn(banned, item["properties"], f"remotes 不得含凭据字段 {banned}")
+        self.assertEqual(VS.validate({"remotes": [
+            {"id": "oss-cn", "protocol": "oss", "endpoint": "oss-cn-hangzhou.aliyuncs.com",
+             "bucket_or_root": "ep-bucket", "region": "cn-hangzhou", "encrypt": True}]}, schema), [])
+        self.assertEqual(VS.validate({}, schema), [], "旧配置无 remotes 也应通过")
+        self.assertTrue(VS.validate({"remotes": [
+            {"id": "x", "protocol": "ftp", "endpoint": "e", "bucket_or_root": "b"}]}, schema),
+            "protocol 枚举外拒绝")
+
     def test_effort_hms_pattern(self) -> None:
         """方案 4.3.4：effort 兼容旧 0.75h 与新 H:MM:SS。"""
         effort = VS.load_schema("front_matter")["properties"]["effort"]

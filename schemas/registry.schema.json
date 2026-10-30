@@ -21,6 +21,11 @@
           "aliases": { "type": "array", "items": { "type": "string" } },
           "boards": { "type": "object" },
           "code": { "type": "array", "items": { "type": "string" } },
+          "remote": {
+            "$comment": "远端绑定（Tech-175 M0，方案 6.4 P0）：<remote_id>:<prefix>，remote_id 指向 workspace-config.yaml::remotes[].id。可选；缺省 = 未绑定远端（单机模式）。",
+            "type": "string",
+            "minLength": 1
+          },
           "note": { "type": "string" }
         }
       }

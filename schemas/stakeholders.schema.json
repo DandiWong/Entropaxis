@@ -23,6 +23,15 @@
           "default_title": { "type": "string" },
           "aliases": { "type": "array", "items": { "type": "string" } },
           "email": { "type": "string" },
+          "handles": {
+            "$comment": "外部身份句柄（Tech-175 M0，方案 6.4 P0，D-3）：git = worklogs.operator 里的 git user.name；dashboard = 看板账号。可选；人员主库仍是唯一真源，不新建成员表。",
+            "type": "object",
+            "additionalProperties": { "type": "string", "minLength": 1 },
+            "properties": {
+              "git": { "type": "string", "minLength": 1 },
+              "dashboard": { "type": "string", "minLength": 1 }
+            }
+          },
           "note": { "type": "string" }
         }
       }
