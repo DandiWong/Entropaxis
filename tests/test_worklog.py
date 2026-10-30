@@ -388,6 +388,64 @@ class TestWorklogCliEntry(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, f"CLI 崩溃: {proc.stderr}")
         self.assertIn("tester", proc.stdout)
 
+    def test_log_time_duration_text_writes_seconds_and_human_actor(self):
+        """T4 / AC-2：--log-time 接受时长文本，写 seconds 真源并固定 actor=human。"""
+        cap = self._capsule()
+        proc = self._cli("update_capsule.py", str(cap), "--log-time", "1h23m",
+                         "--stage", "misc", "--summary", "时长文本")
+        self.assertEqual(proc.returncode, 0, f"CLI 崩溃: {proc.stderr}")
+        entry = update_capsule.read_worklogs(cap)[0]
+        self.assertEqual(entry["seconds"], 4980)
+        self.assertEqual(entry["spent"], 1.3833)
+        self.assertEqual(entry["actor"], "human")
+
+    def test_log_time_hms_text_and_default_stage_misc(self):
+        """T4 / AC-2：H:MM:SS 也合法；不传 --stage 一律 misc，不按 mtime 推断。"""
+        cap = self._capsule()
+        (cap / "07_验收报告.md").write_text("验收\n", encoding="utf-8")
+        proc = self._cli("update_capsule.py", str(cap), "--log-time", "01:23:45",
+                         "--summary", "缺省阶段")
+        self.assertEqual(proc.returncode, 0, f"CLI 崩溃: {proc.stderr}")
+        entry = update_capsule.read_worklogs(cap)[0]
+        self.assertEqual(entry["seconds"], 5025)
+        self.assertEqual(entry["stage"], "misc")
+        self.assertEqual(entry["actor"], "human")
+
+    def test_log_time_actor_only_accepts_human(self):
+        """T4：--actor 只接受 human，其它值退出码 1 且文件字节不变。"""
+        cap = self._capsule()
+        before = (cap / "capsule.yaml").read_bytes()
+        proc = self._cli("update_capsule.py", str(cap), "--log-time", "1h",
+                         "--actor", "manager", "--stage", "misc", "--summary", "越权 actor")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("human", proc.stderr)
+        self.assertEqual((cap / "capsule.yaml").read_bytes(), before)
+
+    def test_log_time_invalid_duration_leaves_file_untouched(self):
+        """AC-2：非法时长文本拒绝写入，磁盘字节不变。"""
+        cap = self._capsule()
+        before = (cap / "capsule.yaml").read_bytes()
+        for bad in ("1x", "25h", "0", ""):
+            proc = self._cli("update_capsule.py", str(cap), "--log-time", bad,
+                             "--stage", "misc", "--summary", "非法时长")
+            self.assertEqual(proc.returncode, 1, f"应拒绝 {bad!r}: {proc.stdout}")
+        self.assertEqual((cap / "capsule.yaml").read_bytes(), before)
+
+    def test_override_stage_reason_via_cli(self):
+        """T5 / AC-12：CLI 透传 --stage/--reason，保存 original_stage 与 override_reason。"""
+        cap = self._capsule()
+        update_capsule.start_task(cap, name="设计", task_id="Tech-999",
+                                  at="2026-10-15T09:00:00+08:00")
+        update_capsule.end_task(cap, at="2026-10-15T09:07:00+08:00")
+        proc = self._cli("update_capsule.py", str(cap), "--override", "Tech-999#1",
+                         "--spent", "30m", "--stage", "03_设计", "--reason", "阶段错位")
+        self.assertEqual(proc.returncode, 0, f"CLI 崩溃: {proc.stderr}")
+        entry = update_capsule.read_worklogs(cap)[0]
+        self.assertEqual(entry["stage"], "03_设计")
+        self.assertEqual(entry["original_stage"], "misc")
+        self.assertEqual(entry["override_reason"], "阶段错位")
+        self.assertEqual(entry["seconds"], 1800)
+
     def test_record_iteration_cli_end_to_end(self):
         """AC-3 补：record_iteration CLI 全流程——Changelog + Tasks + 胶囊三处写入。"""
         proj = self.root / "proj"

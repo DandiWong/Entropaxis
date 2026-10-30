@@ -55,10 +55,10 @@ WORKLOG_DEFAULT_INDENT = "  "
 SEGMENT_STATES = ("open", "pending_approval", "logged", "unmeasured")
 # 允许显式标记为不计量的源状态（IMP-C3）：logged 已有 worklog，撤段会破坏 I-3。
 UNMEASURABLE_SOURCES = ("open", "pending_approval")
-# 时长门槛按原始时长判定（方案 §3.3；判定不取整。门槛单位改秒由 T3 承接）：
-# ≤8h 自动入账；8h～24h 待人工批准；>24h 只能修正或拆段。
-AUTO_LIMIT_MIN = 480.0
-APPROVAL_LIMIT_MIN = 1440.0
+# 时长门槛按整数秒判定（方案 §4.4 判定 1、§4.4.2）：≤8h 自动入账；8h～24h 待人工批准；
+# >24h 只能修正或拆段。判定不取整：8h01m（28860s）不得被归成 8h 而绕过待批。
+AUTO_LIMIT_S = 28800
+APPROVAL_LIMIT_S = 86400
 
 
 class ToolError(Exception):
@@ -167,15 +167,6 @@ def _default_operator() -> str:
     proc = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True)
     name = proc.stdout.strip() if proc.returncode == 0 else ""
     return name or os.environ.get("USER") or os.environ.get("USERNAME") or ""
-
-
-def _default_stage(capsule: Path) -> tuple[str, str]:
-    """--stage 缺省时取胶囊内 mtime 最新的 NN_*.md 阶段名。"""
-    stages = [p for p in capsule.glob("*.md") if re.match(r"^\d{2}_", p.name)]
-    if not stages:
-        return "misc", "default"
-    newest = max(stages, key=lambda p: p.stat().st_mtime)
-    return newest.name[:-3], "mtime"
 
 
 def _capsule_id(capsule: Path, text: str) -> str:
@@ -323,8 +314,10 @@ def _invariant_errors(data: dict[str, Any]) -> list[str]:
     """写盘前统一校验跨集合不变量；空列表表示通过。
 
     覆盖 I-3（logged 段与 worklogs.ref 一一对应）、ref 唯一性、seq_next 单调性、
-    段状态与 endAt / worklog 的对应关系。schema 只能表达单条目契约，这些跨集合
-    条件必须在这里拦，否则手改或半成品状态会被后续写入继承。
+    段状态与 endAt / worklog 的对应关系，以及秒级化契约的 I-7（spent 与 seconds 一致）、
+    I-8（actor=role 必带 role）、I-10（入账 actor 段必带 effective_seconds，manager 段
+    另需 evidence_sha256）。schema 只能表达单条目契约，这些跨集合条件必须在这里拦，
+    否则手改或半成品状态会被后续写入继承。
     """
     errs: list[str] = []
     segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
@@ -383,6 +376,51 @@ def _invariant_errors(data: dict[str, Any]) -> list[str]:
     for s in segments:
         if s.get("state") == "logged" and not s.get("endAt"):
             errs.append(f"logged 段 {s.get('seg_id')} 缺少 endAt")
+
+    # 5) I-7：带 seconds 的条目必须满足 spent == round(seconds/3600, 4)。
+    #    手改或半成品状态不得被后续写入继承（方案 4.3.1）。
+    for w in worklogs:
+        seconds = w.get("seconds")
+        if seconds is None:
+            continue
+        try:
+            seconds_i = int(seconds)
+            expected = _seconds_to_spent(seconds_i)
+            actual = float(w.get("spent"))
+        except (TypeError, ValueError):
+            errs.append(f"worklog {w.get('ref')} 的 seconds/spent 无法比较: {seconds!r} / {w.get('spent')!r}")
+            continue
+        if abs(actual - expected) >= 1e-9:
+            errs.append(
+                f"worklog {w.get('ref')} 的 spent ({actual}) 与 seconds ({seconds_i}) 不一致"
+                f"（I-7：应为 {expected}）"
+            )
+
+    # 6) I-8：actor=role 的条目与段必须带 role。
+    for w in worklogs:
+        if w.get("actor") == "role" and not w.get("role"):
+            errs.append(f"worklog {w.get('ref')} 的 actor=role 但缺少 role（I-8 不变量被破坏）")
+    for s in segments:
+        if s.get("actor") == "role" and not s.get("role"):
+            errs.append(f"段 {s.get('seg_id')} 的 actor=role 但缺少 role（I-8 不变量被破坏）")
+
+    # 7) I-10：actor 段一旦入账（logged / pending_approval）必须有 effective_seconds；
+    #    actor=manager 的这类段还必须有 evidence_sha256（方案 4.4.1 兜底）。
+    for s in segments:
+        if s.get("actor") not in ("role", "manager"):
+            continue
+        if s.get("state") not in ("logged", "pending_approval"):
+            continue
+        if s.get("effective_seconds") is None:
+            errs.append(
+                f"段 {s.get('seg_id')} 的 actor={s.get('actor')} 且 state={s.get('state')} "
+                "但缺少 effective_seconds（I-10 不变量被破坏）"
+            )
+        if s.get("actor") == "manager" and not s.get("evidence_sha256"):
+            errs.append(
+                f"段 {s.get('seg_id')} 的 actor=manager 且 state={s.get('state')} "
+                "但缺少 evidence_sha256（I-10 不变量被破坏）"
+            )
     return errs
 
 
@@ -411,7 +449,8 @@ def _touch_open_segment(data: dict[str, Any], at: str | None = None) -> None:
         seg["lastActivityAt"] = normalize_to_cst(at).isoformat() if at else _now_iso()
 
 
-def _segment_duration_minutes(seg: dict, *, default_end: dt.datetime | None = None) -> float:
+def _segment_duration_seconds(seg: dict, *, default_end: dt.datetime | None = None) -> int:
+    """段墙钟秒数 = max(1, round(endAt − startAt))（方案 4.4.2 machine_seconds）。"""
     start_dt = normalize_to_cst(seg["startAt"])
     if seg.get("endAt"):
         end_dt = normalize_to_cst(seg["endAt"])
@@ -419,54 +458,64 @@ def _segment_duration_minutes(seg: dict, *, default_end: dt.datetime | None = No
         end_dt = default_end
     else:
         end_dt = dt.datetime.now(TZ_CST)
-    minutes = (end_dt - start_dt).total_seconds() / 60.0
-    if minutes <= 0:
+    raw = (end_dt - start_dt).total_seconds()
+    if raw <= 0:
         raise ToolError(
             f"❌ 结束时间早于或等于开始时间: start={start_dt.isoformat()}, end={end_dt.isoformat()}"
         )
-    return minutes
+    return max(1, round(raw))
 
 
 def _close_segment(capsule: Path, data: dict[str, Any], seg: dict, end_dt: dt.datetime,
                    trigger: str) -> dict | None:
-    """给未收尾段补 endAt/lastActivityAt 并按 §3.3 结算，返回新 worklog（若有）。"""
+    """给未收尾段补 endAt/lastActivityAt 并按 §4.4.2 结算，返回新 worklog（若有）。"""
     start_dt = normalize_to_cst(seg["startAt"])
     seg["endAt"] = end_dt.isoformat()
     seg["lastActivityAt"] = end_dt.isoformat()
     seg["trigger"] = trigger
-    return _settle_segment(capsule, data, seg, (end_dt - start_dt).total_seconds() / 60.0)
+    return _settle_segment(data, seg, max(1, round((end_dt - start_dt).total_seconds())))
 
 
-def _settle_segment(capsule: Path, data: dict[str, Any], seg: dict, minutes: float) -> dict | None:
-    """按原始时长把已收尾段结算为 logged / pending_approval，返回新 worklog（若有）。
+def _settle_segment(data: dict[str, Any], seg: dict, seconds: int) -> dict | None:
+    """按整数秒把已收尾段结算为 logged / pending_approval，返回新 worklog（若有）。
 
-    门槛按原始时长判定（方案 §3.3）：481 分钟不能被归成 8h 而绕过待批。
-    spent 由整数秒派生（round(秒/3600, 4)），不再取整到 0.25h（Tech-176 T2）；
-    段上的 machine_seconds/effective_seconds 字段与 actor 结算由 T3 承接。
+    门槛按原始秒数判定（方案 4.4.2）：28860 秒（8h01m）不得被归成 8h 而绕过待批。
+    段写 machine_seconds；旧段（无 actor）的 effective_seconds 不写，worklog seconds
+    等于 machine_seconds（4.4.2 末行）。spent 由 seconds 派生（round(秒/3600, 4)）。
+    角色/Manager 段的 actor、role、effective_seconds 由 T8/T9 写入，T3 只兜底派生。
     """
-    if minutes <= AUTO_LIMIT_MIN:
+    seconds = max(1, round(seconds))
+    seg["machine_seconds"] = seconds
+    actor = seg.get("actor")
+    effective = seg.get("effective_seconds")
+    effective = max(0, round(effective)) if isinstance(effective, (int, float)) else seconds
+    if seconds <= AUTO_LIMIT_S:
         seg["state"] = "logged"
-        spent = _seconds_to_spent(max(1, round(minutes * 60.0)))
-        stage = seg.get("stage") or _default_stage(capsule)[0]
+        stage = seg.get("stage") or "misc"
         operator = _default_operator()
-        entry = {
+        entry: dict[str, Any] = {
             "date": normalize_to_cst(seg["startAt"]).strftime("%Y-%m-%d"),
             "stage": stage,
-            "spent": spent,
+            "spent": _seconds_to_spent(effective),
+            "seconds": effective,
             "summary": f"{seg['name']}（自动计量入账）"[:120],
             "operator": operator,
             "ref": seg["seg_id"],
         }
+        if actor in ("role", "manager"):
+            entry["actor"] = actor
+            if actor == "role" and seg.get("role"):
+                entry["role"] = seg["role"]
         worklogs = data.get("worklogs") or []
         worklogs.append(entry)
         data["worklogs"] = worklogs
         return entry
-    if minutes <= APPROVAL_LIMIT_MIN:
+    if seconds <= APPROVAL_LIMIT_S:
         seg["state"] = "pending_approval"
-        seg["note"] = (seg.get("note") or "") + " 超过 8h"
+        seg["note"] = (seg.get("note") or "") + f" 超过 8h（{fmt_hms(seconds)}）"
         return None
     seg["state"] = "pending_approval"
-    seg["note"] = (seg.get("note") or "") + " 超过 24h，须拆段"
+    seg["note"] = (seg.get("note") or "") + f" 超过 24h，须拆段（{fmt_hms(seconds)}）"
     return None
 
 
@@ -641,8 +690,9 @@ def start_task(capsule_dir: str | Path, name: str, task_id: str | None = None, s
     start_dt = normalize_to_cst(at) if at else dt.datetime.now(TZ_CST)
     start_iso = start_dt.isoformat()
 
+    # 阶段缺省一律 misc（T3c 删 mtime 推断，方案 4.4 判定 3）：不按文件 mtime 猜阶段。
     if stage is None:
-        stage, _ = _default_stage(capsule)
+        stage = "misc"
 
     seg = {
         "seq": allocated_seq,
@@ -729,8 +779,8 @@ def end_task(capsule_dir: str | Path, trigger: str = "deliver", at: str | None =
     else:
         end_dt = dt.datetime.now(TZ_CST)
 
-    duration_m = (end_dt - start_dt).total_seconds() / 60.0
-    if duration_m <= 0:
+    duration_s = max(1, round((end_dt - start_dt).total_seconds()))
+    if duration_s <= 0:
         raise ToolError(f"❌ 结束时间早于或等于开始时间: start={start_dt.isoformat()}, end={end_dt.isoformat()}")
 
     open_seg["endAt"] = end_dt.isoformat()
@@ -743,7 +793,7 @@ def end_task(capsule_dir: str | Path, trigger: str = "deliver", at: str | None =
     if note:
         open_seg["note"] = note
 
-    new_worklog = _settle_segment(capsule, data, open_seg, duration_m)
+    new_worklog = _settle_segment(data, open_seg, duration_s)
     worklog_refs = [open_seg["seg_id"]] if new_worklog is not None else []
 
     if not dry_run:
@@ -777,27 +827,35 @@ def approve_segment(capsule_dir: str | Path, seg_id: str, dry_run: bool = False)
     if target_seg.get("state") != "pending_approval":
         raise ToolError(f"❌ 任务段 {seg_id} 状态为 {target_seg.get('state')}，不是 pending_approval，无需批准。")
 
-    duration_m = _segment_duration_minutes(target_seg)
-    if duration_m > APPROVAL_LIMIT_MIN:
+    duration_s = _segment_duration_seconds(target_seg)
+    if duration_s > APPROVAL_LIMIT_S:
         raise ToolError(
-            f"❌ 任务段 {seg_id} 原始时长 > 24h ({duration_m:.1f}m)，禁止直接批准；\n"
+            f"❌ 任务段 {seg_id} 原始时长 > 24h（{fmt_hms(duration_s)}），禁止直接批准；\n"
             "👉 修复建议: 用 --fix-segment 修正结束时间，或用 --split-segment --at <iso> 按时刻拆段。"
         )
 
     target_seg["state"] = "logged"
-    spent = _seconds_to_spent(max(1, round(duration_m * 60.0)))
-    stage = target_seg.get("stage") or _default_stage(capsule)[0]
+    effective = target_seg.get("effective_seconds")
+    effective = max(0, round(effective)) if isinstance(effective, (int, float)) else duration_s
+    target_seg["machine_seconds"] = duration_s
+    spent = _seconds_to_spent(effective)
+    stage = target_seg.get("stage") or "misc"
     operator = _default_operator()
     work_date = normalize_to_cst(target_seg["startAt"]).strftime("%Y-%m-%d")
 
-    entry = {
+    entry: dict[str, Any] = {
         "date": work_date,
         "stage": stage,
         "spent": spent,
+        "seconds": effective,
         "summary": f"{target_seg['name']}（人工批准入账）"[:120],
         "operator": operator,
         "ref": target_seg["seg_id"],
     }
+    if target_seg.get("actor") in ("role", "manager"):
+        entry["actor"] = target_seg["actor"]
+        if target_seg.get("actor") == "role" and target_seg.get("role"):
+            entry["role"] = target_seg["role"]
     worklogs = data.get("worklogs") or []
     worklogs.append(entry)
     data["worklogs"] = worklogs
@@ -882,7 +940,7 @@ def fix_segment(capsule_dir: str | Path, seg_id: str, end_at: str, dry_run: bool
     target_seg["endAt"] = end_dt.isoformat()
     target_seg["lastActivityAt"] = end_dt.isoformat()
     target_seg["note"] = (target_seg.get("note") or "").strip()
-    entry = _settle_segment(capsule, data, target_seg, (end_dt - start_dt).total_seconds() / 60.0)
+    entry = _settle_segment(data, target_seg, max(1, round((end_dt - start_dt).total_seconds())))
 
     if not dry_run:
         _check_invariants(data)
@@ -960,7 +1018,7 @@ def split_segment(capsule_dir: str | Path, seg_id: str, at: list[str], dry_run: 
         for key in ("taskId", "stage"):
             if target_seg.get(key):
                 part[key] = target_seg[key]
-        entry = _settle_segment(capsule, data, part, (seg_end - seg_start).total_seconds() / 60.0)
+        entry = _settle_segment(data, part, max(1, round((seg_end - seg_start).total_seconds())))
         errs = _validate_segment(part)
         if errs:
             raise ToolError(f"❌ 拆分段数据契约校验失败: {'；'.join(errs)}")
@@ -990,9 +1048,18 @@ def split_segment(capsule_dir: str | Path, seg_id: str, at: list[str], dry_run: 
     }
 
 
-def override_worklog(capsule_dir: str | Path, ref: str, spent: float | None = None,
-                     summary: str | None = None, dry_run: bool = False) -> dict:
-    """人工覆盖工时条目（原位改写 spent/summary，保留 original_*，置 overridden=True）。"""
+def override_worklog(capsule_dir: str | Path, ref: str, spent: float | str | None = None,
+                     summary: str | None = None, stage: str | None = None, reason: str | None = None,
+                     dry_run: bool = False) -> dict:
+    """人工覆盖工时条目（G-8 / AC-12：可审计的纠错动作）。
+
+    `--reason` 必填（D-5）：覆盖属于纠错，必须留原因。`--spent` 接受与 `--log-time`
+    相同的时长语法（纯数字按小时、`1h23m`、`01:23:45`），换算成整数秒写 `seconds`
+    （真源）并派生 `spent`。`--stage` 改阶段，首次改阶段时保存 `original_stage`。
+    首次覆盖保存 `original_seconds`（无 seconds 的旧条目按 round(spent×3600) 补算）、
+    `original_spent`、`original_summary`；每次覆盖写 `override_reason`（最近一次原因），
+    二次覆盖不改 `original_*`。
+    """
     capsule = Path(capsule_dir).expanduser().resolve()
     data, text = _load_capsule_data(capsule)
     current = _read_key(text, "lifecycle") or "draft"
@@ -1001,29 +1068,51 @@ def override_worklog(capsule_dir: str | Path, ref: str, spent: float | None = No
 
     _check_invariants(data)
 
+    reason_clean = str(reason).strip() if reason is not None else ""
+    if not reason_clean:
+        raise ToolError(
+            "❌ --override 必须提供 --reason <原因>（覆盖是纠错动作，须可审计）\n"
+            "👉 修复建议: 补一条 200 字以内的原因，如 --reason \"P-1 mtime 推断错位\"。"
+        )
+    if len(reason_clean) > 200:
+        raise ToolError("❌ 覆盖原因不得超过 200 字。")
+
     worklogs = [w for w in (data.get("worklogs") or []) if isinstance(w, dict)]
     target_log = next((w for w in worklogs if w.get("ref") == ref), None)
     if not target_log:
         raise ToolError(f"❌ 未找到 ref 为 {ref} 的工时条目。")
 
-    if spent is None and summary is None:
-        raise ToolError("❌ 必须提供 --spent 或 --summary 进行覆盖。")
+    if spent is None and summary is None and stage is None:
+        raise ToolError("❌ 必须提供 --spent / --summary / --stage 之一进行覆盖。")
 
-    # 首次覆盖保存 original_spent / original_summary
+    # 首次覆盖保存 original_*（二次覆盖只更新当前值与 override_reason）。
     if not target_log.get("overridden"):
         target_log["overridden"] = True
         target_log["original_spent"] = target_log["spent"]
         target_log["original_summary"] = target_log.get("summary", "")
+        if target_log.get("seconds") is not None:
+            target_log["original_seconds"] = int(target_log["seconds"])
+        else:
+            target_log["original_seconds"] = max(1, round(float(target_log["spent"]) * SECONDS_PER_HOUR))
 
     if spent is not None:
-        if spent <= 0 or spent > 24:
-            raise ToolError(f"❌ 工时不合法: {spent}（须 > 0、≤ 24）")
-        target_log["spent"] = spent
+        seconds = parse_duration(spent)
+        target_log["seconds"] = seconds
+        target_log["spent"] = _seconds_to_spent(seconds)
     if summary is not None:
         summary_clean = str(summary).strip()
         if not summary_clean or len(summary_clean) > 120:
             raise ToolError("❌ 摘要不能为空且不得超过 120 字。")
         target_log["summary"] = summary_clean
+    if stage is not None:
+        stage_clean = str(stage).strip()
+        if not WORKLOG_STAGE_RE.match(stage_clean):
+            raise ToolError(f"❌ stage 取值非法: {stage_clean!r}\n👉 修复建议: 形如 02_方案 或 misc。")
+        if "original_stage" not in target_log:
+            target_log["original_stage"] = target_log.get("stage")
+        target_log["stage"] = stage_clean
+
+    target_log["override_reason"] = reason_clean
 
     errs = _validate_entry(target_log)
     if errs:
@@ -1046,8 +1135,11 @@ def override_worklog(capsule_dir: str | Path, ref: str, spent: float | None = No
         "total": worklog_total(capsule)
     }
 
-def _sync_stage_deliverable_effort(capsule: Path, stage: str, spent: float) -> None:
-    """把工时登记的 spent 当量同步注入对应阶段产物的 Front Matter 中（自包含元信息）。"""
+def _sync_stage_deliverable_effort(capsule: Path, stage: str, hours: float) -> None:
+    """把工时登记的 spent 当量同步注入对应阶段产物的 Front Matter 中（自包含元信息）。
+
+    effort 的 H:MM:SS 改写属 T13（批次 6），本轮仍写小时浮点。
+    """
     candidates_map = {
         "01_调研": ["01_调研.md"],
         "02_方案": ["02_方案.md"],
@@ -1075,7 +1167,7 @@ def _sync_stage_deliverable_effort(capsule: Path, stage: str, spent: float) -> N
             m = re.match(r"\A---\n(.*?)\n---\n", text, re.DOTALL)
             if m:
                 block = m.group(1)
-                line = f"effort: {spent}h"
+                line = f"effort: {hours}h"
                 if re.search(r"^effort:.*$", block, re.MULTILINE):
                     block = re.sub(r"^effort:.*$", line, block, count=1, flags=re.MULTILINE)
                 else:
@@ -1084,10 +1176,16 @@ def _sync_stage_deliverable_effort(capsule: Path, stage: str, spent: float) -> N
         except OSError:
             pass
 
-def log_time(capsule_dir: str | Path, spent: float, stage: str | None = None, summary: str | None = None,
+def log_time(capsule_dir: str | Path, spent: float | str, stage: str | None = None,
+             summary: str | None = None,
              operator: str | None = None, day: str | None = None, dry_run: bool = False,
-             idempotent: bool = False) -> dict:
-    """胶囊 worklogs 的唯一人工补登写入入口。"""
+             idempotent: bool = False, actor: str | None = None) -> dict:
+    """胶囊 worklogs 的唯一人工补登写入入口。
+
+    时长接受 `parse_duration` 的三种写法（纯数字按小时、`1h23m`、`01:23:45`），
+    换算成整数秒后写 `seconds`（真源）与派生的 `spent`；actor 固定 `human`
+    （方案 4.4 判定 2：人工只有这一条入口）。缺省 stage 一律 `misc`，不推断。
+    """
     capsule = Path(capsule_dir).expanduser().resolve()
     data, text = _load_capsule_data(capsule)
     current = _read_key(text, "lifecycle") or "draft"
@@ -1099,10 +1197,14 @@ def log_time(capsule_dir: str | Path, spent: float, stage: str | None = None, su
 
     _check_invariants(data)
 
-    stage_from = "arg"
-    if stage is None:
-        stage, stage_from = _default_stage(capsule)
-    stage = str(stage).strip()
+    if actor is not None and str(actor).strip() != "human":
+        raise ToolError(
+            f"❌ --actor 只接受 human: {actor!r}\n"
+            "👉 修复建议: 补登是唯一的人工入口，固定 actor=human；角色与 Manager 工时由段自动计量。"
+        )
+
+    stage_from = "arg" if stage is not None else "default"
+    stage = str(stage).strip() if stage is not None else "misc"
     if not WORKLOG_STAGE_RE.match(stage):
         raise ToolError(f"❌ stage 取值非法: {stage!r}\n👉 修复建议: 形如 02_方案 或 misc。")
 
@@ -1122,10 +1224,8 @@ def log_time(capsule_dir: str | Path, spent: float, stage: str | None = None, su
     if not WORKLOG_DATE_RE.match(day):
         raise ToolError(f"❌ 日期格式错误: {day}\n👉 修复建议: 使用 YYYY-MM-DD。")
 
-    try:
-        hours = float(spent)
-    except (TypeError, ValueError):
-        raise ToolError(f"❌ 工时不合法: {spent!r}\n👉 修复建议: 传数字小时（如 1.5 或 0.3），任意小数均可（秒级化后无步长限制）。") from None
+    seconds = parse_duration(spent)
+    hours = _seconds_to_spent(seconds)
 
     # 分配持久 ref
     cid = _capsule_id(capsule, text)
@@ -1136,6 +1236,8 @@ def log_time(capsule_dir: str | Path, spent: float, stage: str | None = None, su
         "date": day,
         "stage": stage,
         "spent": hours,
+        "seconds": seconds,
+        "actor": "human",
         "summary": summary,
         "operator": operator,
         "ref": ref
@@ -1177,7 +1279,7 @@ def log_time(capsule_dir: str | Path, spent: float, stage: str | None = None, su
         _check_invariants(data)
         _save_capsule_yaml(capsule, data, text)
         if stage:
-            _sync_stage_deliverable_effort(capsule, stage, spent)
+            _sync_stage_deliverable_effort(capsule, stage, hours)
     return {
         "capsule": str(capsule),
         "status": "added",
@@ -1228,8 +1330,9 @@ def main() -> int:
     parser.add_argument("capsule", help="胶囊目录（含 capsule.yaml）")
     parser.add_argument("--delivered", nargs="?", const=date.today().isoformat(), metavar="YYYY-MM-DD",
                         help="标记已交付（代码合入主干且全量测试通过），省略日期取今天")
-    parser.add_argument("--log-time", type=float, metavar="HOURS",
-                        help="登记工时（小时，0 < spent <= 24，任意小数；时长文本语法由 T4 承接）")
+    parser.add_argument("--log-time", metavar="DURATION",
+                        help="登记工时（1.5 小时 / 1h23m / 01:23:45；固定 actor=human）")
+    parser.add_argument("--actor", help="执行主体，只接受 human（补登唯一入口）")
     parser.add_argument("--stage", help="工时所属阶段（如 02_方案 或 misc）")
     parser.add_argument("--summary", help="工时摘要（做了什么，≤120 字）")
     parser.add_argument("--operator", help="登记人（缺省读 git user.name）")
@@ -1254,7 +1357,7 @@ def main() -> int:
     parser.add_argument("--end-at", metavar="ISO", help="--fix-segment 使用的修正结束时间")
     parser.add_argument("--split-segment", metavar="SEG_ID", help="按 --at 时刻拆分任务段（可多次）")
     parser.add_argument("--override", metavar="REF", help="人工覆盖指定 ref 的工时条目")
-    parser.add_argument("--spent", type=float, help="覆盖后的工时数")
+    parser.add_argument("--spent", metavar="DURATION", help="覆盖后的工时（1.5 / 1h23m / 01:23:45）")
 
     parser.add_argument("--dry-run", action="store_true", help="只输出将要做的变更，不写入")
     args = parser.parse_args()
@@ -1286,10 +1389,14 @@ def main() -> int:
                 raise ToolError("❌ --split-segment 必须指定至少一个 --at <ISO 时刻>")
             res = split_segment(args.capsule, seg_id=args.split_segment, at=[args.at], dry_run=args.dry_run)
         elif args.override:
-            res = override_worklog(args.capsule, ref=args.override, spent=args.spent, summary=args.summary, dry_run=args.dry_run)
+            if not args.reason:
+                raise ToolError("❌ --override 必须指定 --reason <原因>（覆盖是纠错动作，须可审计）")
+            res = override_worklog(args.capsule, ref=args.override, spent=args.spent, summary=args.summary,
+                                   stage=args.stage, reason=args.reason, dry_run=args.dry_run)
         elif args.log_time is not None:
             res = log_time(args.capsule, spent=args.log_time, stage=args.stage, summary=args.summary,
-                           operator=args.operator, day=args.date, dry_run=args.dry_run, idempotent=args.idempotent)
+                           operator=args.operator, day=args.date, dry_run=args.dry_run,
+                           idempotent=args.idempotent, actor=args.actor)
         else:
             res = update_capsule(args.capsule, delivered=args.delivered, dry_run=args.dry_run)
     except ToolError as err:
