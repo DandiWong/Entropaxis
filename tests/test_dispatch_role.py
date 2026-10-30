@@ -2143,7 +2143,13 @@ class RunFileCapsuleFieldTests(DispatchRoleTestBase):
     def test_live_dispatch_items_keys_unchanged(self) -> None:
         """AC-12：采集器 live_dispatch_items 输出与改造前逐键一致（新增键不进入）。"""
         import importlib.util
-        scripts_dir = (SYSTEM_ROOT / "skills" / "fosunpharma-dashboard" / "scripts")
+        # 采集器在 dashboard Skill 的 scripts/ 下：按目录名后缀发现，不在测试里硬编码
+        # 工作区专属 Skill 名（零系统绑定铁律，检查项 13）。
+        scripts_dirs = sorted((SYSTEM_ROOT / "skills").glob("*-dashboard/scripts"))
+        self.assertTrue(scripts_dirs, "未找到 dashboard Skill 的 scripts 目录")
+        scripts_dir = next((d for d in scripts_dirs
+                            if (d / "collect_agent_perf.py").is_file()), None)
+        self.assertIsNotNone(scripts_dir, "dashboard Skill 下未找到 collect_agent_perf.py")
         sys.path.insert(0, str(scripts_dir))  # 采集器按脚本目录 import perf_state
         collector_path = scripts_dir / "collect_agent_perf.py"
         spec = importlib.util.spec_from_file_location("collect_agent_perf", collector_path)
