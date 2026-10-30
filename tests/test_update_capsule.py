@@ -1493,5 +1493,44 @@ class DispatchSegmentTests(unittest.TestCase):
         self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
 
 
+class StageEffortHmsTests(unittest.TestCase):
+    """Tech-176 T13（方案 4.4 判定「1 effort」）：Front Matter effort 写 H:MM:SS 并补齐映射键。"""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.cap = Path(self._td.name) / "cap"
+        self.cap.mkdir()
+        (self.cap / "capsule.yaml").write_text(MANIFEST.format(lifecycle="active"), encoding="utf-8")
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_log_time_writes_effort_hms_and_validates(self):
+        """log 之后 02_方案.md 的 effort: "0:07:00" 能通过 front_matter 校验（Spec T13 行）。"""
+        (self.cap / "02_方案.md").write_text(
+            "---\ntype: Proposal\ntopic: x\ndate: 2026-10-15\nauthor: Architecture\n---\n\n方案\n",
+            encoding="utf-8")
+        res = uc.log_time(self.cap, seconds=420, stage="02_方案", summary="方案", operator="t")
+        self.assertEqual(res["status"], "added")
+        fm = (self.cap / "02_方案.md").read_text(encoding="utf-8")
+        self.assertIn('effort: 0:07:00', fm)
+        import validate_schema as vs
+        block = fm.split("---")[1]
+        effort = dict(line.split(": ", 1) for line in block.strip().splitlines()
+                      if line.startswith("effort: "))["effort"].strip()
+        self.assertEqual(vs.validate(effort, vs.load_schema("front_matter")["properties"]["effort"]), [])
+
+    def test_stage_map_covers_audit_and_report_keys(self):
+        """映射键补 03_方案审计 / 05_实施审计 / 08_汇报（方案 4.4 判定「1 effort」）。"""
+        for stage, name in (("03_方案审计", "03_方案审计报告.md"),
+                            ("05_实施审计", "05_实施审计报告.md"),
+                            ("08_汇报", "08_汇报.md")):
+            target = self.cap / name
+            target.write_text("---\ntype: Report\ntopic: x\ndate: 2026-10-15\nauthor: Builder\n---\n\nx\n",
+                              encoding="utf-8")
+            uc._sync_stage_deliverable_effort(self.cap, stage, 3600)
+            self.assertIn("effort: 1:00:00", target.read_text(encoding="utf-8"), stage)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -688,7 +688,7 @@ def format_markdown(data: dict[str, Any], by: str = "project") -> str:
     by_actor = data.get("by_actor") or {}
     lines = [
         f"### 工时统计汇总（{data['since']} ~ {data['until']}）",
-        f"**总工时**: **{_fmt_hms(total_s)}**（{data['total_hours']}h）",
+        f"**总工时**: **{_fmt_hms(total_s)}**",
         f"**有效工时**: **{_fmt_hms(total_s)}**",
         f"**机时**: **{_fmt_hms(machine_s)}**",
         "**actor 分列**: " + " · ".join(

@@ -80,11 +80,6 @@ def _yaml_str(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _fmt_hours(value: float) -> str:
-    """1.5 → '1.5'，2.0 → '2'：Trailer 与提示语都用同一格式，不出现 2.0h 这种噪声。"""
-    return f"{value:g}"
-
-
 def normalize_to_cst(iso_str: str) -> dt.datetime:
     """归一化到 +08:00 时区。"""
     try:
@@ -337,15 +332,26 @@ def read_segments(capsule_dir: str | Path) -> list[dict]:
         return []
 
 
+def _entry_seconds(entry: dict) -> int:
+    """worklog 有效秒：有 `seconds`（整数真源）用它，旧条目按 round(spent×3600) 补算。
+
+    方案 4.4 判定 10、五「新旧条目混存的汇总口径」：旧条目不改写、不推断 actor。
+    """
+    seconds = entry.get("seconds")
+    if isinstance(seconds, (int, float)) and not isinstance(seconds, bool):
+        return max(0, round(float(seconds)))
+    try:
+        return max(0, round(float(entry.get("spent", 0)) * 3600))
+    except (TypeError, ValueError):
+        return 0
+
+
 def worklog_total(capsule_dir: str | Path) -> float:
-    """胶囊内全部 worklogs 的工时和（有效 spent）。"""
-    total = 0.0
-    for item in read_worklogs(capsule_dir):
-        try:
-            total += float(item.get("spent", 0))
-        except (TypeError, ValueError):
-            continue
-    return total
+    """胶囊内全部 worklogs 的工时和（有效 spent，由 seconds 真源派生）。
+
+    Tech-176 T13（方案 4.4 判定「下游」）：先按秒求和再换算小时，不累加浮点 spent。
+    """
+    return _seconds_to_spent(sum(_entry_seconds(item) for item in read_worklogs(capsule_dir)))
 
 
 def _read_key(text: str, key: str) -> str | None:
@@ -1528,10 +1534,12 @@ def override_worklog(capsule_dir: str | Path, ref: str, spent: float | str | Non
         "total": worklog_total(capsule)
     }
 
-def _sync_stage_deliverable_effort(capsule: Path, stage: str, hours: float) -> None:
-    """把工时登记的 spent 当量同步注入对应阶段产物的 Front Matter 中（自包含元信息）。
+def _sync_stage_deliverable_effort(capsule: Path, stage: str, seconds: int) -> None:
+    """把工时登记的秒数同步注入对应阶段产物的 Front Matter 中（自包含元信息）。
 
-    effort 的 H:MM:SS 改写属 T13（批次 6），本轮仍写小时浮点。
+    Tech-176 T13（方案 4.4 判定「1 effort」）：`effort` 写 H:MM:SS（如 `0:07:00`），
+    旧 `0.75h` 写法仍合法（front_matter pattern 双向兼容）。阶段映射键与 ROLE_STAGE
+    的角色段阶段对齐：补 `03_方案审计`、`05_实施审计`、`08_汇报`。
     """
     candidates_map = {
         "01_调研": ["01_调研.md"],
@@ -1540,7 +1548,10 @@ def _sync_stage_deliverable_effort(capsule: Path, stage: str, hours: float) -> N
         "04_实施": ["04_Spec.md", "04_实施说明.md"],
         "05_审修": ["05_实施审计报告.md", "03_方案审计报告.md"],
         "05_审计": ["05_实施审计报告.md", "03_方案审计报告.md"],
+        "05_实施审计": ["05_实施审计报告.md"],
+        "03_方案审计": ["03_方案审计报告.md"],
         "07_验收": ["07_验收报告.md"],
+        "08_汇报": ["08_汇报.md"],
     }
     file_names = candidates_map.get(stage, [])
     target: Path | None = None
@@ -1560,7 +1571,7 @@ def _sync_stage_deliverable_effort(capsule: Path, stage: str, hours: float) -> N
             m = re.match(r"\A---\n(.*?)\n---\n", text, re.DOTALL)
             if m:
                 block = m.group(1)
-                line = f"effort: {hours}h"
+                line = f"effort: {fmt_hms(seconds)}"
                 if re.search(r"^effort:.*$", block, re.MULTILINE):
                     block = re.sub(r"^effort:.*$", line, block, count=1, flags=re.MULTILINE)
                 else:
@@ -1570,16 +1581,28 @@ def _sync_stage_deliverable_effort(capsule: Path, stage: str, hours: float) -> N
             pass
 
 @_locked  # T6：读→改→写全程持胶囊目录锁
-def log_time(capsule_dir: str | Path, spent: float | str, stage: str | None = None,
+def log_time(capsule_dir: str | Path, spent: float | str | None = None, seconds: int | None = None,
+             stage: str | None = None,
              summary: str | None = None,
              operator: str | None = None, day: str | None = None, dry_run: bool = False,
              idempotent: bool = False, actor: str | None = None) -> dict:
     """胶囊 worklogs 的唯一人工补登写入入口。
 
-    时长接受 `parse_duration` 的三种写法（纯数字按小时、`1h23m`、`01:23:45`），
-    换算成整数秒后写 `seconds`（真源）与派生的 `spent`；actor 固定 `human`
+    时长两种给法：`spent` 走 `parse_duration` 的三种写法（纯数字按小时、`1h23m`、
+    `01:23:45`）；`seconds` 直接给整数秒（Tech-176 T13 下游入口 `--time` 换算后传入）。
+    两者都换算成整数秒写 `seconds`（真源）与派生的 `spent`；actor 固定 `human`
     （方案 4.4 判定 2：人工只有这一条入口）。缺省 stage 一律 `misc`，不推断。
     """
+    if seconds is None:
+        if spent is None:
+            raise ToolError("❌ 登记时长缺失\n👉 修复建议: 传 spent（1.5 / 1h23m / 01:23:45）或 seconds（整数秒）。")
+        seconds = parse_duration(spent)
+    else:
+        seconds = int(seconds)
+        if seconds < 1 or seconds > MAX_WORKLOG_SECONDS:
+            raise ToolError(
+                f"❌ 时长超出范围: {seconds}s（须 1..{MAX_WORKLOG_SECONDS}s，即 >0 且 ≤24h）"
+            )
     capsule = Path(capsule_dir).expanduser().resolve()
     data, text = _load_capsule_data(capsule)
     current = _read_key(text, "lifecycle") or "draft"
@@ -1618,7 +1641,6 @@ def log_time(capsule_dir: str | Path, spent: float | str, stage: str | None = No
     if not WORKLOG_DATE_RE.match(day):
         raise ToolError(f"❌ 日期格式错误: {day}\n👉 修复建议: 使用 YYYY-MM-DD。")
 
-    seconds = parse_duration(spent)
     hours = _seconds_to_spent(seconds)
 
     # 分配持久 ref
@@ -1673,7 +1695,7 @@ def log_time(capsule_dir: str | Path, spent: float | str, stage: str | None = No
         _check_invariants(data)
         _save_capsule_yaml(capsule, data, text)
         if stage:
-            _sync_stage_deliverable_effort(capsule, stage, hours)
+            _sync_stage_deliverable_effort(capsule, stage, seconds)
     return {
         "capsule": str(capsule),
         "status": "added",
@@ -1941,32 +1963,32 @@ def main() -> int:
         seg = res["segment"]
         ent = res.get("entry")
         if ent:
-            print(f"{prefix}任务段收尾并入账: {seg['seg_id']} [{seg['state']}] {ent['spent']}h | ref: {ent.get('ref')}")
+            print(f"{prefix}任务段收尾并入账: {seg['seg_id']} [{seg['state']}] {fmt_hms(ent.get('seconds', 0))} | ref: {ent.get('ref')}")
         elif seg.get("state") == "unmeasured":
             print(f"{prefix}⚠️ 任务段作废，未入账: {seg['seg_id']} ({seg.get('note') or '无证据'})")
         else:
             print(f"{prefix}任务段收尾: {seg['seg_id']} [{seg['state']}] ({seg.get('note') or '待审批'})")
     elif status == "approved":
-        print(f"{prefix}任务段批准入账: {res['segment']['seg_id']} -> {res['entry']['spent']}h")
+        print(f"{prefix}任务段批准入账: {res['segment']['seg_id']} -> {fmt_hms(res['entry'].get('seconds', 0))}")
     elif status == "fixed":
         seg = res["segment"]
         ent = res.get("entry")
         if ent:
-            print(f"{prefix}任务段时间已修正并入账: {seg['seg_id']} [{seg['state']}] {ent['spent']}h")
+            print(f"{prefix}任务段时间已修正并入账: {seg['seg_id']} [{seg['state']}] {fmt_hms(ent.get('seconds', 0))}")
         else:
             print(f"{prefix}任务段时间已修正: {seg['seg_id']} [{seg['state']}] ({seg.get('note') or '待审批'})")
     elif status == "split":
         parts = ", ".join(f"{s['seg_id']}[{s['state']}]" for s in res["segments"])
         print(f"{prefix}任务段已拆分: {res['segment']['seg_id']} -> {parts}")
     elif status == "overridden":
-        print(f"{prefix}已覆盖工时: {res['entry']['ref']} -> {res['entry']['spent']}h")
+        print(f"{prefix}已覆盖工时: {res['entry']['ref']} -> {fmt_hms(res['entry'].get('seconds', 0))}")
     elif status == "unmeasured":
         print(f"{prefix}任务段已标记为不计量: {res['segment']['seg_id']} ({res['segment'].get('note') or res.get('reason')})")
     elif status == "touched":
         print(f"{prefix}已刷新任务段活跃时间: {res.get('segment', {}).get('seg_id')}")
     elif status in ("added", "existing"):
         ent = res["entry"]
-        print(f"{prefix}已登记工时: {ent['date']} [{ent['stage']}] {ent['spent']}h - {ent['summary']} ({ent['operator']}) | 累计: {res['total']}h")
+        print(f"{prefix}已登记工时: {ent['date']} [{ent['stage']}] {fmt_hms(ent.get('seconds', 0))} - {ent['summary']} ({ent['operator']}) | 累计: {fmt_hms(round(res['total'] * 3600))}")
     else:
         changes = res.get("changes", {})
         if changes:

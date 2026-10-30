@@ -127,6 +127,25 @@ def mark_task_done(text: str, task_id: str) -> tuple[str, bool, str]:
     return update_task_entry(text, task_id, mark_done=True)
 
 
+def _entry_seconds(entry: dict) -> int:
+    """worklog 有效秒：有 `seconds`（整数真源）用它，旧条目按 round(spent×3600) 补算。
+
+    Tech-176 T13（方案 4.4 判定「下游」）：下游求和的真源是秒，不再累加浮点小时。
+    """
+    seconds = entry.get("seconds")
+    if isinstance(seconds, (int, float)) and not isinstance(seconds, bool):
+        return max(0, round(float(seconds)))
+    try:
+        return max(0, round(float(entry.get("spent", 0)) * 3600))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _task_hours_str(hours: float) -> str:
+    """小时 → Tasks.md `⏱` 后缀：最多 2 位小数、去尾零（D-8，存量正则 `⏱\\d+(\\.\\d+)?h`）。"""
+    return f"{hours:.2f}".rstrip("0").rstrip(".") + "h"
+
+
 def update_task_entry(text: str, task_id: str, *, mark_done: bool = False, hours: float | None = None) -> tuple[str, bool, str]:
     """更新 Tasks.md 中对应 Task 所在行（状态翻转与 ⏱ 工时累计）。"""
     lines = text.splitlines()
@@ -153,7 +172,7 @@ def update_task_entry(text: str, task_id: str, *, mark_done: bool = False, hours
         else:
             notes.append(f"{task_id} 已是完成态")
     if hours is not None:
-        h_str = f"{int(hours) if hours == int(hours) else hours}h"
+        h_str = _task_hours_str(hours)
         if re.search(r"⏱\d+(\.\d+)?h", line):
             line = re.sub(r"⏱\d+(\.\d+)?h", f"⏱{h_str}", line)
             notes.append(f"工时累计更新为 {h_str}")
@@ -266,7 +285,8 @@ def main() -> int:
     parser.add_argument("--add", nargs=2, metavar=("CATEGORY", "SUMMARY"),
                         help="追加 Changelog 条目，如 --add 修复 \"修正跨租户越权\"")
     parser.add_argument("--mark-done", action="store_true", help="在 Tasks.md 中勾选该任务为完成")
-    parser.add_argument("--time", type=float, metavar="HOURS", help="登记工时并联动更新 Tasks 累计（小时，任意小数）")
+    parser.add_argument("--time", type=float, metavar="HOURS",
+                        help="登记工时并联动更新 Tasks 累计（小时浮点；胶囊写 seconds=真源与 actor=human）")
     parser.add_argument("--from-segments", action="store_true", help="按该 taskId 下全部有效任务段重算并写入 Tasks.md（方案 B 契约）")
     parser.add_argument("--capsule", help="显式指定胶囊目录")
     parser.add_argument("--stage", help="工时所属阶段名，缺省自动推导")
@@ -321,22 +341,21 @@ def main() -> int:
             if pending_s:
                 print(f"⚠️ 警告: 任务 {args.task_id} 存在待审批任务段: {[s['seg_id'] for s in pending_s]}，暂不计入本次汇总", file=sys.stderr)
 
-            # 跨胶囊求和：logged 段 seg_id → 所属胶囊 worklogs 的当前有效 spent。
+            # 跨胶囊求和：logged 段 seg_id → 所属胶囊 worklogs 的当前有效秒（T13：真源是秒）。
             logged_by_capsule: dict[Path, set[str]] = {}
             for m in matched:
                 if m["segment"].get("state") == "logged":
                     logged_by_capsule.setdefault(m["capsule_dir"], set()).add(m["segment"]["seg_id"])
-            total_hours = 0.0
+            total_seconds = 0
             for cap_dir, seg_ids in logged_by_capsule.items():
                 for w in update_capsule.read_worklogs(cap_dir):
                     if w.get("ref") in seg_ids:
-                        try:
-                            total_hours += float(w.get("spent", 0))
-                        except (TypeError, ValueError):
-                            continue
+                        total_seconds += _entry_seconds(w)
+            # D-8：Tasks.md 的 ⏱ 保持小时、2 位小数（存量解析正则为 ⏱\d+(\.\d+)?h）。
+            total_hours = round(total_seconds / 3600, 2)
             changes.append({"file": "跨胶囊全域扫描", "changed": True,
                             "note": (f"汇总 {len(matched)} 个任务段（logged {sum(len(v) for v in logged_by_capsule.values())}）"
-                                     f"，有效工时 {total_hours}h")})
+                                     f"，有效工时 {update_capsule.fmt_hms(total_seconds)}")})
 
         if args.time is not None:
             # IMP-C2：跨胶囊已有该 taskId 的段时，--time 同样拦截，防止双计。
@@ -345,14 +364,20 @@ def main() -> int:
                 raise IterationError(
                     f"❌ 任务 {args.task_id} 已包含任务段，禁止使用 --time；请使用 --from-segments 进行收尾汇总。"
                 )
+            seconds = update_capsule.parse_duration(args.time)
             if capsule_dir:
                 summary = args.add[1] if args.add else f"完成 {args.task_id}"
-                res = update_capsule.log_time(capsule_dir, spent=args.time, stage=args.stage,
-                                              summary=summary, dry_run=args.dry_run, idempotent=True)
+                res = update_capsule.log_time(capsule_dir, seconds=seconds, stage=args.stage,
+                                              summary=summary, dry_run=args.dry_run, idempotent=True,
+                                              actor="human")
                 total_hours = res["total"]
                 worklog_refs = res.get("worklog_refs", [])
+                registered = update_capsule.fmt_hms(seconds)
+                total_hms = update_capsule.fmt_hms(round(res["total"] * 3600))
+                note = (f"胶囊已登记工时 {registered} (真源累计 {total_hms})" if res["status"] == "added"
+                        else f"胶囊工时已存在(幂等放行，真源累计 {total_hms})")
                 changes.append({"file": str(capsule_dir / "capsule.yaml"), "changed": res["status"] == "added",
-                                "note": f"胶囊已登记工时 {args.time}h (真源累计 {total_hours}h)" if res["status"] == "added" else f"胶囊工时已存在(幂等放行，真源累计 {total_hours}h)"})
+                                "note": note})
             else:
                 print("⚠️ 未找到胶囊，工时仅记入 Tasks", file=sys.stderr)
 
@@ -362,9 +387,9 @@ def main() -> int:
             # 若无胶囊，从既有行累计
             calc_hours = total_hours
             if calc_hours is None and args.time is not None:
-                # 从当前行提取现有小时并累加
+                # 从当前行提取现有小时并累加（无胶囊时的 Tasks 单点口径）
                 m = re.search(rf"\b{re.escape(args.task_id)}\b.*?⏱(\d+(?:\.\d+)?)h", text)
-                calc_hours = (float(m.group(1)) + args.time) if m else args.time
+                calc_hours = (round(float(m.group(1)) + seconds / 3600, 4)) if m else round(seconds / 3600, 4)
             new_text, changed, note = update_task_entry(text, args.task_id, mark_done=args.mark_done, hours=calc_hours)
             if changed:
                 pending.append((path, new_text))

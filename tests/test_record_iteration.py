@@ -171,5 +171,77 @@ class LocateAndAtomicTests(unittest.TestCase):
             self.assertEqual((docs_dir / "Tasks.md").read_text(encoding="utf-8"), tasks_content)
 
 
+class DownstreamSecondsTests(unittest.TestCase):
+    """Tech-176 T13（方案 4.4 判定「下游」）：下游按 seconds 求和，⏱ 保留小时 2 位小数。"""
+
+    def _capsule_with_worklogs(self, root: Path) -> Path:
+        cap_dir = root / ".entropaxis" / "data" / "docs" / "20261015_测试"
+        cap_dir.mkdir(parents=True, exist_ok=True)
+        (cap_dir / "capsule.yaml").write_text(
+            "id: Tech-92\nlifecycle: active\nworklogs: []\n", encoding="utf-8")
+        return cap_dir
+
+    def test_from_segments_sums_seconds_and_writes_two_decimal_hours(self):
+        """420s + 1200s → ⏱0.45h（Spec T13 行）。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cap_dir = self._capsule_with_worklogs(root)
+            (cap_dir / "capsule.yaml").write_text(
+                "id: Tech-92\nlifecycle: active\nworklogs: []\n"
+                "task_segments:\n"
+                "  - seq: 1\n    seg_id: Tech-92#1\n    name: 段1\n    taskId: Tech-92\n"
+                "    startAt: \"2026-10-15T09:00:00+08:00\"\n"
+                "    lastActivityAt: \"2026-10-15T09:07:00+08:00\"\n"
+                "    state: open\n"
+                "  - seq: 2\n    seg_id: Tech-92#2\n    name: 段2\n    taskId: Tech-92\n"
+                "    startAt: \"2026-10-15T10:00:00+08:00\"\n"
+                "    lastActivityAt: \"2026-10-15T10:20:00+08:00\"\n"
+                "    state: open\nseq_next: 3\n", encoding="utf-8")
+            update_capsule.end_task(cap_dir, at="2026-10-15T09:07:00+08:00")
+            # 第二段手工收尾成 1200 秒（end_task 只结首个 open 段）
+            import yaml
+            data = yaml.safe_load((cap_dir / "capsule.yaml").read_text(encoding="utf-8"))
+            for seg in data["task_segments"]:
+                if seg["seg_id"] == "Tech-92#2":
+                    seg["state"] = "logged"
+                    seg["endAt"] = "2026-10-15T10:20:00+08:00"
+            data["worklogs"].append({"date": "2026-10-15", "stage": "misc", "spent": 0.3333,
+                                     "seconds": 1200, "summary": "第二段", "operator": "t",
+                                     "ref": "Tech-92#2", "actor": "manager"})
+            (cap_dir / "capsule.yaml").write_text(
+                yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+            docs = root / "docs"
+            docs.mkdir(parents=True, exist_ok=True)
+            (docs / "Tasks.md").write_text("- [ ] **Tech-92**: 任务内容\n", encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(Path(ri.__file__)), "Tech-92", "--from-segments",
+                 "--root", str(root)], capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("⏱0.45h", (docs / "Tasks.md").read_text(encoding="utf-8"))
+            self.assertIn("有效工时 0:27:00", proc.stdout)
+
+    def test_time_writes_seconds_and_human_actor(self):
+        """--time 1.5 → 胶囊新增 worklog seconds=5400、actor=human（Spec T13 行）。"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cap_dir = self._capsule_with_worklogs(root)
+            docs = root / "docs"
+            docs.mkdir(parents=True, exist_ok=True)
+            (docs / "Tasks.md").write_text("- [ ] **Tech-92**: 任务内容\n", encoding="utf-8")
+            (docs / "Changelog.md").write_text(
+                "# 变更日志\n\n## [Unreleased]\n\n### 新增\n", encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(Path(ri.__file__)), "Tech-92", "--time", "1.5",
+                 "--add", "新增", "补登", "--root", str(root)], capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            entries = update_capsule.read_worklogs(cap_dir)
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["seconds"], 5400)
+            self.assertEqual(entries[0]["actor"], "human")
+            self.assertEqual(entries[0]["spent"], 1.5)
+            self.assertIn("⏱1.5h", (docs / "Tasks.md").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()
