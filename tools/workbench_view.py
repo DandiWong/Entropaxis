@@ -244,3 +244,26 @@ def pending_gates(capsule: dict, *, audit_gate: dict | None = None, ledger: list
             cards.append(_card("dispatch_failed", "调度失败", a, f"状态 {a.get('status')}"))
     return cards
 
+
+
+def today_cst(now: dt.datetime | None = None) -> str:
+    return _ts(now or _now()).astimezone(CST).date().isoformat()
+
+
+def week_since(now: dt.datetime | None = None) -> str:
+    """本周起点（ISO 周一，固定 +08:00），作为 `aggregate_worklog.py --since` 的值（Q-11）。"""
+    local = _ts(now or _now()).astimezone(CST)
+    return (local.date() - dt.timedelta(days=local.weekday())).isoformat()
+
+
+def week_bucket(ts: Any, now: dt.datetime | None = None) -> str:
+    """时间戳落在 `this` / `last` / `other` 周：先换算到 +08:00 再分桶（半开区间 [周一 00:00, 下周一 00:00)）。"""
+    moment = _ts(ts)
+    if moment is None:
+        return "other"
+    monday = dt.datetime.fromisoformat(week_since(now)).replace(tzinfo=CST)
+    if monday <= moment < monday + dt.timedelta(days=7):
+        return "this"
+    if monday - dt.timedelta(days=7) <= moment < monday:
+        return "last"
+    return "other"

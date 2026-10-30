@@ -31,10 +31,12 @@ from typing import Any
 try:
     from . import paths
     from . import project_registry
+    from . import workbench_view
 except ImportError:  # 脚本方式运行
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import paths  # type: ignore
     import project_registry  # type: ignore
+    import workbench_view  # type: ignore
 
 TOOLS_DIR = Path(__file__).resolve().parent
 SYSTEM_DIR = TOOLS_DIR.parent
@@ -449,15 +451,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
 
 
 def _default_since() -> str:
-    """缺省本周一（与 aggregate_worklog 缺省口径一致，ISO 周一 00:00 起）。"""
-    import datetime as dt
-    today = dt.date.today()
-    return (today - dt.timedelta(days=today.weekday())).isoformat()
+    """缺省本周一：固定 +08:00 的 ISO 周一（Q-11 / D-16），不取本机时区。"""
+    return workbench_view.week_since()
 
 
 def _today() -> str:
-    import datetime as dt
-    return dt.date.today().isoformat()
+    return workbench_view.today_cst()
 
 
 def _read_me(root: Path) -> str | None:

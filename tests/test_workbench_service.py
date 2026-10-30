@@ -22,6 +22,7 @@ sys.path.insert(0, str(SYSTEM_ROOT / "tools"))
 
 WORKBENCH = SYSTEM_ROOT / "tools" / "workbench.py"
 TOKEN_HEADER = "X-Entropaxis-Token"
+_TODAY = __import__("datetime").date.today().strftime("%Y%m%d")  # init_capsule 用当天日期命名
 
 
 def _run(argv: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
@@ -44,8 +45,8 @@ class _WorkspaceCase(unittest.TestCase):
         self.addCleanup(self._td.cleanup)
         (self.root / ".entropaxis" / "data" / "templates").mkdir(parents=True)
         (self.root / ".entropaxis" / "tools").mkdir(parents=True)
-        (self.root / "项目" / "docs" / "20261030_某主题").mkdir(parents=True)
-        (self.root / "项目" / "docs" / "20261030_某主题" / "capsule.yaml").write_text(
+        (self.root / "项目" / "docs" / f"{_TODAY}_某主题").mkdir(parents=True)
+        (self.root / "项目" / "docs" / f"{_TODAY}_某主题" / "capsule.yaml").write_text(
             _capsule_yaml("Tech-9", "某主题"), encoding="utf-8")
 
     def start_server(self) -> tuple[subprocess.Popen, str, str]:
@@ -219,7 +220,7 @@ class WriteRouteTests(_WorkspaceCase):
     def setUp(self) -> None:
         super().setUp()
         self.proc, self.base, self.token = self.start_server()
-        self.capsule = self.root / "项目" / "docs" / "20261030_某主题"
+        self.capsule = self.root / "项目" / "docs" / f"{_TODAY}_某主题"
 
     def _post(self, path: str, body: dict, token: str | None = "use") -> tuple[int, object]:
         url = self.base + path
@@ -249,12 +250,12 @@ class WriteRouteTests(_WorkspaceCase):
         cli = self._cli([str(SYSTEM_ROOT / "tools" / "init_capsule.py"),
                          str(self.root / "项目" / "docs"), "CLI 主题", "--id", "Tech-901"])
         self.assertEqual(cli.returncode, 0, cli.stderr)
-        via_cli = (self.root / "项目" / "docs" / "20261030_CLI 主题" / "capsule.yaml").read_text(encoding="utf-8")
+        via_cli = (self.root / "项目" / "docs" / f"{_TODAY}_CLI 主题" / "capsule.yaml").read_text(encoding="utf-8")
 
         status, payload = self._post("/api/capsules", {
             "target_dir": str(self.root / "项目" / "docs"), "topic": "HTTP 主题", "id": "Tech-901"})
         self.assertEqual(status, 200, payload)
-        via_http = (self.root / "项目" / "docs" / "20261030_HTTP 主题" / "capsule.yaml").read_text(encoding="utf-8")
+        via_http = (self.root / "项目" / "docs" / f"{_TODAY}_HTTP 主题" / "capsule.yaml").read_text(encoding="utf-8")
         self.assertEqual(via_http.replace('topic: "HTTP 主题"', 'topic: "X"'),
                          via_cli.replace('topic: "CLI 主题"', 'topic: "X"'),
                          "同一组参数下 HTTP 路由与 CLI 直调生成的 capsule.yaml 必须一致（topic 行除外）")
