@@ -9,6 +9,7 @@
   AC-5: aggregate_worklog 两阶段聚合、窗外真源/窗内 Trailer 抑制、孤儿 commit 补位与纯只读性。
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -282,9 +283,11 @@ class TestWorklogSystem(unittest.TestCase):
         self.assertEqual(item["spent"], 1.5)
 
         # 阶段聚合与任务聚合格式化验证
+        # T12 起工时列一律显示 H:MM:SS，列头由「工时(h)」改为「工时」（方案 4.4 判定 1 显示）。
         md_stage = aggregate_worklog.format_markdown(data, by="stage")
         self.assertIn("### 工时统计汇总", md_stage)
-        self.assertIn("| 阶段 | 工时(h) |", md_stage)
+        self.assertIn("| 阶段 | 工时 |", md_stage)
+        self.assertIn("1:30:00", md_stage, "1.5h 孤儿 Trailer 显示为 H:MM:SS")
 
         md_task = aggregate_worklog.format_markdown(data, by="task")
         self.assertIn("| Task-ID | 主题 |", md_task)
@@ -642,6 +645,186 @@ class TestWorklogCliEntry(unittest.TestCase):
         p = subprocess.run(["git", "-C", str(repo), "rev-parse", "-q", "--verify", ref],
                            capture_output=True, text=True)
         return p.stdout.strip() if p.returncode == 0 else None
+
+
+class AggregateSecondsActorTests(unittest.TestCase):
+    """Tech-176 T12（方案 4.4 判定 10、2.2 G-2/G-4）：按秒汇总，分列有效工时、机时与 actor。
+
+    混合样本（Spec 第四节 T12 行）：旧条目 `spent 0.25`（无 actor）+ role 420 秒 +
+    manager 1200 秒 + human 600 秒 + 一个 failed 段 300 秒 →
+    `effective_seconds=3120`、`machine_seconds=720`、
+    `by_actor={role:420, manager:1200, human:600, unlabeled:900}`。
+    """
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.root = Path(self._td.name)
+        docs = self.root / ".entropaxis" / "data" / "docs" / "20261029_汇总分列"
+        docs.mkdir(parents=True)
+        self.cap = docs
+        (docs / "capsule.yaml").write_text(
+            "id: Tech-1\ntopic: 汇总分列\nmode: dev\nlifecycle: active\nseq_next: 4\n",
+            encoding="utf-8")
+        self.segments = [
+            # role logged 段 420 秒（有 machine_seconds）
+            {"seq": 1, "seg_id": "Tech-1#1", "name": "B→04_Spec_Tech-1.md",
+             "startAt": "2026-10-15T09:00:00+08:00", "lastActivityAt": "2026-10-15T09:07:00+08:00",
+             "endAt": "2026-10-15T09:07:00+08:00", "state": "logged", "actor": "role",
+             "role": "Builder", "dispatch_id": "a" * 32, "trigger": "dispatch",
+             "stage": "04_实施", "machine_seconds": 420, "effective_seconds": 420},
+            # role failed 段 300 秒：计机时、不计有效工时（G-4）
+            {"seq": 2, "seg_id": "Tech-1#2", "name": "D→03_设计.md",
+             "startAt": "2026-10-15T09:10:00+08:00", "lastActivityAt": "2026-10-15T09:15:00+08:00",
+             "endAt": "2026-10-15T09:15:00+08:00", "state": "failed", "actor": "role",
+             "role": "Designer", "dispatch_id": "b" * 32, "trigger": "dispatch",
+             "stage": "03_设计", "machine_seconds": 300, "note": "调度失败: CHAIN_EXHAUSTED"},
+            # manager logged 段 1200 秒：计有效工时、不计机时
+            {"seq": 3, "seg_id": "Tech-1#3", "name": "事务",
+             "startAt": "2026-10-15T10:00:00+08:00", "lastActivityAt": "2026-10-15T10:20:00+08:00",
+             "endAt": "2026-10-15T10:20:00+08:00", "state": "logged", "actor": "manager",
+             "trigger": "manager", "stage": "misc", "machine_seconds": 1200,
+             "effective_seconds": 1200, "evidence": "04_Spec_Tech-1.md",
+             "evidence_sha256": "a" * 16},
+        ]
+        self.worklogs = [
+            # 旧条目：只有 spent（0.25h = 900s），无 actor / seconds
+            {"date": "2026-10-15", "stage": "misc", "spent": 0.25,
+             "summary": "旧条目", "operator": "tester"},
+            {"date": "2026-10-15", "stage": "04_实施", "spent": 0.1167, "seconds": 420,
+             "summary": "角色段入账", "operator": "tester", "ref": "Tech-1#1",
+             "actor": "role", "role": "Builder"},
+            {"date": "2026-10-15", "stage": "misc", "spent": 0.3333, "seconds": 1200,
+             "summary": "Manager 段入账", "operator": "tester", "ref": "Tech-1#3",
+             "actor": "manager"},
+            {"date": "2026-10-15", "stage": "misc", "spent": 0.1667, "seconds": 600,
+             "summary": "人工补登", "operator": "tester", "actor": "human"},
+        ]
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _capsule(self):
+        import yaml
+        data = {"id": "Tech-1", "topic": "汇总分列", "mode": "dev", "lifecycle": "active",
+                "task_segments": self.segments, "worklogs": self.worklogs, "seq_next": 4}
+        (self.cap / "capsule.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    # ---------- (a) 混合样本分列 ----------
+
+    def test_mixed_sample_splits_by_actor_and_machine(self):
+        self._capsule()
+        data = aggregate_worklog.aggregate(self.root, "2026-10-15", "2026-10-15")
+        self.assertEqual(data["effective_seconds"], 3120)
+        self.assertEqual(data["total_seconds"], 3120)
+        self.assertEqual(data["machine_seconds"], 720, "role logged 420 + failed 300")
+        self.assertEqual(data["by_actor"], {"role": 420, "manager": 1200,
+                                            "human": 600, "unlabeled": 900})
+        self.assertIn("total_hours", data, "JSON 保留 total_hours 供旧消费方")
+        self.assertEqual(data["total_hours"], 0.87)
+
+    def test_machine_seconds_excludes_legacy_segments(self):
+        """旧段（无 actor）一律不计入机时，不推断（方案五）。"""
+        self.segments.append({"seq": 4, "seg_id": "Tech-1#4", "name": "旧段",
+                              "startAt": "2026-10-15T11:00:00+08:00",
+                              "lastActivityAt": "2026-10-15T11:30:00+08:00",
+                              "endAt": "2026-10-15T11:30:00+08:00", "state": "logged"})
+        self._capsule()
+        data = aggregate_worklog.aggregate(self.root, "2026-10-15", "2026-10-15")
+        self.assertEqual(data["machine_seconds"], 720, "旧段 1800 秒不计入机时")
+
+    def test_machine_seconds_window_follows_segment_start_date(self):
+        """机时窗口按段 startAt 日期取，不是 endAt。"""
+        self.segments[0]["startAt"] = "2026-10-14T09:00:00+08:00"
+        self.segments[0]["endAt"] = "2026-10-15T09:07:00+08:00"
+        self.segments[0]["machine_seconds"] = 420
+        self._capsule()
+        data = aggregate_worklog.aggregate(self.root, "2026-10-15", "2026-10-15")
+        self.assertEqual(data["machine_seconds"], 300, "跨日段的开始日 10-14 不在窗口内")
+        data2 = aggregate_worklog.aggregate(self.root, "2026-10-14", "2026-10-14")
+        self.assertEqual(data2["machine_seconds"], 420)
+
+    def test_legacy_segment_machine_seconds_computed_from_timestamps(self):
+        """旧段没有 machine_seconds 时用 endAt − startAt（方案 4.4 判定 10）。"""
+        del self.segments[0]["machine_seconds"]
+        self._capsule()
+        data = aggregate_worklog.aggregate(self.root, "2026-10-15", "2026-10-15")
+        self.assertEqual(data["machine_seconds"], 720, "420 + 300 都由时间戳算出")
+
+    # ---------- (b) Markdown H:MM:SS ----------
+
+    def test_markdown_shows_hms_and_no_decimal_hours(self):
+        self._capsule()
+        data = aggregate_worklog.aggregate(self.root, "2026-10-15", "2026-10-15")
+        md = aggregate_worklog.format_markdown(data)
+        self.assertIn("0:52:00", md, "3120 秒显示 0:52:00")
+        self.assertNotIn("0.8667", md, "不得显示 4 位小数小时")
+        self.assertIn("**有效工时**: **0:52:00**", md)
+        self.assertIn("**机时**: **0:12:00**", md)
+        self.assertIn("**actor 分列**", md)
+        for actor in ("role", "manager", "human", "unlabeled"):
+            self.assertIn(actor, md)
+
+    # ---------- (c) JSON 保留 total_hours ----------
+
+    def test_json_output_keeps_total_hours_and_adds_seconds(self):
+        self._capsule()
+        data = aggregate_worklog.aggregate(self.root, "2026-10-15", "2026-10-15")
+        payload = json.loads(json.dumps(data, ensure_ascii=False, default=str))
+        self.assertEqual(payload["total_hours"], 0.87)
+        self.assertEqual(payload["total_seconds"], 3120)
+        self.assertEqual(payload["effective_seconds"], 3120)
+        self.assertEqual(payload["machine_seconds"], 720)
+        self.assertEqual(payload["by_actor"]["unlabeled"], 900)
+
+    def test_cli_json_flag_emits_seconds(self):
+        self._capsule()
+        proc = subprocess.run(
+            [sys.executable, str(TOOLS / "aggregate_worklog.py"), "--root", str(self.root),
+             "--since", "2026-10-15", "--until", "2026-10-15", "--json"],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["effective_seconds"], 3120)
+        self.assertEqual(payload["machine_seconds"], 720)
+        self.assertEqual(payload["by_actor"], {"role": 420, "manager": 1200,
+                                               "human": 600, "unlabeled": 900})
+
+    # ---------- (d) items[] 只加不删 ----------
+
+    def test_items_keep_spent_and_add_actor_role_seconds(self):
+        self._capsule()
+        data = aggregate_worklog.aggregate(self.root, "2026-10-15", "2026-10-15")
+        items = {i["summary"]: i for i in data["items"]}
+        self.assertEqual(len(data["items"]), 4)
+        legacy = items["旧条目"]
+        self.assertEqual(legacy["spent"], 0.25)
+        self.assertIsNone(legacy["actor"], "旧条目 actor 为 null，不推断")
+        self.assertIsNone(legacy["role"])
+        self.assertEqual(legacy["seconds"], 900, "旧条目补算 round(spent×3600)")
+
+        role = items["角色段入账"]
+        self.assertEqual(role["spent"], 0.1167, "旧消费方照读 spent")
+        self.assertEqual(role["actor"], "role")
+        self.assertEqual(role["role"], "Builder")
+        self.assertEqual(role["seconds"], 420)
+
+        human = items["人工补登"]
+        self.assertEqual(human["actor"], "human")
+        self.assertIsNone(human["role"])
+        self.assertEqual(human["seconds"], 600)
+
+    def test_collector_still_reads_spent_only(self):
+        """AC-14：看板采集器只读 items[].spent，不因新键变化（NG-10 本轮不改采集器）。"""
+        self._capsule()
+        data = aggregate_worklog.aggregate(self.root, "2026-10-15", "2026-10-15")
+        hours: dict[tuple, float] = {}
+        for it in data["items"]:
+            if it["source"] != "worklog":
+                continue
+            key = (it["date"], it["project"], it["stage"])
+            hours[key] = hours.get(key, 0.0) + it["spent"]
+        self.assertAlmostEqual(sum(hours.values()), 0.8667, places=4)
 
 
 if __name__ == "__main__":

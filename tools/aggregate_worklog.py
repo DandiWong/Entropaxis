@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import re
 import subprocess
@@ -63,6 +64,63 @@ def _parse_hours(val: Any) -> float:
     raise ValueError(f"无法解析工时: {val}")
 
 
+def _entry_seconds(entry: dict[str, Any]) -> int:
+    """worklog 有效秒：有 `seconds`（整数真源）就用它，旧条目按 round(spent×3600) 补算。
+
+    方案 4.4 判定 10、五「新旧条目混存的汇总口径」：旧条目不改写、不推断 actor。
+    """
+    seconds = entry.get("seconds")
+    if isinstance(seconds, (int, float)) and not isinstance(seconds, bool):
+        return max(0, round(float(seconds)))
+    try:
+        return max(0, round(_parse_hours(entry.get("spent", 0)) * 3600))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _fmt_hms(seconds: int) -> str:
+    """整数秒 → H:MM:SS（时不过零填充）；T12 汇总层统一显示口径。"""
+    seconds = max(0, int(seconds))
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}"
+
+
+def _segment_machine_seconds(seg: dict[str, Any], since: str | None = None,
+                             until: str | None = None) -> int | None:
+    """段机时：有 `machine_seconds` 用它；旧段用 endAt − startAt（无 endAt 的 open 段不计）。
+
+    只统计 actor=role 且 state ∈ {logged, failed} 的段（方案 2.2 G-4：失败计机时不计
+    有效工时）；旧段（无 actor）一律不计入机时，不推断。窗口按段 `startAt` 日期取
+    （方案 4.4 判定 10）——一段的机时归属它的开始日，不是结束日。
+    """
+    if not isinstance(seg, dict):
+        return None
+    if seg.get("actor") != "role" or seg.get("state") not in ("logged", "failed"):
+        return None
+    start, end = seg.get("startAt"), seg.get("endAt")
+    if since or until:
+        try:
+            day = dt.datetime.fromisoformat(str(start)).date().isoformat()
+        except (TypeError, ValueError):
+            return None
+        if since and day < since:
+            return None
+        if until and day > until:
+            return None
+    machine = seg.get("machine_seconds")
+    if isinstance(machine, (int, float)) and not isinstance(machine, bool):
+        return max(1, round(float(machine)))
+    if not start or not end:
+        return None
+    try:
+        span = (dt.datetime.fromisoformat(str(end))
+                - dt.datetime.fromisoformat(str(start))).total_seconds()
+    except (TypeError, ValueError):
+        return None
+    return max(1, round(span))
+
+
 def parse_capsule_file(path: Path) -> dict[str, Any] | None:
     """读取胶囊文件，提取 id, topic, worklogs。带日期类型适配。"""
     try:
@@ -89,10 +147,17 @@ def parse_capsule_file(path: Path) -> dict[str, Any] | None:
                             "spent": _parse_hours(item.get("spent", 0)),
                             "summary": str(item.get("summary") or ""),
                             "operator": str(item.get("operator") or ""),
+                            # T12：只加不删。旧条目（无 actor/seconds）三项为 null/补算值，
+                            # 新条目带 actor/role/seconds 供下游（Tech-175 P6 看板）读取。
+                            "seconds": _entry_seconds(item),
+                            "actor": (str(item.get("actor"))
+                                      if item.get("actor") in ("role", "manager", "human") else None),
+                            "role": str(item.get("role")) if item.get("role") else None,
                         })
                 seg_task_ids = []
-                for seg in data.get("task_segments") or []:
-                    if isinstance(seg, dict) and seg.get("taskId"):
+                role_segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
+                for seg in role_segments:
+                    if seg.get("taskId"):
                         seg_task_ids.append(str(seg["taskId"]))
                 return {
                     "id": str(data.get("id") or ""),
@@ -100,6 +165,7 @@ def parse_capsule_file(path: Path) -> dict[str, Any] | None:
                     "lifecycle": str(data.get("lifecycle") or "draft"),
                     "worklogs": clean_logs,
                     "task_ids": seg_task_ids,
+                    "role_segments": role_segments,
                     "path": path.parent,
                 }
         except Exception:
@@ -117,6 +183,8 @@ def parse_capsule_file(path: Path) -> dict[str, Any] | None:
         "topic": topic,
         "lifecycle": "draft",
         "worklogs": [],
+        "task_ids": [],
+        "role_segments": [],
         "path": path.parent,
     }
 
@@ -260,6 +328,10 @@ def aggregate(
                 "stage": log.get("stage", "misc"),
                 "summary": log.get("summary", ""),
                 "operator": log.get("operator", ""),
+                # T12：items[] 只加不删——采集器（collect_agent_perf）照读 spent。
+                "seconds": log.get("seconds", 0),
+                "actor": log.get("actor"),
+                "role": log.get("role"),
                 "source": "worklog",
                 "capsule": str(cap["path"]),
             })
@@ -308,25 +380,62 @@ def aggregate(
                 "stage": "code",
                 "summary": t["summary"],
                 "operator": t["author"],
+                # 孤儿 Trailer 不是 worklog：无 actor、无 seconds 真源，按补算秒数列「未标注」。
+                "seconds": max(0, round(t["spent"] * 3600)),
+                "actor": None,
+                "role": None,
                 "source": "orphan_trailer",
                 "repo": str(repo),
             })
 
     total_hours = round(sum(i["spent"] for i in items), 2)
+    # T12 分列（方案 2.2 G-2/G-4）：有效工时按 worklog seconds（旧条目补算）；机时按
+    # actor=role 且 state ∈ {logged, failed} 的段，窗口按段 startAt 日期取。
+    effective_seconds = sum(i["seconds"] for i in items)
+    by_actor = {"role": 0, "manager": 0, "human": 0, "unlabeled": 0}
+    for it in items:
+        actor = it.get("actor")
+        by_actor[actor if actor in by_actor else "unlabeled"] += it["seconds"]
+    machine_seconds = 0
+    for cap in capsules:
+        if project_filter is not None and attribute_project(
+                cap["path"], root, projects) != project_filter:
+            continue
+        for seg in cap.get("role_segments", []):
+            machine = _segment_machine_seconds(seg, since, until)
+            if machine is not None:
+                machine_seconds += machine
     return {
         "since": since,
         "until": until,
         "total_hours": total_hours,
+        "total_seconds": effective_seconds,
+        "effective_seconds": effective_seconds,
+        "machine_seconds": machine_seconds,
+        "by_actor": by_actor,
         "items": items,
         "warnings": warnings,
     }
 
 
 def format_markdown(data: dict[str, Any], by: str = "project") -> str:
-    """格式化输出 Markdown 表格。"""
+    """格式化输出 Markdown 表格。
+
+    T12（方案 4.4 判定 1 显示）：一律显示 H:MM:SS（含 `0:52:00`，不含 `0.8667`）；
+    JSON 仍保留 `total_hours` 供旧消费方。头部给「有效工时 / 机时 / actor 分列」三行
+    （方案 4.4 判定 10）。`items[]` 只加不删：`spent` 照旧，新条目另有 actor/role/seconds。
+    """
+    total_s = data.get("total_seconds", 0)
+    machine_s = data.get("machine_seconds", 0)
+    by_actor = data.get("by_actor") or {}
     lines = [
         f"### 工时统计汇总（{data['since']} ~ {data['until']}）",
-        f"**总工时**: **{data['total_hours']}h**\n",
+        f"**总工时**: **{_fmt_hms(total_s)}**（{data['total_hours']}h）",
+        f"**有效工时**: **{_fmt_hms(total_s)}**",
+        f"**机时**: **{_fmt_hms(machine_s)}**",
+        "**actor 分列**: " + " · ".join(
+            f"{name} {_fmt_hms(by_actor.get(name, 0))}"
+            for name in ("role", "manager", "human", "unlabeled")) + "\n",
     ]
 
     items = data["items"]
@@ -339,60 +448,65 @@ def format_markdown(data: dict[str, Any], by: str = "project") -> str:
             st = it.get("stage") or "misc"
             stage_groups.setdefault(st, []).append(it)
 
-        lines.append("| 阶段 | 工时(h) | 占比 | 包含记录数 | 涉及任务 |")
+        lines.append("| 阶段 | 工时 | 占比 | 包含记录数 | 涉及任务 |")
         lines.append("|---|---|---|---|---|")
         for st in sorted(stage_groups.keys()):
             st_items = stage_groups[st]
-            st_spent = round(sum(i["spent"] for i in st_items), 2)
-            pct = f"{st_spent / data['total_hours'] * 100:.1f}%" if data["total_hours"] else "0.0%"
+            st_secs = sum(i["seconds"] for i in st_items)
+            pct = f"{st_secs / total_s * 100:.1f}%" if total_s else "0.0%"
             tasks = "、".join(sorted({f"`{i['task_id']}`" for i in st_items if i.get("task_id")}))
-            lines.append(f"| `{st}` | **{st_spent}** | {pct} | {len(st_items)} | {tasks} |")
-        lines.append(f"| **合计** | **{data['total_hours']}** | 100.0% | {len(items)} | |")
+            lines.append(f"| `{st}` | **{_fmt_hms(st_secs)}** | {pct} | {len(st_items)} | {tasks} |")
+        lines.append(f"| **合计** | **{_fmt_hms(total_s)}** | 100.0% | {len(items)} | |")
     elif by == "task":
         task_groups: dict[str, list[dict[str, Any]]] = {}
         for it in items:
             tid = it.get("task_id") or "未关联"
             task_groups.setdefault(tid, []).append(it)
 
-        lines.append("| Task-ID | 主题 | 阶段分布 | 工时(h) | 占比 |")
+        lines.append("| Task-ID | 主题 | 阶段分布 | 工时 | 占比 |")
         lines.append("|---|---|---|---|---|")
         for tid in sorted(task_groups.keys()):
             t_items = task_groups[tid]
-            t_spent = round(sum(i["spent"] for i in t_items), 2)
-            pct = f"{t_spent / data['total_hours'] * 100:.1f}%" if data["total_hours"] else "0.0%"
+            t_secs = sum(i["seconds"] for i in t_items)
+            pct = f"{t_secs / total_s * 100:.1f}%" if total_s else "0.0%"
             topic = t_items[0].get("topic", "")
-            stages_summary = " · ".join(f"{s}:{round(sum(x['spent'] for x in t_items if x.get('stage') == s), 2)}h"
-                                         for s in sorted({x.get("stage", "misc") for x in t_items}))
-            lines.append(f"| `{tid}` | {topic} | {stages_summary} | **{t_spent}** | {pct} |")
-        lines.append(f"| **合计** | | | **{data['total_hours']}** | 100.0% |")
+            stages_summary = " · ".join(
+                f"{s}:{_fmt_hms(sum(x['seconds'] for x in t_items if x.get('stage') == s))}"
+                for s in sorted({x.get("stage", "misc") for x in t_items}))
+            lines.append(f"| `{tid}` | {topic} | {stages_summary} | **{_fmt_hms(t_secs)}** | {pct} |")
+        lines.append(f"| **合计** | | | **{_fmt_hms(total_s)}** | 100.0% |")
     elif by == "day":
         day_groups: dict[str, list[dict[str, Any]]] = {}
         for it in items:
             day = it.get("date") or "未知"
             day_groups.setdefault(day, []).append(it)
 
-        lines.append("| 日期 | 工时(h) | 占比 | 阶段分布 | 涉及任务 |")
+        lines.append("| 日期 | 工时 | 占比 | 阶段分布 | 涉及任务 |")
         lines.append("|---|---|---|---|---|")
         for day in sorted(day_groups.keys()):
             d_items = day_groups[day]
-            d_spent = round(sum(i["spent"] for i in d_items), 2)
-            pct = f"{d_spent / data['total_hours'] * 100:.1f}%" if data["total_hours"] else "0.0%"
-            stages_summary = " · ".join(f"{s}:{round(sum(x['spent'] for x in d_items if x.get('stage') == s), 2)}h"
-                                         for s in sorted({x.get("stage", "misc") for x in d_items}))
+            d_secs = sum(i["seconds"] for i in d_items)
+            pct = f"{d_secs / total_s * 100:.1f}%" if total_s else "0.0%"
+            stages_summary = " · ".join(
+                f"{s}:{_fmt_hms(sum(x['seconds'] for x in d_items if x.get('stage') == s))}"
+                for s in sorted({x.get("stage", "misc") for x in d_items}))
             tasks = "、".join(sorted({f"`{i['task_id']}`" for i in d_items if i.get("task_id")}))
-            lines.append(f"| `{day}` | **{d_spent}** | {pct} | {stages_summary} | {tasks} |")
-        lines.append(f"| **合计** | **{data['total_hours']}** | 100.0% | | |")
+            lines.append(f"| `{day}` | **{_fmt_hms(d_secs)}** | {pct} | {stages_summary} | {tasks} |")
+        lines.append(f"| **合计** | **{_fmt_hms(total_s)}** | 100.0% | | |")
     else:
-        lines.append("| 项目 | Task-ID | 主题 / 阶段 | 工时(h) | 来源 | 说明 | 登记人 |")
-        lines.append("|---|---|---|---|---|---|---|")
+        lines.append("| 项目 | Task-ID | 主题 / 阶段 | 工时 | actor | 来源 | 说明 | 登记人 |")
+        lines.append("|---|---|---|---|---|---|---|---|")
         sorted_items = sorted(items, key=lambda x: (x["project"], x["task_id"], x["date"]))
         for it in sorted_items:
             src_tag = "worklog" if it["source"] == "worklog" else "⚠️ 孤儿Trailer"
+            actor = it.get("actor") or "未标注"
+            if it.get("role"):
+                actor = f"{actor}/{it['role']}"
             lines.append(
                 f"| `{it['project']}` | `{it['task_id']}` | {it['topic']} ({it['stage']}) | "
-                f"{it['spent']} | {src_tag} | {it['summary']} | {it['operator']} |"
+                f"{_fmt_hms(it['seconds'])} | {actor} | {src_tag} | {it['summary']} | {it['operator']} |"
             )
-        lines.append(f"| **合计** | | | **{data['total_hours']}** | | | |")
+        lines.append(f"| **合计** | | | **{_fmt_hms(total_s)}** | | | | |")
     if data.get("warnings"):
         lines.append("\n**⚠️ 审计告警区**:")
         for w in data["warnings"]:
@@ -409,6 +523,8 @@ def main() -> int:
     parser.add_argument("--operator", help="指定登记人过滤")
     parser.add_argument("--by", choices=["project", "task", "day", "stage"], default="project", help="聚合维度")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="工作区根目录")
+    parser.add_argument("--json", action="store_true",
+                        help="输出 JSON（含 seconds/total_seconds/effective_seconds/machine_seconds/by_actor）")
     args = parser.parse_args()
 
     root = _find_workspace_root(args.root)
@@ -420,7 +536,10 @@ def main() -> int:
         operator_filter=args.operator,
     )
 
-    print(format_markdown(data, by=args.by))
+    if args.json:
+        print(json.dumps(data, ensure_ascii=False, indent=2, default=str))
+    else:
+        print(format_markdown(data, by=args.by))
     return 0
 
 
