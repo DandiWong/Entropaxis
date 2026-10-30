@@ -1002,6 +1002,267 @@ class ManagerEndSegmentTests(unittest.TestCase):
         self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
 
 
+class SettlementActorPolicyTests(unittest.TestCase):
+    """Tech-176 T8b（方案 4.4.1，PA-1）：既有结算入口的 actor 政策。
+
+    一张表定死（4.4.1）：旧段无 actor → 旧语义按秒；Manager 段不绕过证据门槛
+    （`--delivered` 转 unmeasured 不入账，D-14）；role 段不由本类入口结算
+    （拒绝退出码 1、字节不变，或 `--delivered` 不碰）。
+    """
+
+    CST = dt.timezone(dt.timedelta(hours=8))
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.cap = Path(self._td.name) / "20261029_actor政策"
+        self.cap.mkdir()
+        (self.cap / "capsule.yaml").write_text(MANIFEST.format(lifecycle="active"), encoding="utf-8")
+        (self.cap / "02_方案.md").write_text("方案\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    # ---------- 夹具 ----------
+
+    def _write_manifest(self, data: dict) -> None:
+        import yaml
+        payload = {"id": "Tech-1", "lifecycle": "active", "worklogs": [], **data}
+        (self.cap / "capsule.yaml").write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    def _append_segment(self, seg: dict) -> dict:
+        import yaml
+        data = yaml.safe_load((self.cap / "capsule.yaml").read_text(encoding="utf-8"))
+        segs = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
+        seq = 1 + max([int(s.get("seq", 0)) for s in segs], default=0)
+        seg = {"seq": seq, "seg_id": f"Tech-1#{seq}", **seg}
+        segs.append(seg)
+        data["task_segments"] = segs
+        data["seq_next"] = seq + 1
+        (self.cap / "capsule.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        return seg
+
+    def _open_role_segment(self, dispatch_id: str = "a" * 32, role: str = "Designer",
+                           deliverable: str = "03_设计.md",
+                           at: str = "2026-10-15T09:00:00+08:00") -> dict:
+        """open 的 role 段（固定开始时刻，避免依赖真实 now）。"""
+        return self._append_segment({
+            "name": f"{role}→{deliverable}", "startAt": at, "lastActivityAt": at,
+            "state": "open", "actor": "role", "role": role, "dispatch_id": dispatch_id,
+            "trigger": "dispatch", "stage": uc._dispatch_stage(role, deliverable)})
+
+    def _freeze(self, now_iso: str):
+        fixed = dt.datetime.fromisoformat(now_iso)
+
+        class _FrozenDatetime(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+        fake = mock.Mock(wraps=uc.dt)
+        fake.datetime = _FrozenDatetime
+        return mock.patch.object(uc, "dt", fake)
+
+    def _worklogs(self) -> list[dict]:
+        return uc.read_worklogs(self.cap)
+
+    def _segments(self) -> dict:
+        return {s["seg_id"]: s for s in uc.read_segments(self.cap)}
+
+    # ---------- (a) PA-1 三场景之一：--delivered 遇 open Manager 段 ----------
+
+    def test_delivered_open_manager_segment_becomes_unmeasured(self) -> None:
+        """(a) 无证据的 open manager 段 + --delivered → unmeasured、无新 worklog、lifecycle 仍推进。"""
+        uc.start_task(self.cap, name="事务", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
+        res = uc.update_capsule(str(self.cap), delivered="2026-10-15")
+        seg = self._segments()["Tech-1#1"]
+        self.assertEqual(seg["state"], "unmeasured")
+        self.assertIn("--delivered 收尾", seg["note"])
+        self.assertIn("未带证据结段", seg["note"])
+        self.assertEqual(self._worklogs(), [], "不入账：不得写 worklog")
+        self.assertEqual(res["worklog_refs"], [])
+        self.assertEqual(res["to"], "delivered", "胶囊 lifecycle 仍推进到 delivered")
+
+    def test_delivered_open_manager_and_logged_role_segment_keeps_role(self) -> None:
+        """(b) open manager 段与 logged role 段并存 + --delivered → manager 段 unmeasured，role 段与 worklog 不变。"""
+        role_seg = self._open_role_segment()
+        with self._freeze("2026-10-15T09:20:00+08:00"):
+            uc.end_dispatch_segment("a" * 32, True, capsule=self.cap)
+        manager_seg = uc.start_task(self.cap, name="事务", task_id="Tech-1",
+                                    at="2026-10-15T09:05:00+08:00")["segment"]
+        before_worklogs = self._worklogs()
+        self.assertEqual(len(before_worklogs), 1)
+        before_role = dict(self._segments()[role_seg["seg_id"]])
+
+        res = uc.update_capsule(str(self.cap), delivered="2026-10-15")
+        segs = self._segments()
+        self.assertEqual(segs[manager_seg["seg_id"]]["state"], "unmeasured")
+        self.assertEqual(segs[role_seg["seg_id"]]["state"], "logged", "role 段不被 --delivered 触碰")
+        self.assertEqual(segs[role_seg["seg_id"]]["endAt"], before_role["endAt"])
+        self.assertEqual(segs[role_seg["seg_id"]]["machine_seconds"], before_role["machine_seconds"])
+        self.assertEqual(self._worklogs(), before_worklogs, "role 段的 worklog 不变、无新 worklog")
+        self.assertEqual(res["to"], "delivered")
+
+    def test_delivered_two_open_role_segments_untouched(self) -> None:
+        """(c) 两个 open role 段（d1、d2）+ --delivered → 两段仍 open、无新 worklog。"""
+        d1 = self._open_role_segment("a" * 32, at="2026-10-15T09:00:00+08:00")
+        d2 = self._open_role_segment("b" * 32, at="2026-10-15T09:10:00+08:00")
+        res = uc.update_capsule(str(self.cap), delivered="2026-10-15")
+        segs = self._segments()
+        self.assertEqual(segs[d1["seg_id"]]["state"], "open")
+        self.assertEqual(segs[d2["seg_id"]]["state"], "open")
+        self.assertEqual(self._worklogs(), [])
+        self.assertEqual(res["worklog_refs"], [])
+        self.assertEqual(res["to"], "delivered", "交付照常推进")
+
+    def test_delivered_open_legacy_segment_settles_in_seconds(self) -> None:
+        """(d) open 旧段（无 actor）+ --delivered → 按秒结算（现行语义）。"""
+        write_legacy_open_segment(self.cap, name="旧规则开的段")
+        with self._freeze("2026-10-15T09:07:00+08:00"):
+            res = uc.update_capsule(str(self.cap), delivered="2026-10-15")
+        seg = self._segments()["Tech-1#1"]
+        self.assertEqual(seg["state"], "logged")
+        self.assertEqual(seg["machine_seconds"], 420, "7 分钟按秒结算，不取整到 0.25h")
+        self.assertEqual(seg["endAt"], "2026-10-15T09:07:00+08:00")
+        self.assertEqual(len(self._worklogs()), 1)
+        self.assertEqual(self._worklogs()[0]["seconds"], 420)
+        self.assertEqual(res["worklog_refs"], ["Tech-1#1"])
+        self.assertEqual(res["to"], "delivered")
+
+    # ---------- (e) role 段被各入口拒绝：退出码 1、字节不变 ----------
+
+    def test_role_segment_rejected_by_fix_and_split(self) -> None:
+        """(e) --fix-segment / --split-segment 指向 role 段 → 退出码 1、文件字节不变。"""
+        role_seg = self._open_role_segment()
+        before = (self.cap / "capsule.yaml").read_bytes()
+        with self.assertRaises(uc.ToolError) as ctx:
+            uc.fix_segment(self.cap, seg_id=role_seg["seg_id"],
+                           end_at="2026-10-15T10:00:00+08:00")
+        self.assertIn("actor=role", str(ctx.exception))
+        with self.assertRaises(uc.ToolError) as ctx2:
+            uc.split_segment(self.cap, seg_id=role_seg["seg_id"],
+                             at=["2026-10-15T09:30:00+08:00"])
+        self.assertIn("actor=role", str(ctx2.exception))
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
+
+    def test_role_segment_rejected_by_end_task(self) -> None:
+        """(e) --end-task 指向 role 段 → 退出码 1、字节不变（残留段用 --unmeasure-segment）。"""
+        role_seg = self._open_role_segment()
+        before = (self.cap / "capsule.yaml").read_bytes()
+        with self.assertRaises(uc.ToolError) as ctx:
+            uc.end_task(self.cap)
+        self.assertIn("actor=role", str(ctx.exception))
+        self.assertIn("--unmeasure-segment", str(ctx.exception))
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
+
+    def test_role_segment_pending_approval_rejected_by_approve(self) -> None:
+        """(e) pending_approval 的 role 段被 --approve-segment 拒绝（role 段由调度结段）。"""
+        role_seg = self._open_role_segment()
+        import yaml
+        data = yaml.safe_load((self.cap / "capsule.yaml").read_text(encoding="utf-8"))
+        data["task_segments"][0]["state"] = "pending_approval"
+        data["task_segments"][0]["effective_seconds"] = 30000
+        (self.cap / "capsule.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        before = (self.cap / "capsule.yaml").read_bytes()
+        with self.assertRaises(uc.ToolError) as ctx:
+            uc.approve_segment(self.cap, seg_id=role_seg["seg_id"])
+        self.assertIn("actor=role", str(ctx.exception))
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
+
+    # ---------- (f) manager 段被 split / open 被 fix 拒绝 ----------
+
+    def test_manager_segment_rejected_by_split(self) -> None:
+        """(f) --split-segment 指向 manager 段 → 退出码 1、字节不变。"""
+        uc.start_task(self.cap, name="事务", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
+        before = (self.cap / "capsule.yaml").read_bytes()
+        with self.assertRaises(uc.ToolError) as ctx:
+            uc.split_segment(self.cap, seg_id="Tech-1#1",
+                             at=["2026-10-15T09:30:00+08:00"])
+        self.assertIn("manager", str(ctx.exception))
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
+
+    def test_open_manager_segment_rejected_by_fix(self) -> None:
+        """(f) open 的 Manager 段被 --fix-segment 拒绝（提示用 --end-task --evidence）。"""
+        uc.start_task(self.cap, name="事务", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
+        before = (self.cap / "capsule.yaml").read_bytes()
+        with self.assertRaises(uc.ToolError) as ctx:
+            uc.fix_segment(self.cap, seg_id="Tech-1#1", end_at="2026-10-15T10:00:00+08:00")
+        self.assertIn("--end-task --evidence", str(ctx.exception))
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
+
+    # ---------- (g) approve 读段上 effective_seconds，不按墙钟重算 ----------
+
+    def test_approve_manager_segment_uses_effective_seconds(self) -> None:
+        """(g) pending_approval 的 manager 段（effective_seconds=30000）→ worklog seconds=30000，不按墙钟重算。"""
+        self._append_segment({
+            "name": "长事务", "startAt": "2026-10-15T09:00:00+08:00",
+            "lastActivityAt": "2026-10-15T19:00:00+08:00", "endAt": "2026-10-15T19:00:00+08:00",
+            "state": "pending_approval", "actor": "manager", "trigger": "manager",
+            "stage": "misc", "machine_seconds": 36000, "effective_seconds": 30000,
+            "evidence": "04_Spec_Tech-1.md", "evidence_sha256": "a" * 16,
+            "note": "超过 8h（10:00:00）"})
+        res = uc.approve_segment(self.cap, seg_id="Tech-1#1")
+        self.assertEqual(res["entry"]["seconds"], 30000)
+        self.assertEqual(res["entry"]["spent"], round(30000 / 3600, 4))
+        self.assertEqual(res["entry"]["actor"], "manager")
+        self.assertEqual(res["segment"]["machine_seconds"], 36000, "机时不按墙钟重写")
+        self.assertEqual(res["segment"]["effective_seconds"], 30000)
+        self.assertEqual(uc.read_worklogs(self.cap)[0]["ref"], "Tech-1#1")
+
+    def test_fix_manager_pending_segment_recomputes_effective(self) -> None:
+        """(g) pending_approval 的 manager 段 --fix-segment → 按 4.4 步骤②重算 effective_seconds 并入账。"""
+        role_seg = self._open_role_segment(at="2026-10-15T09:00:00+08:00")
+        import yaml
+        with self._freeze("2026-10-15T09:30:00+08:00"):
+            uc.end_dispatch_segment("a" * 32, True, capsule=self.cap)
+        self._append_segment({
+            "name": "长事务", "startAt": "2026-10-15T09:00:00+08:00",
+            "lastActivityAt": "2026-10-15T19:00:00+08:00", "endAt": "2026-10-15T19:00:00+08:00",
+            "state": "pending_approval", "actor": "manager", "trigger": "manager",
+            "stage": "misc", "machine_seconds": 36000, "effective_seconds": 33000,
+            "evidence": "04_Spec_Tech-1.md", "evidence_sha256": "a" * 16})
+        res = uc.fix_segment(self.cap, seg_id="Tech-1#2",
+                             end_at="2026-10-15T11:00:00+08:00")
+        seg = res["segment"]
+        self.assertEqual(seg["state"], "logged")
+        self.assertEqual(seg["machine_seconds"], 7200)
+        # 区间 09:00→11:00 = 7200s，扣除 role 段（09:00→09:30）1800s → 5400s
+        self.assertEqual(seg["effective_seconds"], 5400)
+        self.assertEqual(res["entry"]["seconds"], 5400)
+        self.assertEqual(seg["evidence_sha256"], "a" * 16, "证据沿用段上已校验的指纹")
+        self.assertEqual(self._segments()[role_seg["seg_id"]]["state"], "logged")
+
+    def test_legacy_segment_rejected_by_nothing_new(self) -> None:
+        """旧段（无 actor）在各入口仍按旧语义（split/fix 可用），不被 actor 政策拦截。"""
+        write_legacy_open_segment(self.cap, name="旧段")
+        res = uc.fix_segment(self.cap, seg_id="Tech-1#1", end_at="2026-10-15T10:00:00+08:00")
+        self.assertEqual(res["segment"]["machine_seconds"], 3600)
+        self.assertEqual(res["entry"]["seconds"], 3600)
+        self.assertNotIn("actor", res["entry"])
+
+    def test_cli_delivered_manager_unmeasured_exit_zero(self) -> None:
+        """CLI：--delivered 遇 open Manager 段 → 退出码 0、段 unmeasured、无 worklog。"""
+        uc.start_task(self.cap, name="事务", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
+        proc = subprocess.run([sys.executable, str(TOOL), str(self.cap), "--delivered", "2026-10-15"],
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self._segments()["Tech-1#1"]["state"], "unmeasured")
+        self.assertEqual(self._worklogs(), [])
+
+    def test_cli_fix_role_segment_exit_one_bytes_untouched(self) -> None:
+        """CLI：--fix-segment 指向 role 段 → 退出码 1、字节不变。"""
+        role_seg = self._open_role_segment()
+        before = (self.cap / "capsule.yaml").read_bytes()
+        proc = subprocess.run([sys.executable, str(TOOL), str(self.cap), "--fix-segment",
+                               role_seg["seg_id"], "--end-at", "2026-10-15T10:00:00+08:00"],
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("actor=role", proc.stderr)
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
+
+
 class DispatchSegmentTests(unittest.TestCase):
     """Tech-176 T9（方案 4.4 判定 3/4、4.4.2）：角色段自开自结、ROLE_STAGE 映射与失败段。"""
 

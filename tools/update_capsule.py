@@ -545,7 +545,35 @@ def _now_iso() -> str:
 
 
 def _find_open_segment(segments: list[dict]) -> dict | None:
-    return next((s for s in segments if s.get("state") == "open"), None)
+    return next((s for s in segments if isinstance(s, dict) and s.get("state") == "open"), None)
+
+
+# 全部结算入口的 actor 政策（方案 4.4.1，PA-1）。入口按 actor 分支：
+#   旧段（无 actor）——沿用旧语义（墙钟秒、不查证据）；
+#   actor=manager ——证据门槛不可绕过：没有 `--end-task --evidence` 的入口一律转 unmeasured；
+#   actor=role ——只由调度按 dispatch_id 结段，其它入口不碰、拒绝结算。
+ROLE_SEGMENT_REFUSAL = (
+    "👉 修复建议: 角色段由 dispatch_role.py run 自开自结；"
+    "残留段请用 --unmeasure-segment {seg_id} --reason <原因> 收尾。"
+)
+
+
+def _refuse_role_segment(entry: str, seg: dict) -> ToolError:
+    """4.4.1：除 `--unmeasure-segment` 与归档自动结转外，任何入口不结算 role 段。"""
+    return ToolError(
+        f"❌ {entry}不接受角色调度段（actor=role）: {seg.get('seg_id')}\n"
+        + ROLE_SEGMENT_REFUSAL.format(seg_id=seg.get("seg_id"))
+    )
+
+
+def _mark_unmeasured_without_settling(data: dict[str, Any], seg: dict, trigger: str,
+                                      reason: str) -> None:
+    """4.4.1：不绕过证据门槛的入口把 actor 段转 unmeasured，不写 worklog（D-14）。"""
+    seg["state"] = "unmeasured"
+    seg["trigger"] = trigger
+    seg["endAt"] = seg.get("endAt") or _now_iso()
+    seg["lastActivityAt"] = seg["endAt"]
+    seg["note"] = (seg.get("note") or "") + f" {reason}".rstrip()
 
 
 def _touch_open_segment(data: dict[str, Any], at: str | None = None) -> None:
@@ -681,14 +709,25 @@ def update_capsule(capsule_dir: str, *, delivered: str | None = None, dry_run: b
     mutated = False
 
     # --delivered 是一个收尾信号：在同一数据对象内自动收尾 open 段（IMP-C1）。
+    # 方案 4.4.1（PA-1）：open 的 Manager 段转 unmeasured 不入账（D-14，交付时没带证据
+    # 结段，宁可不计）；open 的 role 段不碰（属运行中或残留的调度，按第六节处置）；
+    # 旧段（无 actor）沿用现行语义按秒结算。
     if delivered is not None:
         open_seg = _find_open_segment([s for s in (data.get("task_segments") or []) if isinstance(s, dict)])
         if open_seg is not None:
-            end_dt = normalize_to_cst(open_seg["endAt"]) if open_seg.get("endAt") else dt.datetime.now(TZ_CST)
-            entry = _close_segment(capsule, data, open_seg, end_dt, "delivered")
-            if entry is not None:
-                worklog_refs.append(open_seg["seg_id"])
-            mutated = True
+            seg_actor = open_seg.get("actor")
+            if seg_actor == "role":
+                pass  # 不碰：交付照常推进，段状态与 worklog 都不动
+            elif seg_actor == "manager":
+                _mark_unmeasured_without_settling(
+                    data, open_seg, "delivered", "--delivered 收尾：未带证据结段，段作废不入账")
+                mutated = True
+            else:
+                end_dt = normalize_to_cst(open_seg["endAt"]) if open_seg.get("endAt") else dt.datetime.now(TZ_CST)
+                entry = _close_segment(capsule, data, open_seg, end_dt, "delivered")
+                if entry is not None:
+                    worklog_refs.append(open_seg["seg_id"])
+                mutated = True
 
         # 交付终审时：自动捕获外部依赖的当前 SHA256 指纹，加固防腐封箱
         deps = data.get("dependencies")
@@ -715,9 +754,12 @@ def update_capsule(capsule_dir: str, *, delivered: str | None = None, dry_run: b
             data["dependencies"] = new_deps
             mutated = True
 
-    # 方案 3.4 archived-unmeasured 自动结转: 遗留的 open / pending_approval 段自动转为 unmeasured
+    # 方案 3.4 archived-unmeasured 自动结转: 遗留的 open / pending_approval 段自动转为 unmeasured。
+    # 只在 lifecycle 推进到 archived-unmeasured 时结转；`--delivered` 不触发（4.4.1 的
+    # actor 政策已分别处理 Manager / role / 旧段）。
+    if target == "archived-unmeasured":
         for s in data.get("task_segments") or []:
-            if s.get("state") in ("open", "pending_approval"):
+            if isinstance(s, dict) and s.get("state") in ("open", "pending_approval"):
                 s["state"] = "unmeasured"
                 s["note"] = (s.get("note") or "") + " 随 archived-unmeasured 不计量"
                 mutated = True
@@ -1135,6 +1177,10 @@ def approve_segment(capsule_dir: str | Path, seg_id: str, dry_run: bool = False)
     target_seg = next((s for s in segments if s.get("seg_id") == seg_id), None)
     if not target_seg:
         raise ToolError(f"❌ 未找到任务段: {seg_id}")
+    # 方案 4.4.1：approve 读段上已有的 effective_seconds 入账（manager 段与 role 段都不得
+    # 按墙钟重算）；role 段由调度结段，本入口不结算（残留段用 --unmeasure-segment）。
+    if target_seg.get("actor") == "role":
+        raise _refuse_role_segment("--approve-segment", target_seg)
     if target_seg.get("state") != "pending_approval":
         raise ToolError(f"❌ 任务段 {seg_id} 状态为 {target_seg.get('state')}，不是 pending_approval，无需批准。")
 
@@ -1148,7 +1194,7 @@ def approve_segment(capsule_dir: str | Path, seg_id: str, dry_run: bool = False)
     target_seg["state"] = "logged"
     effective = target_seg.get("effective_seconds")
     effective = max(0, round(effective)) if isinstance(effective, (int, float)) else duration_s
-    target_seg["machine_seconds"] = duration_s
+    target_seg["machine_seconds"] = max(1, duration_s)
     spent = _seconds_to_spent(effective)
     stage = target_seg.get("stage") or "misc"
     operator = _default_operator()
@@ -1236,6 +1282,17 @@ def fix_segment(capsule_dir: str | Path, seg_id: str, end_at: str, dry_run: bool
     target_seg = next((s for s in segments if s.get("seg_id") == seg_id), None)
     if not target_seg:
         raise ToolError(f"❌ 未找到任务段: {seg_id}")
+    # 方案 4.4.1：fix 只接受 pending_approval 的 Manager 段（改 endAt 后按 4.4 步骤②重算
+    # effective_seconds，证据沿用段上已校验的 evidence_sha256）；open 段拒绝（用
+    # --end-task --evidence）；role 段拒绝（时间戳只由调度写）。
+    seg_actor = target_seg.get("actor")
+    if seg_actor == "role":
+        raise _refuse_role_segment("--fix-segment", target_seg)
+    if seg_actor == "manager" and target_seg.get("state") != "pending_approval":
+        raise ToolError(
+            f"❌ Manager 段 {seg_id} 状态为 {target_seg.get('state')}，不能修正结束时间\n"
+            "👉 修复建议: 只接受 pending_approval；open 的 Manager 段请用 --end-task --evidence <产出物> 收尾。"
+        )
     if target_seg.get("state") not in ("open", "pending_approval"):
         raise ToolError(
             f"❌ 任务段 {seg_id} 状态为 {target_seg.get('state')}，不能修正结束时间\n"
@@ -1253,7 +1310,20 @@ def fix_segment(capsule_dir: str | Path, seg_id: str, end_at: str, dry_run: bool
     target_seg["endAt"] = end_dt.isoformat()
     target_seg["lastActivityAt"] = end_dt.isoformat()
     target_seg["note"] = (target_seg.get("note") or "").strip()
-    entry = _settle_segment(data, target_seg, max(1, round((end_dt - start_dt).total_seconds())))
+    if seg_actor == "manager":
+        # 4.4「7 Manager 结段」步骤②：区间秒 = (end − startAt) − 与同胶囊 role 段并集重叠秒。
+        span_s = max(1, round((end_dt - start_dt).total_seconds()))
+        overlap_s = _role_segment_overlap_seconds(segments, start_dt, end_dt)
+        effective = span_s - overlap_s
+        if effective <= 0:
+            raise ToolError(
+                f"❌ 修正后的 Manager 段 {seg_id} 有效秒非正（区间 {span_s}s，重叠 {overlap_s}s）\n"
+                "👉 修复建议: 换一个不与角色调度重叠的结束时间，或用 --unmeasure-segment 收尾。"
+            )
+        target_seg["effective_seconds"] = effective
+        entry = _settle_segment(data, target_seg, effective, machine_seconds=span_s)
+    else:
+        entry = _settle_segment(data, target_seg, max(1, round((end_dt - start_dt).total_seconds())))
 
     if not dry_run:
         _check_invariants(data)
@@ -1291,6 +1361,14 @@ def split_segment(capsule_dir: str | Path, seg_id: str, at: list[str], dry_run: 
     target_seg = next((s for s in segments if s.get("seg_id") == seg_id), None)
     if not target_seg:
         raise ToolError(f"❌ 未找到任务段: {seg_id}")
+    # 方案 4.4.1：actor 段禁止拆段——重叠扣除和证据不能按时刻切分（manager），子段还会
+    # 复制 dispatch_id 违反 I-9（role）。>24h 用 --fix-segment 或 --unmeasure-segment。
+    if target_seg.get("actor") in ("role", "manager"):
+        raise ToolError(
+            f"❌ --split-segment 不接受 actor={target_seg.get('actor')} 段: {seg_id}\n"
+            "👉 修复建议: 重叠扣除与证据不能按时刻切分；超 24h 请用 --fix-segment 修正结束时间，"
+            "或用 --unmeasure-segment 收尾后人工补登。"
+        )
     if target_seg.get("state") not in ("open", "pending_approval"):
         raise ToolError(
             f"❌ 任务段 {seg_id} 状态为 {target_seg.get('state')}，不能拆分\n"
