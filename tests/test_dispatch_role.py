@@ -17,6 +17,7 @@ import os
 import stat
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import TestCase, mock
@@ -28,7 +29,7 @@ if str(SYSTEM_ROOT) not in sys.path:
     sys.path.insert(0, str(SYSTEM_ROOT))
 
 from tools import dispatch_role as dr  # noqa: E402
-from tools import init_capsule, update_capsule  # noqa: E402
+from tools import init_capsule, resume_context, update_capsule  # noqa: E402
 from tools import role_preferences  # noqa: E402
 
 OK_BODY_NAME = "ok_body.md"  # 替身 CLI 把这份合规产出拷到交付物位置
@@ -1480,7 +1481,9 @@ class TraceTests(DispatchRoleTestBase):
         try:
             prompt = f"[交付约定] 将本次产出写入：{out}（在既有文件上原地更新）。"
             prof = {"name": "claude-test", "agent": "claude", "model": "sonnet", "timeout_s": 30}
-            code, attempts, ok = dr.execute_chain([prof], prompt, self.ws, out, "Researcher")
+            run_dispatch_id = "f" * 32
+            code, attempts, ok = dr.execute_chain([prof], prompt, self.ws, out, "Researcher",
+                                                  dispatch_id=run_dispatch_id)
             self.assertTrue(ok)
             self.assertEqual(code, "")
 
@@ -1493,7 +1496,11 @@ class TraceTests(DispatchRoleTestBase):
             self.assertIsNotNone(end_trace["usage"])
             expected_usage = dr.role_preferences.parse_usage(claude_stdout, "claude")
             self.assertEqual(end_trace["usage"], expected_usage)
-            self.assertNotIn("usage", attempts[0])
+            # T10：执行过的 attempt 也带 usage 与 run 级 dispatch_id 入档（AC-8）
+            self.assertEqual(attempts[0]["usage"], expected_usage)
+            self.assertEqual(attempts[0]["dispatch_id"], run_dispatch_id)
+            # D-1：trace id 升级为 `<dispatch_id>.<n>`
+            self.assertEqual(end_trace["dispatch_id"], f"{run_dispatch_id}.1")
         finally:
             os.environ["PATH"] = orig_path
 
@@ -1518,7 +1525,8 @@ class TraceTests(DispatchRoleTestBase):
             code1, attempts1, ok1 = dr.execute_chain([prof_garbage], prompt1, self.ws, out1, "Researcher")
             self.assertTrue(ok1)
             self.assertEqual(code1, "")
-            self.assertNotIn("usage", attempts1[0])
+            # T10：解析不出用量时 attempt 写 "unknown"，不省略键（AC-8）
+            self.assertEqual(attempts1[0]["usage"], "unknown")
 
             log = self.ws / "trace.jsonl"
             rows1 = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()]
@@ -1544,7 +1552,7 @@ class TraceTests(DispatchRoleTestBase):
                 code2, attempts2, ok2 = dr.execute_chain([prof_garbage], prompt2, self.ws, out2, "Researcher")
             self.assertEqual(code1, code2)
             self.assertEqual(ok1, ok2)
-            self.assertNotIn("usage", attempts2[0])
+            self.assertEqual(attempts2[0]["usage"], "unknown")
             self.assertEqual(attempts1[0].get("exit_code"), attempts2[0].get("exit_code"))
             self.assertEqual(attempts1[0].get("failure_code"), attempts2[0].get("failure_code"))
 
@@ -1720,9 +1728,9 @@ class BindPromptTests(TestCase):
 class WorktimeSettleTests(DispatchRoleTestBase):
     """工时伴随签署入账：T9 起角色段由调度自开自结（按 dispatch_id 结段）。
 
-    本类改测 `start_dispatch_segment` / `end_dispatch_segment` 两个入口本身的行为
-    （结段只认 dispatch_id、失败写 failed 段、静默契约），run 级接线（开段→执行→结段）
-    属 T10；本版 run 路径暂不自动开段，`worklog_refs` 恒为空。
+    测 `start_dispatch_segment` / `end_dispatch_segment` 两个入口本身的行为
+    （结段只认 dispatch_id、失败写 failed 段、静默契约），以及 T10 的 run 级接线：
+    两条 run 路径都是「开段 → 执行 → 结段」，段上写 run 级 dispatch_id。
     """
 
     CST = timezone(timedelta(hours=8))
@@ -1801,7 +1809,7 @@ class WorktimeSettleTests(DispatchRoleTestBase):
         self.assertIsNone(update_capsule.end_dispatch_segment("e" * 32, True, capsule=cap))
 
     def test_success_dispatch_does_not_settle_legacy_segment(self) -> None:
-        """旧段（无 actor）不再被调度自动结段：run 路径本版不接线段，旧段保持 open。"""
+        """旧段（无 actor）不被调度结段：run 只开自己的角色段并结它，旧段保持 open。"""
         cap = self._capsule()
         at = (datetime.now(self.CST) - timedelta(minutes=40)).isoformat()
         seg_id = self._open_legacy_segment(cap, "架构出方案", at=at)
@@ -1809,15 +1817,20 @@ class WorktimeSettleTests(DispatchRoleTestBase):
             "Architecture", {"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}},
             cap / "02_方案.md", None)
 
-        self.assertEqual(receipt["worklog_refs"], [], "T10 才把开段/结段接进 run 路径")
-        self.assertEqual([s["state"] for s in update_capsule.read_segments(cap)], ["open"])
-        self.assertEqual(update_capsule.read_segments(cap)[0]["seg_id"], seg_id)
+        segs = update_capsule.read_segments(cap)
+        self.assertEqual([s["state"] for s in segs], ["open", "logged"])
+        self.assertEqual(segs[0]["seg_id"], seg_id, "旧段仍是旧段，未被别人的调度结掉")
+        self.assertEqual(segs[1]["actor"], "role")
+        self.assertEqual(receipt["worklog_refs"], [segs[1]["seg_id"]])
+        logs = update_capsule.read_worklogs(cap)
+        self.assertEqual([x["ref"] for x in logs], [segs[1]["seg_id"]],
+                         "只入账本 run 的角色段，旧段不入账")
 
-    def test_failed_dispatch_leaves_legacy_segment_open(self) -> None:
-        """失败链不结算：旧段保持 open，无 worklog。"""
+    def test_failed_dispatch_writes_own_failed_segment_not_legacy(self) -> None:
+        """失败链写自己的 failed 段；旧段（无 actor）保持 open，无 worklog。"""
         cap = self._capsule()
         at = (datetime.now(self.CST) - timedelta(minutes=40)).isoformat()
-        self._open_legacy_segment(cap, "架构出方案", at=at)
+        seg_id = self._open_legacy_segment(cap, "架构出方案", at=at)
         self.write_config({"architecture-primary": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 30}})
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -1826,7 +1839,142 @@ class WorktimeSettleTests(DispatchRoleTestBase):
 
         self.assertNotEqual(rc, dr.EXIT_OK)
         self.assertEqual(update_capsule.read_worklogs(cap), [], "失败链不得预先入账")
-        self.assertEqual([s["state"] for s in update_capsule.read_segments(cap)], ["open"])
+        segs = update_capsule.read_segments(cap)
+        self.assertEqual([s["state"] for s in segs], ["open", "failed"])
+        self.assertEqual(segs[0]["seg_id"], seg_id, "旧段不被失败链碰")
+        self.assertEqual(segs[1]["actor"], "role")
+        self.assertGreaterEqual(segs[1]["machine_seconds"], 1)
+
+    def test_t10_p1_stage_by_role_not_mtime(self) -> None:
+        """P-1 复现：胶囊里 07_验收报告.md 的 mtime 最新，Architecture 段仍是 02_方案。"""
+        cap = self._capsule()
+        newest = cap / "07_验收报告.md"
+        newest.write_text("# 验收\n", encoding="utf-8")
+        os.utime(newest, (time.time() + 600, time.time() + 600))
+        self._dispatch(
+            "Architecture", {"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}},
+            cap / "02_方案.md", cap)
+        seg = update_capsule.read_segments(cap)[-1]
+        self.assertEqual(seg["stage"], "02_方案", "阶段只由角色决定，不看文件 mtime")
+        self.assertEqual(seg["actor"], "role")
+        self.assertEqual(seg["role"], "Architecture")
+        self.assertEqual(seg["state"], "logged")
+
+    def test_t10_b_effective_seconds_subtracts_failed_attempt(self) -> None:
+        """链上第一个 profile 失败、第二个成功：一个 logged 段，有效秒扣第一次 attempt 时长。"""
+        cap = self._capsule()
+        slow_fail = _mkexe(self.scripts, "slowfail.sh", '#!/bin/sh\nsleep 2\nexit 1\n')
+        self.write_config({"p-pri": {"argv": [slow_fail, "{PROMPT}"], "timeout_s": 30,
+                                     "fallback_profile": "p-back"},
+                           "p-back": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}})
+        target = cap / "02_方案.md"
+        self.ok_body.write_text(proposal_doc(), encoding="utf-8")
+        man = {"assigned_at": "2026-09-18T00:00:00+08:00", "assigned_by": "Test", "revision": 1,
+               "assignments": [{"assignment_id": "a1", "role": "Architecture",
+                                "command_profile": "p-pri", "deliverable": "02_方案.md",
+                                "status": "pending"}]}
+        (cap / "capsule.yaml").write_text(
+            yaml.safe_dump({**yaml.safe_load((cap / "capsule.yaml").read_text(encoding="utf-8")),
+                            "roles_manifest": man}, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        res = dr.run_assignment_result(cap, "a1", prompt=str(target), ack=None, owner="t")
+        self.assertEqual(res["exit"], dr.EXIT_OK, res)
+        self.assertEqual(res["worklog_refs"] and len(res["worklog_refs"]), 1)
+
+        segs = [s for s in update_capsule.read_segments(cap) if s.get("actor") == "role"]
+        self.assertEqual(len(segs), 1)
+        seg = segs[0]
+        machine = seg["machine_seconds"]
+        self.assertEqual(machine, max(1, round(
+            (update_capsule.normalize_to_cst(seg["endAt"]) - update_capsule.normalize_to_cst(seg["startAt"])).total_seconds())))
+        data = yaml.safe_load((cap / "capsule.yaml").read_text(encoding="utf-8"))
+        attempts = data["roles_manifest"]["assignments"][0]["attempts"]
+        self.assertEqual(len(attempts), 2)
+        failed_s = round(attempts[0]["duration_s"])
+        self.assertIn("failure_code", attempts[0])
+        self.assertEqual(seg["effective_seconds"], max(1, machine - failed_s))
+        logs = [w for w in update_capsule.read_worklogs(cap) if w.get("actor") == "role"]
+        self.assertEqual(logs[0]["seconds"], seg["effective_seconds"])
+
+    def test_t10_c_all_failed_chain_writes_failed_segment_no_worklog(self) -> None:
+        """P-3/P-4 复现：全链失败 → failed 段、worklog_refs==[]、退出码与改造前一致。"""
+        cap = self._capsule()
+        self.write_config({"architecture-primary": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 30}})
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = dr.run_direct(self.ws, "Architecture", prompt=str(cap / "02_方案.md"),
+                               out=cap / "02_方案.md", owner="t", capsule=cap)
+        self.assertEqual(rc, dr.EXIT_BLOCKED)
+        segs = [s for s in update_capsule.read_segments(cap) if s.get("actor") == "role"]
+        self.assertEqual(len(segs), 1)
+        self.assertEqual(segs[0]["state"], "failed")
+        self.assertGreaterEqual(segs[0]["machine_seconds"], 1)
+        self.assertNotIn("effective_seconds", segs[0])
+        self.assertEqual(update_capsule.read_worklogs(cap), [])
+
+    def test_t10_d_timeout_writes_failed_segment_and_unknown_usage(self) -> None:
+        """超时 → failed 段，attempt 带 timeout: true 与 usage: "unknown"。"""
+        cap = self._capsule()
+        self.write_config({"architecture-primary": {"argv": [self.slow, "{PROMPT}"], "timeout_s": 1}})
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            res = dr.run_direct_result(self.ws, "Architecture", prompt=str(cap / "02_方案.md"),
+                                       out=cap / "02_方案.md", owner="t", capsule=cap)
+        self.assertEqual(res["exit"], dr.EXIT_BLOCKED)
+        self.assertEqual(res["failure_code"], "TIMEOUT")
+        self.assertEqual(res["worklog_refs"], [])
+        segs = [s for s in update_capsule.read_segments(cap) if s.get("actor") == "role"]
+        self.assertEqual(len(segs), 1)
+        self.assertEqual(segs[0]["state"], "failed")
+        # 超时 attempt：timeout 标记 + usage "unknown" + run 级 dispatch_id（AC-8）
+        rows = [json.loads(ln) for ln in (self.ws / "trace.jsonl").read_text(encoding="utf-8").splitlines() if ln.strip()]
+        start = next(r for r in rows if r.get("event") == "start")
+        self.assertEqual(start["dispatch_id"], f"{segs[0]['dispatch_id']}.1")
+        end = next(r for r in rows if r.get("dispatch_id") == start["dispatch_id"]
+                   and r.get("event") != "start")
+        self.assertEqual(end["failure_code"], "TIMEOUT")
+        self.assertEqual(end["dispatch_id"], start["dispatch_id"])
+        self.assertEqual(update_capsule.read_worklogs(cap), [])
+
+    def test_t10_attempts_carry_dispatch_id_usage_and_duration(self) -> None:
+        """执行过的 attempt 带 dispatch_id / usage / duration_s；超时写 usage: "unknown"。"""
+        out = self.ws / "02_方案.md"
+        self.ok_body.write_text(proposal_doc(), encoding="utf-8")
+        run_id = "a1" * 16
+        prof = {"name": "p-ok", "argv": [self.ok, "{PROMPT}"], "timeout_s": 30}
+        code, attempts, ok = dr.execute_chain([prof], f"将本次产出写入：{out}", self.ws, out,
+                                              "Architecture", dispatch_id=run_id)
+        self.assertTrue(ok)
+        at = attempts[0]
+        self.assertEqual(at["dispatch_id"], run_id)
+        self.assertEqual(at["usage"], "unknown", "无 agent 的 profile 解析不出用量，写 unknown")
+        self.assertIsInstance(at["duration_s"], (int, float))
+
+        slow_prof = {"name": "p-slow", "argv": [self.slow, "{PROMPT}"], "timeout_s": 1}
+        code, attempts, ok = dr.execute_chain([slow_prof], f"将本次产出写入：{out}", self.ws, out,
+                                              "Architecture", dispatch_id=run_id)
+        self.assertFalse(ok)
+        at = attempts[0]
+        self.assertTrue(at["timeout"])
+        self.assertEqual(at["usage"], "unknown")
+        self.assertEqual(at["dispatch_id"], run_id)
+        self.assertIsInstance(at["duration_s"], (int, float))
+
+    def test_t10_e_trace_ids_are_run_scoped(self) -> None:
+        """trace 中 start 与 end 记录的 id 都是 `<dispatch_id>.1`。"""
+        cap = self._capsule()
+        self._dispatch(
+            "Architecture", {"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}},
+            cap / "02_方案.md", cap)
+        rows = [json.loads(ln) for ln in (self.ws / "trace.jsonl").read_text(encoding="utf-8").splitlines() if ln.strip()]
+        start = next(r for r in rows if r.get("event") == "start")
+        end = next(r for r in rows if r.get("executed") is True and "exit_code" in r)
+        seg = update_capsule.read_segments(cap)[-1]
+        self.assertEqual(start["dispatch_id"], f"{seg['dispatch_id']}.1")
+        self.assertEqual(end["dispatch_id"], start["dispatch_id"])
+        # resume_context 只按字符串配对 start/end：有 end 记录的 id 不进入 open_ 列表
+        open_ = resume_context.dispatches(self.ws / "trace.jsonl", "2000-01-01T00:00:00+00:00")
+        self.assertEqual([d for d in open_ if d.get("state") == "running"], [])
+        self.assertNotIn(start["dispatch_id"], {d.get("dispatch_id") for d in open_})
 
     def test_legacy_segment_still_settles_by_hand(self) -> None:
         """旧段按旧语义收尾：人工 --end-task --at 按墙钟秒数入账，不写 actor。"""
@@ -1920,3 +2068,281 @@ class RunFileLifecycleTests(DispatchRoleTestBase):
             code, attempts, ok = dr.execute_chain([prof], f"[交付约定] 将本次产出写入：{out}", self.ws, out, "Researcher")
         self.assertTrue(ok)
         self.assertEqual(code, "")
+
+
+class OutLockTests(DispatchRoleTestBase):
+    """Tech-176 T11 / 方案 4.4.3：同 `--out` 查重锁。
+
+    协议不变量：`mkdir` 是唯一授权入口；非持有者不删除、不改名、不改写已存在的锁目录；
+    pid 退出、目录年龄、旧锁内容都不授予接管权；第二个调度 fail-closed 退出码 4。
+    """
+
+    def _out(self) -> Path:
+        return self.ws / "02_方案.md"
+
+    def _capsule(self, topic: str = "某主题方案", cid: str = "Tech-901") -> Path:
+        return init_capsule.create_capsule(self.ws / "docs", topic, cid, "research")
+
+    def _preset_lock(self, *, pid: int | None, dispatch_id: str = "d" * 32,
+                     capsule: str | None = None, raw: str | None = None) -> Path:
+        lock = dr._out_lock_dir(self._out())
+        lock.mkdir(parents=True, exist_ok=True)
+        if raw is not None:
+            (lock / "owner.json").write_text(raw, encoding="utf-8")
+        else:
+            (lock / "owner.json").write_text(json.dumps(
+                {"dispatch_id": dispatch_id, "pid": pid, "out": str(self._out()),
+                 "capsule": capsule, "started_at": "2026-10-30T00:00:00+00:00"},
+                ensure_ascii=False), encoding="utf-8")
+        return lock
+
+    def _run(self, capsule: Path | None = None) -> tuple[int, str, str]:
+        self.write_config({"architecture-primary": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 30}})
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = dr.run_direct(self.ws, "Architecture", prompt=str(self._out()),
+                               out=self._out(), owner="t", capsule=capsule)
+        return rc, out.getvalue(), err.getvalue()
+
+    # ---- 协议层 ---------------------------------------------------------
+
+    def test_mkdir_is_the_only_grant(self) -> None:
+        """首次 claim 成功即持有；第二次 mkdir 因路径存在而失败，一律拒绝。"""
+        out = self._out()
+        self.assertIsNone(dr._claim_out(out, "a" * 32, None))
+        lock = dr._out_lock_dir(out)
+        self.assertTrue(lock.is_dir())
+        self.assertTrue(lock.name.endswith(".lock"), "锁目录后缀必须是 .lock，采集器 glob(*.json) 才不会误读")
+        reject = dr._claim_out(out, "b" * 32, None)
+        self.assertIsNotNone(reject)
+        self.assertIn("a" * 32, reject, "owner 可读时报出占用者 dispatch_id")
+        # 非持有者不得删除、改名、改写已存在的锁目录
+        owner_before = (lock / "owner.json").read_bytes()
+        inode_before = lock.stat().st_ino
+        dr._release_out(out, "b" * 32)
+        self.assertTrue(lock.is_dir())
+        self.assertEqual((lock / "owner.json").read_bytes(), owner_before)
+        self.assertEqual(lock.stat().st_ino, inode_before)
+        # 持有者释放后才可再 claim
+        dr._release_out(out, "a" * 32)
+        self.assertFalse(lock.exists())
+        self.assertIsNone(dr._claim_out(out, "c" * 32, None))
+
+    def test_dead_pid_lock_still_rejects(self) -> None:
+        """pid 已退出不授予接管权：仍是退出码 4 + 人工处置步骤。"""
+        out = self._out()
+        lock = self._preset_lock(pid=999999, capsule=str(self.ws / "cap"))
+        reject = dr._claim_out(out, "e" * 32, None)
+        self.assertIsNotNone(reject)
+        self.assertIn("残留", reject)
+        self.assertIn(str(lock), reject)
+        self.assertIn("d" * 32, reject, "报出旧 dispatch_id")
+        self.assertIn(str(self.ws / "cap"), reject, "报出 owner.json.capsule")
+        for step in ("暂停", "确认", "--unmeasure-segment", "删除", "重试"):
+            self.assertIn(step, reject, f"报文须含处置步骤「{step}」")
+        self.assertEqual((lock / "owner.json").read_bytes(),
+                         json.dumps({"dispatch_id": "d" * 32, "pid": 999999, "out": str(out),
+                                     "capsule": str(self.ws / "cap"),
+                                     "started_at": "2026-10-30T00:00:00+00:00"},
+                                    ensure_ascii=False).encode("utf-8"),
+                         "claim 不得改写锁内容")
+
+    def test_corrupt_or_missing_owner_rejects_without_guessing(self) -> None:
+        """owner.json 读不到或损坏：按「锁信息缺失」报告，不按年龄删除、不猜胶囊。"""
+        out = self._out()
+        self._preset_lock(pid=None, raw="{not json")
+        reject = dr._claim_out(out, "f" * 32, None)
+        self.assertIsNotNone(reject)
+        self.assertIn("缺失或损坏", reject)
+        self.assertNotIn("--unmeasure-segment", reject, "没有 capsule 就不给段处置命令")
+
+    def test_null_capsule_gives_no_segment_command(self) -> None:
+        """capsule 为 null 时报错不给段处置命令（4.4.3 胶囊定位）。"""
+        self._preset_lock(pid=999999, capsule=None)
+        reject = dr._claim_out(self._out(), "a" * 32, None)
+        self.assertIsNotNone(reject)
+        self.assertIn("d" * 32, reject)
+        self.assertNotIn("--unmeasure-segment", reject)
+
+    # ---- run 路径接线 ---------------------------------------------------
+
+    def test_live_lock_blocks_second_run_with_exit_4(self) -> None:
+        """(a) 预置 pid 存活锁 → 第二个 run 退出码 4，不开段、不写 attempt。"""
+        cap = self._capsule()
+        self._preset_lock(pid=os.getpid(), capsule=str(cap))
+        before_capsule = (cap / "capsule.yaml").read_bytes()
+        lock = dr._out_lock_dir(self._out())
+        owner_before = (lock / "owner.json").read_bytes()
+
+        rc, _, err = self._run(cap)
+
+        self.assertEqual(rc, 4, "查重拒绝是唯一的前置拒绝，退出码 4")
+        self.assertIn("d" * 32, err, "stderr 报出占用者 dispatch_id")
+        self.assertEqual((cap / "capsule.yaml").read_bytes(), before_capsule, "不开段")
+        self.assertEqual((lock / "owner.json").read_bytes(), owner_before, "锁字节不变")
+
+    def test_stale_lock_blocks_run_and_reports_capsule(self) -> None:
+        """(b) 预置 pid 已退出的锁 → 退出码 4，报文含锁目录、胶囊路径、旧 id 与处置步骤。"""
+        cap = self._capsule()
+        self._preset_lock(pid=999999, capsule=str(cap))
+        before_capsule = (cap / "capsule.yaml").read_bytes()
+        lock = dr._out_lock_dir(self._out())
+        owner_before = (lock / "owner.json").read_bytes()
+
+        rc, _, err = self._run(cap)
+
+        self.assertEqual(rc, 4)
+        self.assertIn(str(lock), err)
+        self.assertIn(str(cap), err)
+        self.assertIn("d" * 32, err)
+        self.assertIn("--unmeasure-segment", err)
+        self.assertIn("暂停", err)
+        self.assertEqual((cap / "capsule.yaml").read_bytes(), before_capsule, "不开段、不写 attempt")
+        self.assertEqual((lock / "owner.json").read_bytes(), owner_before, "锁字节不变")
+
+    def test_different_outs_run_concurrently(self) -> None:
+        """(c) 两个不同 --out 并发 → 各自 logged，互不阻塞。"""
+        import threading
+        results: dict[str, dict] = {}
+
+        def go(key: str, role: str) -> None:
+            cap = self._capsule(topic=f"主题{key}", cid=f"Tech-9{key}")
+            self.write_config({f"{role.lower()}-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}})
+            out = cap / "02_方案.md"
+            self.ok_body.write_text(proposal_doc(), encoding="utf-8")
+            results[key] = dr.run_direct_result(self.ws, role, prompt=str(out), out=out,
+                                                owner="t", capsule=cap)
+
+        threads = [threading.Thread(target=go, args=("1", "Architecture")),
+                   threading.Thread(target=go, args=("2", "Architecture"))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        for key, res in results.items():
+            self.assertEqual(res["exit"], dr.EXIT_OK, f"{key}: {res}")
+            self.assertEqual(len(res["worklog_refs"]), 1, f"{key} 应各自入账")
+
+    def test_exception_during_execution_releases_lock(self) -> None:
+        """(d) 执行中抛异常 → 执行链结束后锁被释放。"""
+        cap = self._capsule()
+        self.write_config({"architecture-primary": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 30}})
+        out = self._out()
+        lock = dr._out_lock_dir(out)
+
+        real_run = dr.subprocess.run
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("unexpected crash")
+
+        with mock.patch("tools.dispatch_role.subprocess.run", side_effect=boom):
+            with self.assertRaises(RuntimeError):
+                dr.run_direct_result(self.ws, "Architecture", prompt=str(out), out=out,
+                                     owner="t", capsule=cap)
+        self.assertFalse(lock.exists(), "异常路径也必须释放自己持有的锁")
+
+    def test_lock_suffix_not_read_by_live_dispatch_items(self) -> None:
+        """(e) 锁目录后缀是 .lock，collect_agent_perf.live_dispatch_items 不读它。"""
+        lock = self._preset_lock(pid=os.getpid())
+        collector = self.ws / "collect.py"
+        collector.write_text(
+            "from pathlib import Path\n"
+            "def items(run_dir):\n"
+            "    return sorted(p.name for p in (Path(run_dir) / 'logs' / 'run').glob('*.json'))\n",
+            encoding="utf-8")
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("collect", collector)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        data_dir = self.ws / "data"
+        (data_dir / "logs" / "run").mkdir(parents=True)
+        (data_dir / "logs" / "run" / "abc.json").write_text("{}", encoding="utf-8")
+        # 锁目录按真实布局放进同一 RUN_DIR
+        real_lock = dr._out_lock_dir(self._out())
+        real_lock.mkdir(parents=True, exist_ok=True)
+        (real_lock / "owner.json").write_text((lock / "owner.json").read_text(), encoding="utf-8")
+        found = mod.items(data_dir)
+        self.assertIn("abc.json", found)
+        self.assertEqual([f for f in found if f.endswith(".lock")], [], "锁目录不得被采集器读到")
+
+    def test_two_takeovers_both_rejected_lock_unchanged(self) -> None:
+        """(f) PA-2：两个接管者都读完旧 owner.json → 双方均退出码 4，锁不变。"""
+        cap = self._capsule()
+        lock = self._preset_lock(pid=999999, capsule=str(cap))
+        owner_before = (lock / "owner.json").read_bytes()
+        inode_before = lock.stat().st_ino
+        before_capsule = (cap / "capsule.yaml").read_bytes()
+        self.write_config({"architecture-primary": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 30}})
+
+        seen: list[str] = []
+        real_claim = dr._claim_out
+
+        def claim_then_record(out, dispatch_id, capsule):
+            reject = real_claim(out, dispatch_id, capsule)
+            if reject:
+                seen.append(reject)  # 两个候选者都在此读完了旧 owner.json
+            return reject
+
+        with mock.patch("tools.dispatch_role._claim_out", side_effect=claim_then_record):
+            codes = []
+            for _ in range(2):
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    codes.append(dr.run_direct(self.ws, "Architecture", prompt=str(self._out()),
+                                               out=self._out(), owner="t", capsule=cap))
+
+        self.assertEqual(codes, [4, 4], "读旧锁不授予任何权利，双方都被拒")
+        self.assertGreaterEqual(len(seen), 2)
+        self.assertEqual((lock / "owner.json").read_bytes(), owner_before, "锁字节不变")
+        self.assertEqual(lock.stat().st_ino, inode_before, "锁 inode 不变")
+        self.assertEqual((cap / "capsule.yaml").read_bytes(), before_capsule, "无新段、无新 attempt")
+
+    def test_three_way_interleave_all_rejected(self) -> None:
+        """(g) 三方交错 → 三方均退出码 4，无一进入执行链，锁不变。"""
+        cap = self._capsule()
+        lock = self._preset_lock(pid=999999, capsule=str(cap))
+        owner_before = (lock / "owner.json").read_bytes()
+        before_capsule = (cap / "capsule.yaml").read_bytes()
+        self.write_config({"architecture-primary": {"argv": [self.fail_cmd, "{PROMPT}"], "timeout_s": 30}})
+        import threading
+        codes: list[int] = []
+        guard = threading.Lock()
+
+        def claim_once() -> None:
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = dr.run_direct(self.ws, "Architecture", prompt=str(self._out()),
+                                   out=self._out(), owner="t", capsule=cap)
+            with guard:
+                codes.append(rc)
+
+        threads = [threading.Thread(target=claim_once) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(sorted(codes), [4, 4, 4], "三方均不获准执行")
+        self.assertEqual((lock / "owner.json").read_bytes(), owner_before, "锁不变")
+        self.assertEqual((cap / "capsule.yaml").read_bytes(), before_capsule, "无新段、无新 attempt")
+
+    def test_cleanup_then_retry_succeeds(self) -> None:
+        """(h) 按前置条件清理锁后可正常再跑。"""
+        cap = self._capsule()
+        self._preset_lock(pid=999999, capsule=str(cap))
+        rc, _, _ = self._run(cap)
+        self.assertEqual(rc, 4)
+
+        # 前置条件：暂停同 out 调度、确认执行链结束、处置旧段、删锁
+        lock = dr._out_lock_dir(self._out())
+        (lock / "owner.json").unlink()
+        lock.rmdir()
+        self.write_config({"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}})
+        self.ok_body.write_text(proposal_doc(), encoding="utf-8")
+        out = cap / "02_方案.md"
+        res = dr.run_direct_result(self.ws, "Architecture", prompt=str(out), out=out,
+                                   owner="t", capsule=cap)
+        self.assertEqual(res["exit"], dr.EXIT_OK, res)
+        self.assertEqual(len(res["worklog_refs"]), 1)
+        self.assertFalse(dr._out_lock_dir(out).exists(), "正常退出后锁已释放")

@@ -649,6 +649,32 @@ class ManagerSegmentTests(unittest.TestCase):
         baseline = self._start()["segment"]["baseline"]
         self.assertEqual(set(baseline), {"02_方案.md", "sub/01_调研.md"})
 
+    def test_capsule_write_refreshes_manager_last_activity(self) -> None:
+        """方案 4.4 判定 7「7 工具事件」：任何写胶囊的动作都刷新 open Manager 段的
+        lastActivityAt——调度器写 manifest 也走这条路，否则 Manager 段超过 600 秒
+        未 --touch 就一律作废（实测缺陷）。"""
+        self._start()
+        segs = {s["seg_id"]: s for s in uc.read_segments(self.cap)}
+        mgr_id = next(k for k, v in segs.items() if v.get("actor") == "manager")
+        stale = "2026-10-15T09:00:00+08:00"
+        uc.touch_task(self.cap, at=stale)
+        segs = {s["seg_id"]: s for s in uc.read_segments(self.cap)}
+        self.assertIn(stale, segs[mgr_id]["lastActivityAt"])
+
+        # 非 --touch 的写路径（log_time 补登）同样是一次工具事件
+        uc.log_time(self.cap, "0.5", stage="misc", summary="补登")
+        segs = {s["seg_id"]: s for s in uc.read_segments(self.cap)}
+        refreshed = segs[mgr_id]["lastActivityAt"]
+        self.assertNotIn(stale, refreshed, "写胶囊后 Manager 段活跃时间须被刷新")
+
+        # 调度写段（T10 的开段）同样刷新
+        uc.touch_task(self.cap, at=stale)
+        uc.start_dispatch_segment(self.cap, dispatch_id="b" * 32, role="Architecture",
+                                  deliverable="02_方案.md")
+        segs = {s["seg_id"]: s for s in uc.read_segments(self.cap)}
+        self.assertNotIn(stale, segs[mgr_id]["lastActivityAt"],
+                         "调度开段也是一次工具事件")
+
     def test_touch_refreshes_manager_segment_only(self) -> None:
         """方案 4.4 判定 7 末行：_touch_open_segment 只刷新 Manager 段或旧段，不碰 role 段。"""
         role_seg = {

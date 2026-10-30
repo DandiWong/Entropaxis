@@ -54,6 +54,11 @@ except ImportError:
     import setup_agents  # type: ignore
     import update_capsule  # type: ignore
     import role_preferences  # type: ignore
+try:
+    from . import resume_context
+except ImportError:  # 脚本方式运行：按路径加载，只读复用 _pid_alive（不参与互斥判定）
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import resume_context  # type: ignore
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 ROLES_CONFIG = SYSTEM_ROOT / "data" / "templates" / "roles.yaml"
@@ -759,6 +764,175 @@ def _remove_run_file(dispatch_id: str) -> None:
     except Exception:
         pass
 
+# ---------------------------------------------------------------- 同 --out 查重锁（T11）
+
+# 锁目录固定以 .lock 结尾：看板采集器按 glob("*.json") 扫 RUN_DIR
+# （collect_agent_perf.py:862），owner.json 在锁目录内，不会被误读成 live item。
+OUT_LOCK_SUFFIX = ".lock"
+# 人工清理步骤（方案 4.4.3「人工清理前置条件与顺序」）：报告里逐条给出，不自动执行。
+# 残留锁（owner 可读）才有 capsule 与旧 dispatch_id，才谈得上「处置段再清锁」；
+# 锁信息缺失时只给到「暂停、确认、删锁、重试」，不猜胶囊、不给段处置命令。
+_OUT_CLEANUP_STEPS = (
+    "① 暂停同一 --out 的新调度；② 确认可能持有该锁的调度及其执行链均已结束"
+    "（无法确认就保留锁，不清理）；③ 重新读取 owner.json，若与上面报告的旧 dispatch_id "
+    "不同则停止本次清理；④ 按 owner.json 的 capsule 找到同 dispatch_id 的 open 段，执行 "
+    "update_capsule.py <capsule> --unmeasure-segment <段 id> --reason \"调度进程中断\"；"
+    "⑤ 删除已确认的残留锁目录；⑥ 重试调度。"
+)
+_OUT_CLEANUP_NO_OWNER = (
+    "① 暂停同一 --out 的新调度；② 确认可能持有该锁的调度及其执行链均已结束"
+    "（无法确认就保留锁，不清理）；③ 人工确认没有同一 --out 的运行者后，删除该锁目录；"
+    "④ 重试调度。不得按目录年龄或锁信息缺失推断可接管。"
+)
+
+
+def _out_lock_dir(out: Path) -> Path:
+    """锁目录路径：RUN_DIR/out-<sha256(交付物绝对路径)[:16]>.lock（方案 4.4 判定 6）。"""
+    digest = hashlib.sha256(str(Path(out).resolve()).encode("utf-8")).hexdigest()[:16]
+    return RUN_DIR / f"out-{digest}{OUT_LOCK_SUFFIX}"
+
+
+def _read_out_owner(lock_dir: Path) -> dict[str, Any] | None:
+    """读锁目录里的 owner.json；缺失、损坏或任何异常一律 None（只用于报错文案）。"""
+    try:
+        payload = json.loads((lock_dir / "owner.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _claim_out(out: Path, dispatch_id: str, capsule: Path | None) -> str | None:
+    """按 4.4.3 声明同一 `--out` 的执行权；返回 None 表示已持有，否则给出拒绝原因。
+
+    `mkdir` 是唯一授权入口：成功才写 owner.json 并进入执行链。写 owner 失败同样拒绝
+    （留下的初始化目录按「锁信息缺失」报告，不自动回收）。`mkdir` 因目录已存在而失败时，
+    pid 存活与否、目录年龄、旧锁内容都只决定报错文案，不授予接管权。其他 OSError
+    （磁盘只读等）按 fail-closed 拒绝。
+    """
+    lock_dir = _out_lock_dir(out)
+    owner_info = {"dispatch_id": dispatch_id, "pid": os.getpid(),
+                  "out": str(Path(out).resolve()),
+                  "capsule": str(capsule) if capsule is not None else None,
+                  "started_at": _now_iso()}
+    try:
+        lock_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        owner = _read_out_owner(lock_dir)
+        holder = (owner or {}).get("dispatch_id") or "<锁信息缺失或正在初始化>"
+        if owner is None:
+            return (f"❌ 同一 --out 的调度锁已存在且 owner.json 缺失或损坏（无法确认占用者）: {lock_dir}\n"
+                    f"👉 处置步骤: {_OUT_CLEANUP_NO_OWNER}")
+        pid = owner.get("pid")
+        if os.name == "nt":
+            state = "占用中或残留（Windows 不探测 pid）"
+        else:
+            state = "占用中" if resume_context._pid_alive(pid) else "疑似残留锁，须人工确认"
+        holder_capsule = owner.get("capsule")
+        if holder_capsule:
+            extra = f"占用者胶囊: {holder_capsule}\n"
+            steps = _OUT_CLEANUP_STEPS
+        else:
+            extra = "占用者未记录胶囊（无段处置命令）。\n"
+            steps = _OUT_CLEANUP_NO_OWNER
+        return (f"❌ 同一 --out 已有运行中的调度（{state}），拒绝执行: {lock_dir}\n"
+                f"   占用者 dispatch_id: {holder}\n{extra}"
+                f"👉 处置步骤: {steps}")
+    except OSError as exc:
+        return f"❌ 无法创建调度锁 {lock_dir}: {exc}\n👉 修复建议: 检查 {RUN_DIR} 是否可写后重试。"
+    try:
+        (lock_dir / "owner.json").write_text(json.dumps(owner_info, ensure_ascii=False, indent=2),
+                                             encoding="utf-8")
+    except OSError as exc:
+        return f"❌ 调度锁 owner.json 写入失败（{exc}）: {lock_dir}\n👉 修复建议: 检查 {RUN_DIR} 是否可写后重试。"
+    return None
+
+
+def _out_reject_error(reject: str) -> UsageError:
+    """查重拒绝文案 → UsageError：reason 与 fix 分工，避免 CLI 把同一段提示打两遍。"""
+    reason, _, fix = reject.partition("\n👉 ")
+    return UsageError(reason.removeprefix("❌ ").strip(),
+                      fix.removeprefix("处置步骤: ").removeprefix("修复建议: ").strip()
+                      or "暂停同一 --out 的新调度，确认执行链结束后人工清理锁目录再重试。")
+
+
+def _release_out(out: Path, dispatch_id: str) -> None:
+    """释放自己持有的锁（方案 4.4.3 release）。
+
+    只在自己的执行链、结段与档案写入都结束后调用；读 owner.json，dispatch_id 是自己的
+    才删该文件并 rmdir 锁目录。不是自己的、信息缺失或释放失败都不删其他内容，保留目录
+    供人工确认——非持有者不删除、不改名、不改写已存在的锁目录。
+    """
+    lock_dir = _out_lock_dir(out)
+    owner = _read_out_owner(lock_dir)
+    if owner is None or owner.get("dispatch_id") != dispatch_id:
+        return
+    try:
+        (lock_dir / "owner.json").unlink(missing_ok=True)
+        lock_dir.rmdir()
+    except OSError:
+        pass
+
+
+def _attempt_usage(attempt: dict[str, Any]) -> Any:
+    """attempt 的 usage：对象或 "unknown"；未执行的 attempt 没有 usage。"""
+    usage = attempt.get("usage", "unknown")
+    return usage if usage is not None else "unknown"
+
+
+def _failed_attempt_seconds(attempts: list[dict[str, Any]]) -> int:
+    """执行过且未成功的 attempt 时长之和（方案 4.4.2 failed_s）。"""
+    return int(round(sum(float(a.get("duration_s") or 0) for a in attempts
+                         if "failure_code" in a and a.get("duration_s") is not None)))
+
+
+def _run_with_segment(cwd: Path, role: str, deliverable: Path | None, capsule: Path | None,
+                      execute: Any, dispatch_id: str = "",
+                      lock_out: Path | None = None,
+                      release_deferred: bool = False) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """两条 run 路径共用的「开段 → 执行 → 结段」接线（Tech-176 T10，方案 4.2）。
+
+    调度自己开自己的段、自己结自己的段，段上写 run 级 dispatch_id。chain 为空
+    （LOCAL_CARRY）不开段（D-7）。结段失败只向 stderr 打 ⚠️，不改 outcome 与退出码
+    （方案 4.2 第 7 步、第六节）。工时写入的任何失败都不阻断调度（9.4）。
+    `dispatch_id` 由调用方给定时与 `--out` 查重锁共用同一个 ID（T11）。
+    `lock_out` 给定时本函数持有该 `--out` 的查重锁：异常路径必定释放（否则残留锁
+    会让同一 `--out` 一直被拒，须人工清理）；`release_deferred=True` 表示调用方还要
+    在档案写回之后自己释放（方案 4.4.3：release 只在自己的执行链、结段与档案写入
+    都结束后调用），此时正常路径不在这里释放。
+    返回 (execute 的结果, 结段结果)；未开段或结段失败时第二项为 None。
+    """
+    run_dispatch_id = dispatch_id or uuid.uuid4().hex
+
+    def _release_if_mine(failed: bool) -> None:
+        # release_deferred 只推迟正常路径的释放（调用方要在档案写回之后自己释放）；
+        # 异常路径必须在这里释放：调用方的释放语句根本执行不到。
+        if lock_out is not None and (failed or not release_deferred):
+            _release_out(lock_out, run_dispatch_id)
+
+    try:
+        opened = update_capsule.start_dispatch_segment(
+            capsule, path=deliverable, dispatch_id=run_dispatch_id, role=role, deliverable=deliverable)
+        result, attempts = execute(run_dispatch_id)
+        if opened is None:
+            # 开段失败（无胶囊、终态、锁超时、数据异常）：静默，不影响判定
+            return result, None
+        ended = update_capsule.end_dispatch_segment(
+            run_dispatch_id, bool(result.get("succeeded")),
+            failed_attempt_seconds=_failed_attempt_seconds(attempts),
+            failure_code=result.get("failure_code") or "",
+            capsule=opened.get("capsule"))
+        if ended is None:
+            print(f"⚠️ 角色段结段失败，段停在 open：dispatch_id={run_dispatch_id}，"
+                  f"胶囊 {opened.get('capsule')}。请人工执行 "
+                  f"update_capsule.py {opened.get('capsule')} --unmeasure-segment <段 id> "
+                  f"--reason \"结段失败\" 处置。", file=sys.stderr)
+        return result, ended
+    except BaseException:
+        _release_if_mine(failed=True)
+        raise
+    else:
+        _release_if_mine(failed=False)
+
 def _timeout_error(profile: dict[str, Any], role: str | None) -> str | None:
     """链上每条都已由 resolve_profile_chain 物化 timeout_s；这里只做最终防御。
 
@@ -774,8 +948,15 @@ def _timeout_error(profile: dict[str, Any], role: str | None) -> str | None:
 
 
 def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverable: Path,
-                  role: str | None = None) -> tuple[str, list[dict[str, Any]], bool]:
-    """执行备选链，返回 (聚合失败码, attempts, succeeded)。"""
+                  role: str | None = None,
+                  dispatch_id: str = "") -> tuple[str, list[dict[str, Any]], bool]:
+    """执行备选链，返回 (聚合失败码, attempts, succeeded)。
+
+    `dispatch_id` 是 run 级调度 ID（Tech-176 T10）：一次 run 的所有 attempt 共用它，
+    trace 记录的 id 升级为 `<dispatch_id>.<n>`（D-1），按前缀即可从轨迹关联到胶囊任务段。
+    缺省时自取 uuid4——直接调用 `execute_chain` 的调用方（测试、脚本）不因此失去唯一性。
+    """
+    run_id = dispatch_id or uuid.uuid4().hex
     invalid = [(prof, _timeout_error(prof, role)) for prof in chain]
     invalid = [(prof, reason) for prof, reason in invalid if reason]
     if invalid:
@@ -790,7 +971,7 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
         return "NOT_EXECUTABLE", attempts, False
     attempts: list[dict[str, Any]] = []
     codes: set[str] = set()
-    for prof in chain:
+    for ordinal_no, prof in enumerate(chain, start=1):
         started = _now_iso()
         ordinal = {"preference_number": prof["preference_number"]} if "preference_number" in prof else {}
         argv = build_argv(prof, prompt)
@@ -812,14 +993,15 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
         t0 = time.time()
         # 开始记录：子进程跑到一半时会话断掉，只有结束记录的话分不清"没跑/在跑/被杀"；
         # resume_context.py 按 dispatch_id 配对，无结束记录时再看 pid 是否存活。
-        dispatch_id = uuid.uuid4().hex
-        trace({**ordinal, "event": "start", "dispatch_id": dispatch_id, "pid": os.getpid(), "role": role,
+        # T10：id 升级为 `<run dispatch_id>.<链上序号>`——前缀关联 run 级段与 attempt。
+        attempt_id = f"{run_id}.{ordinal_no}"
+        trace({"event": "start", "dispatch_id": attempt_id, "pid": os.getpid(), "role": role,
                "profile": prof["name"], "agent": prof.get("agent"), "model": prof.get("model"),
                "cwd": str(cwd), "deliverable": str(deliverable)})
         produces_file = deliverable != cwd
         before = _sha256_path(deliverable) if produces_file and deliverable.exists() else None
-        _write_run_file(dispatch_id, {
-            "dispatch_id": dispatch_id,
+        _write_run_file(attempt_id, {
+            "dispatch_id": attempt_id,
             "pid": os.getpid(),
             "role": role,
             "profile": prof["name"],
@@ -862,7 +1044,7 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
                     usage = role_preferences.parse_usage(proc.stdout or "", prof.get("agent"))
                 except Exception:
                     usage = None
-            trace({**ordinal, "dispatch_id": dispatch_id, "role": role, "profile": prof["name"], "argv": argv,
+            trace({**ordinal, "dispatch_id": attempt_id, "role": role, "profile": prof["name"], "argv": argv,
                    "cwd": str(cwd), "executed": True, "exit_code": proc.returncode, "duration_s": round(time.time() - t0, 1),
                    "deliverable": str(deliverable), "deliverable_valid": not reasons,
                    # 判据不合格要说出是哪一条：只报 NO_VALID_OUTPUT 会让人以为是模型不行
@@ -873,21 +1055,28 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
                 if role == "Reviewer" and produces_file:
                     # 新一轮审计结论可能让方案过审：推进所在胶囊的 lifecycle
                     update_capsule.sync_for(deliverable)
-                attempts.append({**ordinal, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
-                                 "ended_at": ended, "exit_code": 0, "duration_s": round(time.time() - t0, 1), "report_sha256": _sha256_path(deliverable)})
+                # T10：执行过的 attempt 入档 run 级 dispatch_id、usage（对象或 "unknown"）
+                # 与 duration_s（4.4.3 判定 5 / AC-8）。未执行的 attempt 不写这三项。
+                attempts.append({**ordinal, "dispatch_id": run_id, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
+                                 "ended_at": ended, "exit_code": 0, "duration_s": round(time.time() - t0, 1), "report_sha256": _sha256_path(deliverable),
+                                 "usage": usage if usage is not None else "unknown"})
                 return "", attempts, True
-            attempts.append({**ordinal, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
+            attempts.append({**ordinal, "dispatch_id": run_id, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
                              "ended_at": ended, "exit_code": proc.returncode, "failure_code": code,
-                             "detail": ("；".join(reasons) or (proc.stderr or ""))[-400:]})
+                             "duration_s": round(time.time() - t0, 1),
+                             "detail": ("；".join(reasons) or (proc.stderr or ""))[-400:],
+                             "usage": usage if usage is not None else "unknown"})
             codes.add(code)
         except subprocess.TimeoutExpired:
-            attempts.append({**ordinal, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
-                             "ended_at": _now_iso(), "failure_code": "TIMEOUT", "timeout": True})
-            trace({"dispatch_id": dispatch_id, "role": role, "profile": prof["name"], "argv": argv,
+            # 超时拿不到用量：写 "unknown"（AC-8），时长照记——failed 段的机时由它构成。
+            attempts.append({**ordinal, "dispatch_id": run_id, "profile": prof["name"], "argv_sha256": _sha256_str(json.dumps(argv)), "started_at": started,
+                             "ended_at": _now_iso(), "failure_code": "TIMEOUT", "timeout": True,
+                             "duration_s": round(time.time() - t0, 1), "usage": "unknown"})
+            trace({"dispatch_id": attempt_id, "role": role, "profile": prof["name"], "argv": argv,
                    "cwd": str(cwd), "executed": True, "failure_code": "TIMEOUT", "duration_s": round(time.time() - t0, 1)})
             codes.add("TIMEOUT")
         finally:
-            _remove_run_file(dispatch_id)
+            _remove_run_file(attempt_id)
     if not codes:
         codes.add("CHAIN_EXHAUSTED")
     aggregate = min(codes, key=lambda c: _FAILURE_PRIORITY[c])
@@ -979,9 +1168,27 @@ def run_assignment_result(cwd: Path, assignment_id: str, prompt: str, ack: str |
                          "代码型角色用 run --role Builder --verify <校验profile> 直跑")
     deliverable = (archive.parent / a["deliverable"]).resolve()
 
+    # T11：同 --out 查重（4.4.3）。占用/残留/信息缺失一律 fail-closed 拒绝执行，
+    # 退出码 4；不开段、不写 attempts、不改锁与胶囊。
+    run_dispatch_id = uuid.uuid4().hex
+    seg_capsule = update_capsule._find_capsule_for_dispatch(None, deliverable)
+    if (reject := _claim_out(deliverable, run_dispatch_id, seg_capsule)) is not None:
+        raise _out_reject_error(reject)
+
     source = "profile"
     bound = _bind_prompt(prompt, role, deliverable, target_file, cwd)
-    failure, attempts, succeeded = execute_chain(chain, bound, cwd, deliverable, role)
+    # T10：角色段由调度自开自结（方案 4.2）。开段在验证前、结段在档案写入后，
+    # 中间整段执行链都算在本 dispatch_id 的段里。
+    def run_chain(chain_dispatch_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        failure, chain_attempts, chain_ok = execute_chain(
+            chain, bound, cwd, deliverable, role, dispatch_id=chain_dispatch_id)
+        return ({"succeeded": chain_ok, "failure_code": failure, "attempts": chain_attempts}, chain_attempts)
+
+    chain_result, ended = _run_with_segment(cwd, role, deliverable, seg_capsule, run_chain,
+                                            dispatch_id=run_dispatch_id, lock_out=deliverable,
+                                            release_deferred=True)
+    attempts = chain_result.get("attempts") or []
+    failure, succeeded = chain_result["failure_code"], chain_result["succeeded"]
 
     carrier = next((x["profile"] for x in reversed(attempts) if "failure_code" not in x), "session-local") if succeeded else "session-local"
     carrier_ref = _profile_command_text(carrier, config) if carrier != "session-local" else "当前会话 Agent"
@@ -1020,9 +1227,10 @@ def run_assignment_result(cwd: Path, assignment_id: str, prompt: str, ack: str |
     finally:
         store.release()
 
-    # 角色段自开自结（Tech-176 T9）：run 级 dispatch_id 开段/结段的接线属 T10；
-    # 本版先移除 end_open_task_for 调用点，失败链不结算的语义由 T10 的 failed 段承接。
-    worktime: dict[str, Any] | None = None
+    # T10：角色段已由上面的「开段→执行→结段」结掉，`worklog_refs` 取结段结果。
+    worktime: dict[str, Any] | None = ended
+    # T11：release 排在自己的执行链、结段与档案写入都结束之后（方案 4.4.3）。
+    _release_out(deliverable, run_dispatch_id)
 
     if succeeded:
         return {"outcome": "succeeded", "tier": tier, "role": role, "gate": gate, "mode": mode, "source": source,
@@ -1035,6 +1243,7 @@ def run_assignment_result(cwd: Path, assignment_id: str, prompt: str, ack: str |
     return {"outcome": verdict["outcome"], "tier": tier, "role": role, "mode": f"{mode}（{mode_why}）", "gate": gate,
             "failure_code": failure, "reason": verdict["reason"], "needs_external_review": verdict.get("needs_external_review", False),
             "attempts": len(attempts), "exit": verdict["exit"],
+            "worklog_refs": (ended or {}).get("worklog_refs") or [],
             **({"failed_preferences": _failed_preferences(attempts)} if verdict["outcome"] == "aborted" else {})}
 
 
@@ -1067,33 +1276,53 @@ def run_direct_result(cwd: Path, role: str, prompt: str, out: Path | None, owner
     gate = "hard" if role in HARD_ROLES else "soft"
     source, chain = _tier3_default_chain(role, config)
 
-    if chain:
-        bound = _bind_prompt(prompt, role, deliverable, target_file, cwd)
-        if deliverable is None:
-            # 无交付物文件（代码型）：先让外置 CLI 跑完，判据交给 verify
-            failure, attempts, succeeded = execute_chain(chain, bound, cwd, cwd, role)
-        else:
-            failure, attempts, succeeded = execute_chain(chain, bound, cwd, deliverable, role)
-    else:
-        failure, attempts, succeeded = source, [], False
-        if source == "SUBAGENT_AUTO":
-            now = _now_iso()
-            attempts.append({"profile": "configured→local", "argv_sha256": _sha256_str("configured→local"),
-                             "started_at": now, "ended_at": now, "failure_code": "SUBAGENT_AUTO",
-                             "detail": "roles.preferences 为空：配置声明会话内承载"})
+    # T11：同 --out 查重（4.4.3）。只有带 `--out` 的调度设锁；占用/残留/信息缺失
+    # 一律 fail-closed 拒绝执行（退出码 4），不开段、不写 attempts、不改锁与胶囊。
+    seg_capsule = capsule or update_capsule._find_capsule_for_dispatch(None, deliverable)
+    run_dispatch_id = uuid.uuid4().hex
+    if deliverable is not None:
+        if (reject := _claim_out(deliverable, run_dispatch_id, seg_capsule)) is not None:
+            raise _out_reject_error(reject)
 
-    verify_result: dict[str, Any] | None = None
-    if verify:
-        verify_result = run_verify(verify, config, cwd, role)
-        succeeded = bool(verify_result["passed"])
-        if not succeeded:
-            failure = verify_result["failure_code"]
+    # T10：角色段由调度自开自结（方案 4.2 第 4–7 步）。开段 → 执行链 + verify → 结段
+    # 全在同一个 run 级 dispatch_id 内：verify 失败即整次调度失败，写 failed 段。
+    # chain 为空（LOCAL_CARRY）不开段（D-7）。
+
+    def run_chain(chain_dispatch_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        chain_attempts: list[dict[str, Any]] = []
+        if chain:
+            bound = _bind_prompt(prompt, role, deliverable, target_file, cwd)
+            # 无交付物文件（代码型）：先让外置 CLI 跑完，判据交给 verify
+            chain_target = cwd if deliverable is None else deliverable
+            failure, chain_attempts, succeeded = execute_chain(chain, bound, cwd, chain_target, role,
+                                                              dispatch_id=chain_dispatch_id)
         else:
-            failure = ""
-        attempts.append({"profile": f"verify:{verify}", "argv_sha256": verify_result["argv_sha256"],
-                         "started_at": verify_result["started_at"], "ended_at": verify_result["ended_at"],
-                         "exit_code": verify_result.get("exit_code"),
-                         **({} if succeeded else {"failure_code": failure, "detail": verify_result.get("detail", "")[-400:]})})
+            # preferences 为空：配置声明会话内承载，没有外部执行（D-7 不开段）
+            failure, succeeded = source, False
+            if source == "SUBAGENT_AUTO":
+                now = _now_iso()
+                chain_attempts.append({"profile": "configured→local", "argv_sha256": _sha256_str("configured→local"),
+                                       "started_at": now, "ended_at": now, "failure_code": "SUBAGENT_AUTO",
+                                       "detail": "roles.preferences 为空：配置声明会话内承载"})
+        # verify 与链是否为空无关：没有外置执行时校验命令仍是唯一的成功判据
+        verify_res: dict[str, Any] | None = None
+        if verify:
+            verify_res = run_verify(verify, config, cwd, role)
+            succeeded = bool(verify_res["passed"])
+            failure = "" if succeeded else verify_res["failure_code"]
+            chain_attempts.append({"profile": f"verify:{verify}", "argv_sha256": verify_res["argv_sha256"],
+                                   "started_at": verify_res["started_at"], "ended_at": verify_res["ended_at"],
+                                   "exit_code": verify_res.get("exit_code"),
+                                   **({} if succeeded else {"failure_code": failure,
+                                                            "detail": verify_res.get("detail", "")[-400:]})})
+        return ({"succeeded": succeeded, "failure_code": failure,
+                 "attempts": chain_attempts, "verify_result": verify_res}, chain_attempts)
+
+    chain_result, ended = _run_with_segment(cwd, role, deliverable, seg_capsule, run_chain,
+                                            dispatch_id=run_dispatch_id, lock_out=deliverable,
+                                            release_deferred=True)
+    failure, attempts, succeeded = chain_result["failure_code"], chain_result["attempts"], chain_result["succeeded"]
+    verify_result = chain_result["verify_result"]
 
     ok_attempt = next((a for a in reversed(attempts) if "failure_code" not in a and not a["profile"].startswith("verify:")), None)
     carrier = ok_attempt["profile"] if (succeeded and ok_attempt) else "session-local"
@@ -1101,9 +1330,8 @@ def run_direct_result(cwd: Path, role: str, prompt: str, out: Path | None, owner
     fallback_reason = "" if succeeded else _FAILURE_TO_REASON.get(failure, "")
     verdict = {"outcome": "succeeded", "exit": EXIT_OK} if succeeded else adjudicate(mode, gate, failure)
     status = "succeeded" if succeeded else ("blocked" if verdict["outcome"] == "blocked" else "failed")
-    # 角色段自开自结（Tech-176 T9）：run 级 dispatch_id 开段/结段的接线属 T10；
-    # 本版先移除 end_open_task_for 调用点（旧段由人工 --end-task 或 T10 的 failed 段收尾）。
-    worktime: dict[str, Any] | None = None
+    # T10：角色段已由上面的「开段→执行→结段」结掉，`worklog_refs` 取结段结果。
+    worktime: dict[str, Any] | None = ended
     # 先盖章再取指纹，否则档案记的是盖章前的文件
     receipt = _issue_receipt(role, attempts, deliverable, target_file, carrier, carrier_ref) if succeeded else {}
     duration_s = ok_attempt.get("duration_s") if (succeeded and ok_attempt) else None
@@ -1179,6 +1407,9 @@ def run_direct_result(cwd: Path, role: str, prompt: str, out: Path | None, owner
     if verify_result is not None:
         receipt["verify"] = {"profile": verify, "passed": verify_result["passed"], "exit_code": verify_result.get("exit_code")}
     receipt["exit"] = verdict["exit"]
+    # T11：释放自己的锁（release 只在自己的执行链、结段与档案写入都结束后调用）。
+    if deliverable is not None:
+        _release_out(deliverable, run_dispatch_id)
     return receipt
 
 

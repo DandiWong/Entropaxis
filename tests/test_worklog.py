@@ -447,6 +447,28 @@ class TestWorklogCliEntry(unittest.TestCase):
             self.assertEqual(proc.returncode, 1, f"应拒绝 {bad!r}: {proc.stdout}")
         self.assertEqual((cap / "capsule.yaml").read_bytes(), before)
 
+    def test_unmeasure_segment_cli_writes_and_echoes(self):
+        """`--unmeasure-segment` 写盘成功后必须正常回显并退出 0（不按 lifecycle 结果打印）。"""
+        import yaml
+        cap = self._capsule()
+        data = yaml.safe_load((cap / "capsule.yaml").read_text(encoding="utf-8"))
+        data["task_segments"] = [{
+            "seq": 1, "seg_id": "Tech-999#1", "name": "调度残留", "taskId": "Tech-999", "stage": "02_方案",
+            "startAt": "2026-10-30T09:00:00+08:00", "lastActivityAt": "2026-10-30T09:10:00+08:00",
+            "state": "open", "actor": "role", "role": "Architecture", "dispatch_id": "a" * 32,
+            "trigger": "dispatch"}]
+        data["seq_next"] = 2
+        (cap / "capsule.yaml").write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+
+        proc = self._cli("update_capsule.py", str(cap), "--unmeasure-segment", "Tech-999#1",
+                         "--reason", "调度进程中断")
+        self.assertEqual(proc.returncode, 0, f"CLI 崩溃: {proc.stderr}")
+        self.assertIn("Tech-999#1", proc.stdout)
+        self.assertIn("不计量", proc.stdout)
+        segs = update_capsule.read_segments(cap)
+        self.assertEqual(segs[0]["state"], "unmeasured")
+        self.assertIn("调度进程中断", segs[0]["note"])
+
     def test_override_stage_reason_via_cli(self):
         """T5 / AC-12：CLI 透传 --stage/--reason，保存 original_stage 与 override_reason。"""
         cap = self._capsule()

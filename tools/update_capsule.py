@@ -277,8 +277,18 @@ def _load_capsule_data(capsule: Path) -> tuple[dict[str, Any], str]:
     return data, text
 
 
-def _save_capsule_yaml(capsule: Path, data: dict[str, Any], orig_text: str) -> None:
-    """将数据写回 capsule.yaml。若有 PyYAML 则 safe_dump 保持结构；若无则通过文本替换。"""
+def _save_capsule_yaml(capsule: Path, data: dict[str, Any], orig_text: str,
+                       activity_at: str | None = None) -> None:
+    """将数据写回 capsule.yaml。若有 PyYAML 则 safe_dump 保持结构；若无则通过文本替换。
+
+    任何写胶囊的动作都是一次 Entropaxis 工具事件（方案 4.4 判定 7「7 工具事件」、
+    第六节「只靠 Entropaxis 工具事件」）：本胶囊若有 open 的 Manager 段（或旧段），
+    同步刷新它的 lastActivityAt。放在这里而不是各写函数里，是因为「调度器写胶囊」
+    这类真实事件发生在 dispatch_role 的 manifest 写回路径上，单独一个个接必然漏。
+    open 的 role 段不刷新——它的时间戳只由调度自己写（T9/T10）。
+    `activity_at` 给显式时刻（`--touch --at`），缺省取 now：显式回填时刻不得被 now 覆盖。
+    """
+    _touch_open_segment(data, activity_at)
     manifest = capsule / "capsule.yaml"
     import yaml  # 工作区环境自带 PyYAML
     # 针对 PyYAML 序列化时规避 date 类型丢失引号
@@ -875,6 +885,8 @@ def touch_task(capsule_dir: str | Path, at: str | None = None, dry_run: bool = F
     """刷新进行中 Manager 段（或旧段）的 lastActivityAt（Tech-176 T7）。
 
     open 的 role 段不在此列：它的时间戳只由调度写入（T9）。
+    `--at` 是显式指定的时刻，优先于 `_save_capsule_yaml` 的自动刷新（后者取 now）：
+    显式回填时刻若被 now 覆盖，`--touch --at` 就再也无法把事件时间设回过去。
     """
     capsule = Path(capsule_dir).expanduser().resolve()
     data, text = _load_capsule_data(capsule)
@@ -886,11 +898,8 @@ def touch_task(capsule_dir: str | Path, at: str | None = None, dry_run: bool = F
 
     # IMP-M6：写前全局不变量校验。
     _check_invariants(data)
-    act_dt = normalize_to_cst(at) if at else dt.datetime.now(TZ_CST)
-    open_seg["lastActivityAt"] = act_dt.isoformat()
     if not dry_run:
-        _check_invariants(data)
-        _save_capsule_yaml(capsule, data, text)
+        _save_capsule_yaml(capsule, data, text, activity_at=at)
     return {"capsule": str(capsule), "status": "touched", "segment": open_seg, "dry_run": dry_run}
 
 
@@ -1873,6 +1882,8 @@ def main() -> int:
         print(f"{prefix}任务段已拆分: {res['segment']['seg_id']} -> {parts}")
     elif status == "overridden":
         print(f"{prefix}已覆盖工时: {res['entry']['ref']} -> {res['entry']['spent']}h")
+    elif status == "unmeasured":
+        print(f"{prefix}任务段已标记为不计量: {res['segment']['seg_id']} ({res['segment'].get('note') or res.get('reason')})")
     elif status == "touched":
         print(f"{prefix}已刷新任务段活跃时间: {res.get('segment', {}).get('seg_id')}")
     elif status in ("added", "existing"):
