@@ -1,8 +1,10 @@
+import contextlib
 import hashlib
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -27,6 +29,27 @@ ACCEPTANCE = """# 验收报告
 - **数据回收日期**：{data}
 - **未度量兜底说明**：{unmeasured}
 """
+
+
+def write_legacy_open_segment(cap: Path, *, name: str = "旧规则开的段",
+                              at: str = "2026-10-15T09:00:00+08:00",
+                              stage: str | None = None, seq: int = 1,
+                              seg_id: str = "Tech-1#1", lifecycle: str = "active") -> None:
+    """直接落一个无 actor 的 open 旧段（Tech-176 T7 后的夹具入口）。
+
+    T7 起 `start_task` 只开 `actor: manager` 段，Manager 结段的证据门槛属 T8；
+    测「旧段按旧语义结算」与「调度结算 open 段」的用例改为直接构造无 actor 段，
+    不再经过 `start_task`。
+    """
+    import yaml
+    seg: dict = {"seq": seq, "seg_id": seg_id, "name": name,
+                 "startAt": at, "lastActivityAt": at, "state": "open"}
+    if stage:
+        seg["stage"] = stage
+    payload = {"id": "Tech-1", "lifecycle": lifecycle,
+               "task_segments": [seg], "worklogs": [], "seq_next": seq + 1}
+    (cap / "capsule.yaml").write_text(
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
 class UpdateCapsuleTests(unittest.TestCase):
@@ -148,15 +171,17 @@ class UpdateCapsuleTests(unittest.TestCase):
         self.assertFalse(hasattr(uc, "q_minutes"))
         self.assertEqual(uc._seconds_to_spent(4500), 1.25)
 
-        # 2. 开段 --start-task
+        # 2. 开段 --start-task（T7 起只开 actor=manager 段，并记 baseline）
         res_start = uc.start_task(self.cap, name="功能开发", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
         self.assertEqual(res_start["status"], "started")
         seg = res_start["segment"]
         self.assertEqual(seg["seq"], 1)
         self.assertEqual(seg["seg_id"], "Tech-1#1")
         self.assertEqual(seg["state"], "open")
+        self.assertEqual(seg["actor"], "manager")
+        self.assertIn("baseline", seg)
 
-        # 阻止并发开段
+        # 阻止并发开段（已有 open Manager 段）
         with self.assertRaises(uc.ToolError):
             uc.start_task(self.cap, name="冲突段")
 
@@ -165,16 +190,20 @@ class UpdateCapsuleTests(unittest.TestCase):
         segs = uc.read_segments(self.cap)
         self.assertIn("09:30:00", segs[0]["lastActivityAt"])
 
-        # 3. 收尾入账 (<= 8h, 75分钟 -> 1.25h)
+        # 3. 收尾入账 (<= 8h, 75分钟 -> 1.25h)。Manager 段的证据门槛与有效秒口径属 T8，
+        #    本条钉旧语义结算路径，改用无 actor 旧段夹具。
+        write_legacy_open_segment(self.cap, name="功能开发", stage="04_实施", seq=2, seg_id="Tech-1#2")
         res_end = uc.end_task(self.cap, at="2026-10-15T10:15:00+08:00", trigger="deliver")
         self.assertEqual(res_end["status"], "ended")
         self.assertEqual(res_end["segment"]["state"], "logged")
+        self.assertEqual(res_end["segment"]["machine_seconds"], 4500)
         self.assertEqual(res_end["entry"]["spent"], 1.25)
-        self.assertEqual(res_end["worklog_refs"], ["Tech-1#1"])
+        self.assertEqual(res_end["entry"]["seconds"], 4500)
+        self.assertEqual(res_end["worklog_refs"], ["Tech-1#2"])
         self.assertEqual(uc.worklog_total(self.cap), 1.25)
 
         # 4. 人工覆盖 --override（T5 后 --reason 必填；spent 仍兼容小时浮点直调）
-        res_ov = uc.override_worklog(self.cap, ref="Tech-1#1", spent=2.0, summary="修正工时",
+        res_ov = uc.override_worklog(self.cap, ref="Tech-1#2", spent=2.0, summary="修正工时",
                                      reason="人工核对后修正")
         self.assertEqual(res_ov["status"], "overridden")
         self.assertEqual(res_ov["entry"]["spent"], 2.0)
@@ -186,8 +215,8 @@ class UpdateCapsuleTests(unittest.TestCase):
         self.assertEqual(uc.worklog_total(self.cap), 2.0)
 
     def test_segment_over_8h_requires_approval(self) -> None:
-        # 开段并经过 9 小时 (540 分钟)
-        uc.start_task(self.cap, name="长任务", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
+        # 开段并经过 9 小时 (540 分钟)；旧段夹具（Manager 段 8h 分支属 T8）
+        write_legacy_open_segment(self.cap, name="长任务")
         res_end = uc.end_task(self.cap, at="2026-10-15T18:00:00+08:00")
         self.assertEqual(res_end["segment"]["state"], "pending_approval")
         self.assertEqual(res_end["worklog_refs"], [])
@@ -200,11 +229,10 @@ class UpdateCapsuleTests(unittest.TestCase):
         self.assertEqual(uc.worklog_total(self.cap), 9.0)
 
     def test_archive_gate_blocks_open_or_pending_segments(self) -> None:
-        self.manifest(lifecycle="delivered")
         (self.cap / "07_验收报告.md").write_text(ACCEPTANCE.format(data="2026-11-05", unmeasured="待回填"), encoding="utf-8")
 
-        # 存在 open 段拦截归档
-        uc.start_task(self.cap, name="遗留段", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
+        # 存在 open 段拦截归档（旧段夹具：Manager 段结段门槛属 T8）
+        write_legacy_open_segment(self.cap, name="遗留段", lifecycle="delivered")
         with self.assertRaises(uc.ToolError):
             uc.update_capsule(str(self.cap))
 
@@ -239,7 +267,7 @@ class SegmentSecondsSettleTests(unittest.TestCase):
         self.assertFalse(hasattr(uc, "APPROVAL_LIMIT_MIN"), "分钟制门槛常量应删除")
 
     def test_old_segment_settles_in_seconds(self) -> None:
-        uc.start_task(self.cap, name="调研", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
+        write_legacy_open_segment(self.cap, name="调研", stage="01_调研")
         res = uc.end_task(self.cap, at="2026-10-15T09:07:00+08:00")
         seg = res["segment"]
         self.assertEqual(seg["state"], "logged")
@@ -252,7 +280,7 @@ class SegmentSecondsSettleTests(unittest.TestCase):
         self.assertEqual(uc.worklog_total(self.cap), 0.1167)
 
     def test_8h01m_still_pending_approval(self) -> None:
-        uc.start_task(self.cap, name="长任务", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
+        write_legacy_open_segment(self.cap, name="长任务")
         res = uc.end_task(self.cap, at="2026-10-15T17:01:00+08:00")
         self.assertEqual(res["segment"]["state"], "pending_approval")
         self.assertEqual(res["segment"]["machine_seconds"], 28860)
@@ -326,7 +354,8 @@ class OverrideAuditTests(unittest.TestCase):
         self._td.cleanup()
 
     def _logged_7m_segment(self) -> str:
-        uc.start_task(self.cap, name="设计", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
+        # 旧段夹具：T7 后 start_task 只开 Manager 段（其结算门槛属 T8）
+        write_legacy_open_segment(self.cap, name="设计")
         uc.end_task(self.cap, at="2026-10-15T09:07:00+08:00")
         return "Tech-1#1"
 
@@ -376,6 +405,280 @@ class OverrideAuditTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn("--reason", proc.stderr)
         self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before, "拒绝后文件字节不变")
+
+    def _write_manifest(self, data: dict) -> None:
+        import yaml
+        payload = {"id": "Tech-1", "lifecycle": "active", **data}
+        (self.cap / "capsule.yaml").write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
+class CapsuleWriteLockTests(unittest.TestCase):
+    """Tech-176 T6（AC-10，方案 4.4 判定 6）：所有写函数读→写全程持胶囊目录锁。"""
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.cap = Path(self._td.name) / "20261029_写锁"
+        self.cap.mkdir()
+        (self.cap / "capsule.yaml").write_text(MANIFEST.format(lifecycle="active"), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    def test_concurrent_touch_and_log_time_lose_nothing(self) -> None:
+        """8 线程并发 --touch 与 log_time：worklogs 条数等于成功调用次数，seq 不重复。"""
+        uc.start_task(self.cap, name="并发段", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
+        self.assertEqual(uc.read_segments(self.cap)[0]["actor"], "manager",
+                         "T7 后 --start-task 只开 Manager 段")
+        errors: list[str] = []
+        ok: list[str] = []
+        rejected: list[str] = []
+
+        def worker(i: int) -> None:
+            try:
+                if i % 2 == 0:
+                    uc.touch_task(self.cap, at=f"2026-10-15T09:{i:02d}:00+08:00")
+                else:
+                    uc.log_time(self.cap, spent="1h", stage="misc",
+                                summary=f"并发登记 {i}", operator=f"t{i}")
+                ok.append(f"call-{i}")
+            except uc.ToolError as err:
+                # 业务拒绝（如五元组重复）是合法结果，不算丢数据
+                rejected.append(f"call-{i}: {err}")
+            except Exception as err:  # noqa: BLE001
+                errors.append(f"call-{i}: {err!r}")
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=60)
+
+        self.assertEqual(errors, [], "并发写不得抛异常")
+        self.assertEqual(len(ok) + len(rejected), 8, "每次调用都须有确定结果")
+        logs = uc.read_worklogs(self.cap)
+        added = [w for w in logs if w["summary"].startswith("并发登记")]
+        self.assertEqual(len(added), len(ok) - 4, "touch 不写 worklog；log_time 成功数须等于新增条数")
+        seqs = [w["ref"] for w in logs]
+        self.assertEqual(len(seqs), len(set(seqs)), "ref 不得重复")
+
+    def test_lock_held_during_write_blocks_concurrent_update(self) -> None:
+        """持锁期间 ManifestStore.update 写 assignments 与 log_time 等待后写入：roles_manifest 不丢。"""
+        store = uc._manifest_store(self.cap / "capsule.yaml")
+        # 夹具无 roles_manifest 块，先种一条 revision=0 供 update 的 CAS 递增
+        (self.cap / "capsule.yaml").write_text(
+            MANIFEST.format(lifecycle="active").rstrip() + "\nroles_manifest:\n  revision: 0\n",
+            encoding="utf-8")
+        self.assertTrue(store.acquire("holder"), "测试前置：先持有胶囊目录锁")
+        try:
+            outcome: dict = {}
+
+            def run_log() -> None:
+                try:
+                    uc.log_time(self.cap, spent="1h", stage="misc", summary="持锁等待", operator="t")
+                    outcome["log"] = "written"
+                except uc.ToolError as err:
+                    outcome["log"] = f"toolerror:{err}"
+
+            t = threading.Thread(target=run_log)
+            t.start()
+            time.sleep(0.3)
+            self.assertFalse(outcome, "持锁期间 log_time 必须等待，不得写入")
+
+            # 并发方走 ManifestStore.update 写 assignments，与持锁方互斥
+            def bump(man: dict) -> None:
+                man["revision"] = int(man.get("revision", 0)) + 1
+                man.setdefault("assignments", []).append(
+                    {"assignment_id": "a-2", "role": "Builder", "status": "logged"})
+
+            store.update(bump, "holder")
+            store.release()
+            t.join(timeout=60)
+            self.assertEqual(outcome.get("log"), "written", "锁释放后等待中的写入必须成功")
+        finally:
+            store.release()
+
+        import yaml
+        data = yaml.safe_load((self.cap / "capsule.yaml").read_text(encoding="utf-8"))
+        man = data.get("roles_manifest") or {}
+        self.assertTrue(any(a.get("assignment_id") == "a-2" for a in man.get("assignments", [])),
+                        "ManifestStore 写入的 assignments 不得被 capsule.yaml 整份回写丢掉")
+        logs = uc.read_worklogs(self.cap)
+        self.assertEqual([w["summary"] for w in logs], ["持锁等待"])
+
+    def test_lock_timeout_raises_tool_error_and_leaves_bytes_untouched(self) -> None:
+        """锁被占满 10 秒：抛 ToolError 且 capsule.yaml 字节不变。"""
+        before = (self.cap / "capsule.yaml").read_bytes()
+        store = uc._manifest_store(self.cap / "capsule.yaml")
+        self.assertTrue(store.acquire("squatter"))
+        try:
+            with self.assertRaises(uc.ToolError) as ctx:
+                uc.log_time(self.cap, spent="1h", stage="misc", summary="超时应拒", operator="t")
+            self.assertIn("写锁等待超时", str(ctx.exception))
+        finally:
+            store.release()
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before, "超时拒绝不得落盘")
+
+    def test_public_write_functions_hold_the_lock(self) -> None:
+        """每个公开写函数都在锁内执行：执行期间锁目录被本调用持有。"""
+        seen: list[str] = []
+        real = uc._capsule_lock
+
+        @contextlib.contextmanager
+        def spy(capsule):
+            with real(capsule):
+                seen.append(str(capsule))
+                yield
+
+        uc._capsule_lock = spy
+        try:
+            uc.start_task(self.cap, name="锁内开段", task_id="Tech-1")
+            uc.touch_task(self.cap)
+            # Manager 段结段的证据门槛与有效秒口径属 T8；本条只钉锁覆盖，
+            # 旧语义结算路径用无 actor 旧段夹具。
+            write_legacy_open_segment(self.cap, name="锁内旧段", seq=2, seg_id="Tech-1#2")
+            uc.end_task(self.cap, at="2026-10-15T09:07:00+08:00")
+            uc.log_time(self.cap, spent="1h", stage="misc", summary="锁内补登", operator="t")
+            uc.override_worklog(self.cap, ref="Tech-1#2", spent="2h", reason="锁内覆盖")
+            uc.update_capsule(str(self.cap))
+            # 已 logged 段不接受撤段/修正（IMP-C3/IMP-M1）：取到锁后才被业务拒绝，仍计入覆盖
+            for call in (lambda: uc.unmeasure_segment(self.cap, seg_id="Tech-1#2", reason="锁内撤段"),
+                         lambda: uc.fix_segment(self.cap, seg_id="Tech-1#2",
+                                                end_at="2026-10-15T10:00:00+08:00"),
+                         lambda: uc.split_segment(self.cap, seg_id="Tech-1#2",
+                                                  at=["2026-10-15T09:30:00+08:00"])):
+                with self.assertRaises(uc.ToolError):
+                    call()
+        finally:
+            uc._capsule_lock = real
+        self.assertEqual(len(seen), 9, "全部写函数都应经 _capsule_lock 持锁执行")
+
+    def test_lock_released_after_success_and_failure(self) -> None:
+        """锁必须随 with 退出释放：成功与业务拒绝两条路径都不留锁。"""
+        uc.log_time(self.cap, spent="1h", stage="misc", summary="成功路径", operator="t")
+        self.assertFalse((self.cap / ".capsule.yaml.lock").exists(), "成功后锁须释放")
+        # 五元组完全相同的第二条即重复登记（业务拒绝，非锁失败）
+        with self.assertRaises(uc.ToolError) as ctx:
+            uc.log_time(self.cap, spent="1h", stage="misc", summary="成功路径", operator="t")
+        self.assertIn("已登记过", str(ctx.exception))
+        self.assertFalse((self.cap / ".capsule.yaml.lock").exists(), "业务拒绝后锁须释放")
+        # 无胶囊路径不取锁，由被装饰函数报「未找到胶囊清单」
+        with self.assertRaises(uc.ToolError):
+            uc.start_task(self.cap / "nope", name="无胶囊")
+        self.assertFalse((self.cap / ".capsule.yaml.lock").exists(), "异常后锁须释放")
+
+
+class ManagerSegmentTests(unittest.TestCase):
+    """Tech-176 T7（方案 4.4 判定 7）：--start-task 只开 manager 段并记 baseline。"""
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.cap = Path(self._td.name) / "20261029_Manager段"
+        self.cap.mkdir()
+        (self.cap / "capsule.yaml").write_text(MANIFEST.format(lifecycle="active"), encoding="utf-8")
+        (self.cap / "02_方案.md").write_text("方案\n", encoding="utf-8")
+        (self.cap / ".hidden.md").write_text("隐藏文件\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    def _start(self, **kw) -> dict:
+        return uc.start_task(self.cap, name=kw.pop("name", "事务"), task_id="Tech-1", **kw)
+
+    def test_open_role_segment_does_not_block_manager_segment(self) -> None:
+        """(a) 有 open role 段时 start_task 成功。"""
+        role_seg = {
+            "seq": 1, "seg_id": "Tech-1#1", "name": "Architecture→02_方案.md",
+            "startAt": "2026-10-15T09:00:00+08:00", "lastActivityAt": "2026-10-15T09:00:00+08:00",
+            "state": "open", "actor": "role", "role": "Architecture",
+            "dispatch_id": "a" * 32, "trigger": "dispatch", "stage": "02_方案",
+        }
+        self._write_manifest({"task_segments": [role_seg], "seq_next": 2})
+        res = self._start()
+        seg = res["segment"]
+        self.assertEqual(seg["actor"], "manager")
+        self.assertEqual(seg["state"], "open")
+        self.assertEqual(seg["seg_id"], "Tech-1#2")
+
+    def test_second_manager_segment_rejected(self) -> None:
+        """(b) 已有 open Manager 段时第二次开段被拒。"""
+        self._start(name="第一个 Manager 段")
+        with self.assertRaises(uc.ToolError) as ctx:
+            self._start(name="第二个 Manager 段")
+        self.assertIn("Manager", str(ctx.exception))
+
+    def test_open_legacy_segment_blocks_manager_segment(self) -> None:
+        """方案 4.4 判定 7：已有 open 旧段（无 actor）同样拒绝开段。"""
+        self._write_manifest({"task_segments": [self._legacy_open()], "seq_next": 2})
+        with self.assertRaises(uc.ToolError) as ctx:
+            self._start()
+        self.assertIn("Tech-1#1", str(ctx.exception))
+
+    def test_legacy_segment_settles_with_old_semantics(self) -> None:
+        """(c) 旧段（无 actor）用 --end-task --at … --evidence <文本> 按旧语义结算并写 seconds。"""
+        self._write_manifest({"task_segments": [self._legacy_open()], "seq_next": 2})
+        res = uc.end_task(self.cap, at="2026-10-15T09:07:00+08:00",
+                          evidence="会话中断于 10-15 09:07，提交 3f2a91c")
+        seg = res["segment"]
+        self.assertEqual(seg["state"], "logged")
+        self.assertEqual(seg["machine_seconds"], 420)
+        self.assertNotIn("effective_seconds", seg, "旧段不写有效秒")
+        self.assertEqual(seg["evidence"], "会话中断于 10-15 09:07，提交 3f2a91c")
+        entry = res["entry"]
+        self.assertEqual(entry["seconds"], 420)
+        self.assertNotIn("actor", entry, "旧段结算不推断执行主体")
+
+    def test_baseline_snapshots_capsule_files_only(self) -> None:
+        """(d) baseline 只含胶囊内文件指纹，不含 capsule.yaml 与点开头文件。"""
+        res = self._start()
+        baseline = res["segment"]["baseline"]
+        self.assertEqual(set(baseline), {"02_方案.md"}, f"baseline 应只含可见的胶囊文件: {baseline}")
+        self.assertEqual(baseline["02_方案.md"],
+                         hashlib.sha256((self.cap / "02_方案.md").read_bytes()).hexdigest()[:16])
+        self.assertNotIn("capsule.yaml", baseline)
+        self.assertNotIn(".hidden.md", baseline)
+
+    def test_baseline_excludes_subdirs_and_missing_files(self) -> None:
+        """baseline 只收文件（不收空目录），递归相对路径带子目录名。"""
+        (self.cap / "sub").mkdir()
+        (self.cap / "sub" / "01_调研.md").write_text("调研\n", encoding="utf-8")
+        (self.cap / "sub" / ".dot.md").write_text("点开头\n", encoding="utf-8")
+        baseline = self._start()["segment"]["baseline"]
+        self.assertEqual(set(baseline), {"02_方案.md", "sub/01_调研.md"})
+
+    def test_touch_refreshes_manager_segment_only(self) -> None:
+        """方案 4.4 判定 7 末行：_touch_open_segment 只刷新 Manager 段或旧段，不碰 role 段。"""
+        role_seg = {
+            "seq": 1, "seg_id": "Tech-1#1", "name": "Architecture→02_方案.md",
+            "startAt": "2026-10-15T09:00:00+08:00", "lastActivityAt": "2026-10-15T09:00:00+08:00",
+            "state": "open", "actor": "role", "role": "Architecture",
+            "dispatch_id": "a" * 32, "trigger": "dispatch", "stage": "02_方案",
+        }
+        self._write_manifest({"task_segments": [role_seg], "seq_next": 2})
+        self._start()
+        uc.touch_task(self.cap, at="2026-10-15T09:30:00+08:00")
+        segs = {s["seg_id"]: s for s in uc.read_segments(self.cap)}
+        self.assertIn("09:30:00", segs["Tech-1#2"]["lastActivityAt"], "Manager 段应被刷新")
+        self.assertIn("09:00:00", segs["Tech-1#1"]["lastActivityAt"], "open role 段不得被刷新")
+
+    def test_touch_without_manager_segment_is_noop(self) -> None:
+        """只有 open role 段时 --touch 不写盘（Manager 段开段前 T9 才接线刷新 role 段）。"""
+        role_seg = {
+            "seq": 1, "seg_id": "Tech-1#1", "name": "Architecture→02_方案.md",
+            "startAt": "2026-10-15T09:00:00+08:00", "lastActivityAt": "2026-10-15T09:00:00+08:00",
+            "state": "open", "actor": "role", "role": "Architecture",
+            "dispatch_id": "a" * 32, "trigger": "dispatch", "stage": "02_方案",
+        }
+        self._write_manifest({"task_segments": [role_seg], "seq_next": 2})
+        before = (self.cap / "capsule.yaml").read_bytes()
+        res = uc.touch_task(self.cap, at="2026-10-15T09:30:00+08:00")
+        self.assertEqual(res["status"], "no_open_segment")
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
+
+    def _legacy_open(self) -> dict:
+        return {"seq": 1, "seg_id": "Tech-1#1", "name": "旧规则开的段",
+                "startAt": "2026-10-15T09:00:00+08:00", "lastActivityAt": "2026-10-15T09:00:00+08:00",
+                "state": "open"}
 
     def _write_manifest(self, data: dict) -> None:
         import yaml

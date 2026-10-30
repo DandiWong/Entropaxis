@@ -23,6 +23,22 @@ from tools import aggregate_worklog, finish_branch, init_capsule, record_iterati
 TOOLS = Path(__file__).resolve().parent.parent / "tools"
 
 
+def _legacy_open_segment(cap: Path, *, name: str, at: str, seg_id: str,
+                         task_id: str, stage: str | None = None) -> None:
+    """无 actor 的 open 旧段夹具（Tech-176 T7 后 start_task 只开 Manager 段）。"""
+    import yaml
+    seg: dict = {"seq": int(seg_id.rsplit("#", 1)[1]), "seg_id": seg_id, "name": name,
+                 "startAt": at, "lastActivityAt": at, "state": "open"}
+    if task_id:
+        seg["taskId"] = task_id
+    if stage:
+        seg["stage"] = stage
+    payload = {"id": task_id, "lifecycle": "active",
+               "task_segments": [seg], "worklogs": [], "seq_next": seg["seq"] + 1}
+    (cap / "capsule.yaml").write_text(
+        yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
 class TestWorklogSystem(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp(prefix="test_worklog_")
@@ -434,8 +450,9 @@ class TestWorklogCliEntry(unittest.TestCase):
     def test_override_stage_reason_via_cli(self):
         """T5 / AC-12：CLI 透传 --stage/--reason，保存 original_stage 与 override_reason。"""
         cap = self._capsule()
-        update_capsule.start_task(cap, name="设计", task_id="Tech-999",
-                                  at="2026-10-15T09:00:00+08:00")
+        # T7 后 start_task 只开 Manager 段（结算门槛属 T8），本条走旧段语义结算
+        _legacy_open_segment(cap, name="设计", at="2026-10-15T09:00:00+08:00",
+                             seg_id="Tech-999#1", task_id="Tech-999")
         update_capsule.end_task(cap, at="2026-10-15T09:07:00+08:00")
         proc = self._cli("update_capsule.py", str(cap), "--override", "Tech-999#1",
                          "--spent", "30m", "--stage", "03_设计", "--reason", "阶段错位")

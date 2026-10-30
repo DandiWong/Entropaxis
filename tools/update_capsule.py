@@ -28,13 +28,17 @@ lint_workspace.py 用 derive() 检查状态落后。
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import functools
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -59,6 +63,9 @@ UNMEASURABLE_SOURCES = ("open", "pending_approval")
 # >24h 只能修正或拆段。判定不取整：8h01m（28860s）不得被归成 8h 而绕过待批。
 AUTO_LIMIT_S = 28800
 APPROVAL_LIMIT_S = 86400
+# 胶囊写锁：所有写函数在「读→改→写」全程持有 `.capsule.yaml.lock` 目录锁，
+# 复用 dispatch_role.ManifestStore 的过期接管逻辑，最长等待 10 秒（Tech-176 T6）。
+CAPSULE_LOCK_WAIT_S = 10.0
 
 
 class ToolError(Exception):
@@ -175,6 +182,82 @@ def _capsule_id(capsule: Path, text: str) -> str:
         return cid
     m = re.search(r"^\d{8}_(.*)$", capsule.name)
     return m.group(1) if m else capsule.name
+
+
+@contextlib.contextmanager
+def _capsule_lock(capsule: Path):
+    """持有 `.capsule.yaml.lock` 目录锁的上下文管理器（Tech-176 T6，方案 4.4 判定 6）。
+
+    复用 dispatch_role.ManifestStore 的目录锁：锁目录同名 `.capsule.yaml.lock`，
+    lease 期内 mkdir 失败即视为占用，过期锁由 ManifestStore 按接管逻辑恢复（归档
+    而不静默删除）。所有写函数在「读→改→写」全程持锁，最长等待 10 秒，超时报
+    ToolError 且不落盘。
+
+    不重入：调用方不得在已持有 ManifestStore 锁时再取本锁。现有调用顺序已满足
+    ——`run_direct` 的 `end_open_task_for`（:1024）在 ManifestStore 释放之后，
+    另两处（`execute_chain` 的 `sync_for` :875、`run_assignment` 的
+    `end_open_task_for` :1104）都在 ManifestStore 获取之前。
+    """
+    store = _manifest_store(capsule / "capsule.yaml")
+    owner = f"update_capsule:{os.getpid()}"
+    deadline = time.monotonic() + CAPSULE_LOCK_WAIT_S
+    while not store.acquire(owner):
+        if time.monotonic() >= deadline:
+            raise ToolError(
+                f"❌ 胶囊写锁等待超时（{CAPSULE_LOCK_WAIT_S:g}s）: {store.lock_dir}\n"
+                "👉 修复建议: 确认没有并发的胶囊写操作后重试；"
+                f"锁租约 {_lease_hint(store)}s 内会自动过期。"
+            )
+        time.sleep(0.05)
+    try:
+        yield store
+    finally:
+        store.release()
+
+
+def _lease_hint(store: Any) -> int:
+    """读 owner.json 的剩余租约秒数，只用于提示语；读不到退 600（ManifestStore 默认租约）。"""
+    try:
+        meta = json.loads((store.lock_dir / "owner.json").read_text(encoding="utf-8"))
+        lease = dt.datetime.fromisoformat(meta["lease_until"])
+        if lease.tzinfo is None:
+            lease = lease.replace(tzinfo=dt.timezone.utc)
+        return max(0, int((lease - dt.datetime.now(dt.timezone.utc)).total_seconds()))
+    except (OSError, ValueError, KeyError, TypeError):
+        return 600
+
+
+def _manifest_store(manifest: Path) -> Any:
+    """延迟导入 dispatch_role.ManifestStore 复用其目录锁（T6）；导入失败即报可行动错误。"""
+    try:
+        from . import dispatch_role
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            import dispatch_role  # type: ignore
+        except ImportError as exc:
+            raise ToolError(
+                "❌ 无法导入 dispatch_role.ManifestStore（胶囊写锁依赖其目录锁）\n"
+                "👉 修复建议: 确认 tools/dispatch_role.py 与本工具同目录且可导入。"
+            ) from exc
+    return dispatch_role.ManifestStore(manifest)
+
+
+def _locked(fn):
+    """把公开写函数的「读→改→写」全程纳入胶囊目录锁（Tech-176 T6，方案 4.4 判定 6）。
+
+    并发写同一 capsule.yaml 时，两个进程都会各自读到旧全文再整份回写，后写者
+    静默丢更新（AC-10）。锁在读之前取、写之后放；超时报 ToolError 且不落盘。
+    无 capsule.yaml 时不取锁，交给被装饰函数报「未找到胶囊清单」。
+    """
+    @functools.wraps(fn)
+    def wrapper(capsule_dir: str | Path, *args: Any, **kwargs: Any):
+        capsule = Path(capsule_dir).expanduser().resolve()
+        if not (capsule / "capsule.yaml").is_file():
+            return fn(capsule_dir, *args, **kwargs)
+        with _capsule_lock(capsule):
+            return fn(capsule_dir, *args, **kwargs)
+    return wrapper
 
 
 def _load_capsule_data(capsule: Path) -> tuple[dict[str, Any], str]:
@@ -443,8 +526,15 @@ def _find_open_segment(segments: list[dict]) -> dict | None:
 
 
 def _touch_open_segment(data: dict[str, Any], at: str | None = None) -> None:
-    """统一活动刷新路径（方案 §3.2 活动生产者）：只改当前 open 段的 lastActivityAt。"""
-    seg = _find_open_segment([s for s in (data.get("task_segments") or []) if isinstance(s, dict)])
+    """统一活动刷新路径（方案 §3.2 活动生产者，Tech-176 T7 判定 7 末行）。
+
+    只刷新本胶囊 open 的 Manager 段或旧段（无 actor）的 lastActivityAt：open 的
+    role 段由调度自己刷新（T9 的 `end_dispatch_segment` 前显式 touch），Manager
+    工具事件不去改它的时间戳，否则会把角色执行时长算进 Manager 段。
+    """
+    seg = next((s for s in (data.get("task_segments") or [])
+                if isinstance(s, dict) and s.get("state") == "open"
+                and s.get("actor") in (None, "manager")), None)
     if seg is not None:
         seg["lastActivityAt"] = normalize_to_cst(at).isoformat() if at else _now_iso()
 
@@ -519,6 +609,7 @@ def _settle_segment(data: dict[str, Any], seg: dict, seconds: int) -> dict | Non
     return None
 
 
+@_locked  # T6：读→改→写全程持胶囊目录锁
 def update_capsule(capsule_dir: str, *, delivered: str | None = None, dry_run: bool = False) -> dict:
     """推进 lifecycle。段结算、worklogs 追加与 lifecycle 变化在同一数据对象上完成后一次原子写入（IMP-C1）。"""
     capsule = Path(capsule_dir).expanduser().resolve()
@@ -574,7 +665,6 @@ def update_capsule(capsule_dir: str, *, delivered: str | None = None, dry_run: b
         # 交付终审时：自动捕获外部依赖的当前 SHA256 指纹，加固防腐封箱
         deps = data.get("dependencies")
         if isinstance(deps, list) and deps:
-            import hashlib  # noqa: PLC0415
             new_deps = []
             for d in deps:
                 is_str = isinstance(d, str)
@@ -663,9 +753,16 @@ def _alloc_seq(data: dict[str, Any]) -> tuple[int, str]:
     return allocated, str(allocated)
 
 
+@_locked  # T6：读→改→写全程持胶囊目录锁
 def start_task(capsule_dir: str | Path, name: str, task_id: str | None = None, stage: str | None = None,
                at: str | None = None, dry_run: bool = False) -> dict:
-    """开启新任务段。"""
+    """开启 Manager 任务段（Tech-176 T7，方案 4.4 判定 7）。
+
+    只开 `actor: manager` 段：角色段由调度自开自结（T9），本入口不再承担角色段。
+    开段即记录 `baseline`——胶囊内全部文件（排除 `capsule.yaml` 与点开头路径）的
+    相对路径 → sha256 前 16 位，供 `--end-task --evidence` 判「有没有产出」（G-7）。
+    同一胶囊已有 open 的 Manager 段或旧段时拒绝；open 的 role 段不阻塞。
+    """
     capsule = Path(capsule_dir).expanduser().resolve()
     data, text = _load_capsule_data(capsule)
     current = _read_key(text, "lifecycle") or "draft"
@@ -676,11 +773,16 @@ def start_task(capsule_dir: str | Path, name: str, task_id: str | None = None, s
     _check_invariants(data)
 
     segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
-    open_segs = [s for s in segments if s.get("state") == "open"]
-    if open_segs:
+    # 方案 4.4 判定 7：Manager 段与旧段同胶囊只允许一个 open；role 段由调度自己结，
+    # 不阻塞 Manager 开工（T7-a）。
+    blocking = [s for s in segments
+                if s.get("state") == "open" and s.get("actor") in (None, "manager")]
+    if blocking:
+        first = blocking[0]
+        kind = "Manager 段" if first.get("actor") == "manager" else "旧段（无 actor）"
         raise ToolError(
-            f"❌ 胶囊已有进行中的任务段: {open_segs[0].get('seg_id')} ({open_segs[0].get('name')})\n"
-            "👉 修复建议: 请先收尾进行中的段（--end-task），再开启新任务段。"
+            f"❌ 胶囊已有进行中的{kind}: {first.get('seg_id')} ({first.get('name')})\n"
+            "👉 修复建议: 请先收尾进行中的段（--end-task --evidence <产出物>），再开启新任务段。"
         )
 
     cid = _capsule_id(capsule, text)
@@ -701,6 +803,9 @@ def start_task(capsule_dir: str | Path, name: str, task_id: str | None = None, s
         "startAt": start_iso,
         "lastActivityAt": start_iso,
         "state": "open",
+        "actor": "manager",
+        "trigger": "manager",
+        "baseline": _capsule_baseline(capsule),
     }
     if task_id:
         seg["taskId"] = task_id
@@ -727,12 +832,37 @@ def start_task(capsule_dir: str | Path, name: str, task_id: str | None = None, s
     }
 
 
+def _capsule_baseline(capsule: Path) -> dict[str, str]:
+    """胶囊内文件指纹快照：{相对路径: sha256 前 16 位}（Tech-176 T7，方案 4.4 判定 7）。
+
+    排除 `capsule.yaml`（自身是计量真源，不能拿自己当产出证据）与一切点开头路径
+    （`.git`、`.capsule.yaml.lock` 等运行时产物）。只收文件，不收目录。
+    """
+    baseline: dict[str, str] = {}
+    for path in sorted(capsule.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(capsule).as_posix()
+        if rel == "capsule.yaml" or rel.startswith(".") or "/." in rel:
+            continue
+        try:
+            baseline[rel] = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        except OSError:
+            continue
+    return baseline
+
+
+@_locked  # T6：读→改→写全程持胶囊目录锁
 def touch_task(capsule_dir: str | Path, at: str | None = None, dry_run: bool = False) -> dict:
-    """刷新进行中任务段的 lastActivityAt。"""
+    """刷新进行中 Manager 段（或旧段）的 lastActivityAt（Tech-176 T7）。
+
+    open 的 role 段不在此列：它的时间戳只由调度写入（T9）。
+    """
     capsule = Path(capsule_dir).expanduser().resolve()
     data, text = _load_capsule_data(capsule)
     segments = [s for s in (data.get("task_segments") or []) if isinstance(s, dict)]
-    open_seg = _find_open_segment(segments)
+    open_seg = next((s for s in segments
+                     if s.get("state") == "open" and s.get("actor") in (None, "manager")), None)
     if not open_seg:
         return {"capsule": str(capsule), "status": "no_open_segment", "dry_run": dry_run}
 
@@ -746,6 +876,7 @@ def touch_task(capsule_dir: str | Path, at: str | None = None, dry_run: bool = F
     return {"capsule": str(capsule), "status": "touched", "segment": open_seg, "dry_run": dry_run}
 
 
+@_locked  # T6：读→改→写全程持胶囊目录锁
 def end_task(capsule_dir: str | Path, trigger: str = "deliver", at: str | None = None,
              inferred: bool = False, evidence: str | None = None, note: str | None = None,
              dry_run: bool = False) -> dict:
@@ -810,6 +941,7 @@ def end_task(capsule_dir: str | Path, trigger: str = "deliver", at: str | None =
     }
 
 
+@_locked  # T6：读→改→写全程持胶囊目录锁
 def approve_segment(capsule_dir: str | Path, seg_id: str, dry_run: bool = False) -> dict:
     """人工批准超过 8h 但不超过 24h 的任务段入账。"""
     capsule = Path(capsule_dir).expanduser().resolve()
@@ -874,6 +1006,7 @@ def approve_segment(capsule_dir: str | Path, seg_id: str, dry_run: bool = False)
     }
 
 
+@_locked  # T6：读→改→写全程持胶囊目录锁
 def unmeasure_segment(capsule_dir: str | Path, seg_id: str, reason: str, dry_run: bool = False) -> dict:
     """显式将待批段标记为不计量。
 
@@ -905,6 +1038,7 @@ def unmeasure_segment(capsule_dir: str | Path, seg_id: str, reason: str, dry_run
     return {"capsule": str(capsule), "status": "unmeasured", "segment": target_seg, "dry_run": dry_run}
 
 
+@_locked  # T6：读→改→写全程持胶囊目录锁
 def fix_segment(capsule_dir: str | Path, seg_id: str, end_at: str, dry_run: bool = False) -> dict:
     """IMP-M1：修正 >24h 异常段的结束时间，随后按新时长重新结算。
 
@@ -956,6 +1090,7 @@ def fix_segment(capsule_dir: str | Path, seg_id: str, end_at: str, dry_run: bool
     }
 
 
+@_locked  # T6：读→改→写全程持胶囊目录锁
 def split_segment(capsule_dir: str | Path, seg_id: str, at: list[str], dry_run: bool = False) -> dict:
     """IMP-M1：把 >24h 异常段按给定时刻拆成连续子段。
 
@@ -1048,6 +1183,7 @@ def split_segment(capsule_dir: str | Path, seg_id: str, at: list[str], dry_run: 
     }
 
 
+@_locked  # T6：读→改→写全程持胶囊目录锁
 def override_worklog(capsule_dir: str | Path, ref: str, spent: float | str | None = None,
                      summary: str | None = None, stage: str | None = None, reason: str | None = None,
                      dry_run: bool = False) -> dict:
@@ -1176,6 +1312,7 @@ def _sync_stage_deliverable_effort(capsule: Path, stage: str, hours: float) -> N
         except OSError:
             pass
 
+@_locked  # T6：读→改→写全程持胶囊目录锁
 def log_time(capsule_dir: str | Path, spent: float | str, stage: str | None = None,
              summary: str | None = None,
              operator: str | None = None, day: str | None = None, dry_run: bool = False,

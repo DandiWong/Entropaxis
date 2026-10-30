@@ -1718,15 +1718,32 @@ class BindPromptTests(TestCase):
 
 
 class WorktimeSettleTests(DispatchRoleTestBase):
-    """工时伴随签署入账：调度成功即结算活跃胶囊的 open 任务段，失败链不结算。"""
+    """工时伴随签署入账：调度成功即结算活跃胶囊的 open 任务段，失败链不结算。
+
+    T9 起角色段由调度自开自结；本轮（T6/T7）调度仍按 `end_open_task_for` 结
+    「当前 open 段」，夹具因此用无 actor 旧段（`start_task` 已只开 Manager 段，
+    其证据门槛属 T8）。
+    """
 
     CST = timezone(timedelta(hours=8))
 
     def _capsule_with_open_seg(self, minutes: int = 40) -> tuple[Path, str]:
         cap = init_capsule.create_capsule(self.ws / "docs", "某主题方案", "Tech-901", "research")
         at = (datetime.now(self.CST) - timedelta(minutes=minutes)).isoformat()
-        seg = update_capsule.start_task(cap, "架构出方案", task_id="Tech-901", stage="01_调研", at=at)
-        return cap, seg["segment"]["seg_id"]
+        seg_id = self._open_legacy_segment(cap, "架构出方案", at=at)
+        return cap, seg_id
+
+    @staticmethod
+    def _open_legacy_segment(cap: Path, name: str, *, at: str, stage: str = "01_调研") -> str:
+        """写一个无 actor 的 open 旧段（T7 后 start_task 只开 Manager 段）。"""
+        import yaml
+        seg = {"seq": 1, "seg_id": "Tech-901#1", "name": name, "taskId": "Tech-901",
+               "stage": stage, "startAt": at, "lastActivityAt": at, "state": "open"}
+        payload = {"id": "Tech-901", "lifecycle": "active",
+                   "task_segments": [seg], "worklogs": [], "seq_next": 2}
+        (cap / "capsule.yaml").write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        return seg["seg_id"]
 
     def _dispatch(self, role: str, profiles: dict, out: Path, capsule: Path | None) -> dict:
         self.write_config(profiles)

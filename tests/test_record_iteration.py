@@ -142,8 +142,14 @@ class LocateAndAtomicTests(unittest.TestCase):
             docs_dir.mkdir(parents=True)
             (docs_dir / "Tasks.md").write_text("- [ ] **Tech-92**: 任务内容\n", encoding="utf-8")
 
-            # 1. 开段并收尾生成 1.5h
-            update_capsule.start_task(cap_dir, name="段1", task_id="Tech-92", at="2026-10-15T09:00:00+08:00")
+            # 1. 旧段开段并收尾生成 1.5h（T7 后 start_task 只开 Manager 段，本条测旧语义）
+            (cap_dir / "capsule.yaml").write_text(
+                "id: Tech-92\nlifecycle: active\nworklogs: []\n"
+                "task_segments:\n"
+                "  - seq: 1\n    seg_id: Tech-92#1\n    name: 段1\n    taskId: Tech-92\n"
+                "    startAt: \"2026-10-15T09:00:00+08:00\"\n"
+                "    lastActivityAt: \"2026-10-15T09:00:00+08:00\"\n"
+                "    state: open\nseq_next: 2\n", encoding="utf-8")
             update_capsule.end_task(cap_dir, at="2026-10-15T10:30:00+08:00")
 
             # 2. 存在任务段时，--time 应被拦截
