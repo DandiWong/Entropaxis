@@ -64,6 +64,117 @@ class SchemaValidatorTests(TestCase):
         self.assertTrue(errs)
         self.assertTrue(any("id" in e for e in errs), errs)
 
+class CapsuleSecondsContractTests(TestCase):
+    """秒级工时契约（Tech-176 T1，方案 4.3）：worklogs/segments/attempts/effort 的新字段与放宽。"""
+
+    def _capsule_schema(self) -> dict:
+        return VS.load_schema("capsule")
+
+    def _p7_sample(self) -> dict:
+        """Tech-175 capsule.yaml 2026-10-29 实测样本（节选，字段值原样）。"""
+        return {
+            "id": "Tech-175", "topic": "Entropaxis团队协作工作台", "mode": "full",
+            "lifecycle": "draft", "seq_next": 7,
+            "worklogs": [
+                {"date": "2026-10-29", "stage": "07_验收报告", "spent": 0.25,
+                 "summary": "方案·Architecture（自动计量入账）", "operator": "Dandi Wong", "ref": "Tech-175#1"},
+                {"date": "2026-10-29", "stage": "03_设计", "spent": 0.5,
+                 "summary": "设计稿R5·Designer（自动计量入账）", "operator": "Dandi Wong",
+                 "ref": "Tech-175#5", "overridden": True, "original_spent": 0.25,
+                 "original_summary": "设计稿R5·Designer（自动计量入账）"},
+            ],
+            "task_segments": [
+                {"seq": 1, "seg_id": "Tech-175#1", "name": "方案·Architecture",
+                 "startAt": "2026-10-29T17:40:00.102471+08:00",
+                 "lastActivityAt": "2026-10-29T17:51:17.047585+08:00",
+                 "state": "logged", "taskId": "Tech-175", "stage": "07_验收报告",
+                 "endAt": "2026-10-29T17:51:17.047585+08:00", "trigger": "dispatch"},
+                {"seq": 5, "seg_id": "Tech-175#5", "name": "设计稿R5·Designer",
+                 "startAt": "2026-10-29T20:50:23.547769+08:00",
+                 "lastActivityAt": "2026-10-29T20:52:04.942442+08:00",
+                 "state": "logged", "taskId": "Tech-175", "stage": "03_设计",
+                 "endAt": "2026-10-29T20:52:04.942442+08:00", "trigger": "dispatch"},
+            ],
+        }
+
+    def test_p7_dispatch_trigger_sample_validates(self) -> None:
+        """P-7 复现：实测样本含 trigger: dispatch，新契约下整体通过。"""
+        capsule = self._p7_sample()
+        errs = VS.validate(capsule, self._capsule_schema())
+        self.assertEqual(errs, [], f"含 trigger: dispatch 的实测样本应整体通过: {errs}")
+        broken = dict(capsule)
+        broken["task_segments"] = [dict(capsule["task_segments"][0], trigger="bogus")]
+        self.assertTrue(any("trigger" in e for e in VS.validate(broken, self._capsule_schema())))
+
+    def test_spent_allows_any_fraction_but_not_zero(self) -> None:
+        """spent 删除 multipleOf 0.25（方案 4.3.1）：0.3 通过，0 仍被拒。"""
+        items = self._capsule_schema()["properties"]["worklogs"]["items"]
+        base = {"date": "2026-10-30", "stage": "misc", "spent": 0.3,
+                "summary": "七分钟按秒派生", "operator": "t", "ref": "Tech-1#1"}
+        self.assertEqual(VS.validate(base, items), [])
+        zero = dict(base, spent=0)
+        self.assertTrue(any("未超过排他下限" in e for e in VS.validate(zero, items)))
+
+    def test_worklog_seconds_actor_role(self) -> None:
+        items = self._capsule_schema()["properties"]["worklogs"]["items"]
+        entry = {"date": "2026-10-30", "stage": "04_实施", "spent": 0.1167, "seconds": 420,
+                "actor": "role", "role": "Builder", "summary": "秒级条目",
+                "operator": "t", "ref": "Tech-1#2"}
+        self.assertEqual(VS.validate(entry, items), [])
+        self.assertTrue(VS.validate(dict(entry, seconds=1.5), items), "seconds 须为整数")
+        self.assertTrue(VS.validate(dict(entry, seconds=0), items), "seconds 须 >= 1")
+        self.assertTrue(VS.validate(dict(entry, actor="alien"), items), "actor 枚举")
+        self.assertTrue(VS.validate(dict(entry, role="Plumber"), items), "role 枚举")
+        self.assertTrue(VS.validate(dict(entry, override_reason=""), items), "override_reason 非空")
+
+    def test_segment_actor_dispatch_and_failed_state(self) -> None:
+        items = self._capsule_schema()["properties"]["task_segments"]["items"]
+        seg = {"seq": 1, "seg_id": "Tech-1#3", "name": "Builder→04_Spec_Tech-176.md",
+               "startAt": "2026-10-30T10:00:00+08:00", "lastActivityAt": "2026-10-30T10:07:00+08:00",
+               "state": "failed", "endAt": "2026-10-30T10:07:00+08:00", "trigger": "dispatch",
+               "actor": "role", "role": "Builder",
+               "dispatch_id": "0123456789abcdef0123456789abcdef",
+               "machine_seconds": 420, "note": "CHAIN_EXHAUSTED"}
+        self.assertEqual(VS.validate(seg, items), [])
+        self.assertTrue(VS.validate(dict(seg, state="bogus"), items), "state 枚举")
+        self.assertTrue(VS.validate(dict(seg, actor="human"), items), "段 actor 只认 role/manager")
+        self.assertTrue(VS.validate(dict(seg, dispatch_id="xyz"), items), "dispatch_id 32 位 hex")
+
+    def test_segment_manager_fields(self) -> None:
+        items = self._capsule_schema()["properties"]["task_segments"]["items"]
+        seg = {"seq": 2, "seg_id": "Tech-1#4", "name": "事务段", "stage": "misc",
+               "startAt": "2026-10-30T11:00:00+08:00", "lastActivityAt": "2026-10-30T11:20:00+08:00",
+               "state": "logged", "endAt": "2026-10-30T11:20:00+08:00", "trigger": "manager",
+               "actor": "manager", "baseline": {"02_方案.md": "0123456789abcdef"},
+               "evidence": "04_Spec_Tech-176.md", "evidence_sha256": "fedcba9876543210",
+               "machine_seconds": 1200, "effective_seconds": 1200}
+        self.assertEqual(VS.validate(seg, items), [])
+        bad = dict(seg, baseline={"02_方案.md": "zz"})
+        self.assertTrue(any("baseline" in e for e in VS.validate(bad, items)), "baseline 值须为 16 位 hex")
+
+    def test_attempt_usage_and_dispatch_id(self) -> None:
+        schema = VS.load_schema("roles_manifest")
+        items = schema["properties"]["assignments"]["items"]["properties"]["attempts"]["items"]
+        base = {"profile": "builder-1", "argv_sha256": "a" * 64,
+                "started_at": "2026-10-30T10:00:00+08:00", "ended_at": "2026-10-30T10:07:00+08:00",
+                "dispatch_id": "0123456789abcdef0123456789abcdef"}
+        self.assertEqual(VS.validate({**base, "usage": "unknown"}, items), [])
+        usage_obj = {"session_id": "s1", "models": {"gpt-x": {"in": 10, "out": 20, "cache_read": 0, "cache_write": 0}},
+                     "cost_usd": 0.01}
+        self.assertEqual(VS.validate({**base, "usage": usage_obj}, items), [])
+        errs = VS.validate({**base, "usage": "n/a"}, items)
+        self.assertTrue(errs, "usage 只认对象或 unknown")
+        errs = VS.validate({**base, "usage": "unknown", "dispatch_id": "nothex"}, items)
+        self.assertTrue(any("dispatch_id" in e for e in errs), "dispatch_id 32 位 hex")
+
+    def test_effort_hms_pattern(self) -> None:
+        """方案 4.3.4：effort 兼容旧 0.75h 与新 H:MM:SS。"""
+        effort = VS.load_schema("front_matter")["properties"]["effort"]
+        for ok in ("1:23:45", "0.75h", "1.5", "2h"):
+            self.assertEqual(VS.validate(ok, effort), [], ok)
+        for bad in ("1:83:45?", "1h23m"):
+            self.assertTrue(VS.validate(bad, effort), bad)
+
 
 class AuditGateFailClosedTests(TestCase):
     CLOSED = "## 问题 1\n级别: Critical\n状态: 已关闭\n"

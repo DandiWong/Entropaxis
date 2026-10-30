@@ -266,7 +266,7 @@ def main() -> int:
     parser.add_argument("--add", nargs=2, metavar=("CATEGORY", "SUMMARY"),
                         help="追加 Changelog 条目，如 --add 修复 \"修正跨租户越权\"")
     parser.add_argument("--mark-done", action="store_true", help="在 Tasks.md 中勾选该任务为完成")
-    parser.add_argument("--time", type=float, metavar="HOURS", help="登记工时并联动更新 Tasks 累计（步长 0.25h）")
+    parser.add_argument("--time", type=float, metavar="HOURS", help="登记工时并联动更新 Tasks 累计（小时，任意小数）")
     parser.add_argument("--from-segments", action="store_true", help="按该 taskId 下全部有效任务段重算并写入 Tasks.md（方案 B 契约）")
     parser.add_argument("--capsule", help="显式指定胶囊目录")
     parser.add_argument("--stage", help="工时所属阶段名，缺省自动推导")

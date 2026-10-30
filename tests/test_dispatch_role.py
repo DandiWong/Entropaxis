@@ -1745,9 +1745,14 @@ class WorktimeSettleTests(DispatchRoleTestBase):
         logs = update_capsule.read_worklogs(cap)
         self.assertEqual(len(logs), 1)
         self.assertEqual(logs[0]["ref"], seg_id)
-        self.assertEqual(logs[0]["spent"], 0.75, "40 分钟按 15 分钟步长取整")
+        segs = update_capsule.read_segments(cap)
+        self.assertEqual([s["state"] for s in segs], ["logged"])
+        # 秒级化（Tech-176 T2）：约 40 分钟不再取整到 0.75h，spent 由整数秒派生
+        span_s = round((datetime.fromisoformat(segs[0]["endAt"])
+                        - datetime.fromisoformat(segs[0]["startAt"])).total_seconds())
+        self.assertEqual(logs[0]["spent"], update_capsule._seconds_to_spent(span_s))
+        self.assertAlmostEqual(logs[0]["spent"], 0.6667, delta=0.01)
         self.assertIn("自动计量入账", logs[0]["summary"])
-        self.assertEqual([s["state"] for s in update_capsule.read_segments(cap)], ["logged"])
 
     def test_capsule_hint_settles_when_deliverable_outside_capsule(self) -> None:
         """代码型产出没有落在胶囊内的交付物文件，只能靠 --capsule 定位活跃胶囊。"""
@@ -1758,7 +1763,12 @@ class WorktimeSettleTests(DispatchRoleTestBase):
             self.ws / "out" / "02_方案.md", cap)
 
         self.assertEqual(receipt["worklog_refs"], [seg_id])
-        self.assertEqual(update_capsule.worklog_total(cap), 0.25, "20 分钟按 15 分钟步长取整")
+        # 秒级化（Tech-176 T2）：约 20 分钟不再取整到 0.25h，spent 由整数秒派生
+        seg20 = update_capsule.read_segments(cap)[0]
+        span_s = round((datetime.fromisoformat(seg20["endAt"])
+                        - datetime.fromisoformat(seg20["startAt"])).total_seconds())
+        self.assertEqual(update_capsule.worklog_total(cap), update_capsule._seconds_to_spent(span_s))
+        self.assertAlmostEqual(update_capsule.worklog_total(cap), 0.3333, delta=0.01)
 
     def test_failed_dispatch_leaves_segment_open(self) -> None:
         cap, _ = self._capsule_with_open_seg()

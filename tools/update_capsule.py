@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import math
 import os
 import re
 import subprocess
@@ -56,9 +55,10 @@ WORKLOG_DEFAULT_INDENT = "  "
 SEGMENT_STATES = ("open", "pending_approval", "logged", "unmeasured")
 # 允许显式标记为不计量的源状态（IMP-C3）：logged 已有 worklog，撤段会破坏 I-3。
 UNMEASURABLE_SOURCES = ("open", "pending_approval")
-# 时长门槛按原始分钟判定，先判门槛再取整（方案 §3.3）。
-AUTO_LIMIT_MIN = 480.0      # ≤8h 自动入账
-APPROVAL_LIMIT_MIN = 1440.0  # 8h～24h 待人工批准；>24h 只能修正或拆段
+# 时长门槛按原始时长判定（方案 §3.3；判定不取整。门槛单位改秒由 T3 承接）：
+# ≤8h 自动入账；8h～24h 待人工批准；>24h 只能修正或拆段。
+AUTO_LIMIT_MIN = 480.0
+APPROVAL_LIMIT_MIN = 1440.0
 
 
 class ToolError(Exception):
@@ -85,13 +85,51 @@ def normalize_to_cst(iso_str: str) -> dt.datetime:
         return d.replace(tzinfo=TZ_CST)
     return d.astimezone(TZ_CST)
 
+# 工时单位换算（Tech-176 T2）：真源是整数秒，spent 由它派生。
+SECONDS_PER_HOUR = 3600
+MAX_WORKLOG_SECONDS = 86400  # 与 schema 的 seconds/spent 上限一致（24h）
+_DUR_HMS_RE = re.compile(r"^(\d+):([0-5]\d):([0-5]\d)$")
+_DUR_COMBO_RE = re.compile(r"^(\d+(?:\.\d+)?h)?(\d+(?:\.\d+)?m)?(\d+(?:\.\d+)?s)?$", re.IGNORECASE)
 
-def q_minutes(m: float) -> float:
-    """取整函数 q(m) = max(0.25, floor(m / 15 + 0.5) / 4)（仅当 m > 0）。"""
-    if m <= 0:
-        raise ToolError(f"❌ 时长必须大于 0 分钟 (m={m})")
-    steps = math.floor(m / 15.0 + 0.5)
-    return max(0.25, steps / 4.0)
+
+def parse_duration(text: str) -> int:
+    """时长文本 → 整数秒（Tech-176 T2，方案 4.4 判定 1）。
+
+    接受三种写法：纯数字按小时（兼容 --log-time 1.5）；h/m/s 任意组合（1h23m、45m、30s）；
+    H:MM:SS（01:23:45）。结果必须落在 1..86400 秒，否则 ToolError（"0"、"-1"、"1x"、"25h" 均报错）。
+    """
+    s = str(text).strip()
+    if not s:
+        raise ToolError("❌ 时长不能为空\n👉 修复建议: 传 1.5（小时）、1h23m 或 01:23:45。")
+    m = _DUR_HMS_RE.match(s)
+    if m:
+        seconds = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+    elif re.fullmatch(r"\d+(?:\.\d+)?", s):
+        seconds = int(round(float(s) * SECONDS_PER_HOUR))
+    else:
+        m = _DUR_COMBO_RE.match(s)
+        if not m or not any(m.groups()):
+            raise ToolError(f"❌ 时长格式不合法: {text!r}\n👉 修复建议: 传 1.5（小时）、1h23m 或 01:23:45。")
+        h, mi, sec = (float(x.rstrip("hms")) if x else 0.0 for x in m.groups())
+        seconds = int(round(h * 3600 + mi * 60 + sec))
+    if seconds < 1 or seconds > MAX_WORKLOG_SECONDS:
+        raise ToolError(
+            f"❌ 时长超出范围: {text!r}（换算 {seconds}s，须 1..{MAX_WORKLOG_SECONDS}s，即 >0 且 ≤24h）"
+        )
+    return seconds
+
+
+def fmt_hms(seconds: int) -> str:
+    """整数秒 → H:MM:SS（时不过零填充，分秒两位）：5025 → '1:23:45'。"""
+    seconds = int(seconds)
+    if seconds < 0:
+        raise ToolError(f"❌ 秒数不能为负: {seconds}")
+    return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+
+def _seconds_to_spent(seconds: int) -> float:
+    """整数秒 → 小时（派生 spent 的唯一定义）：round(seconds / 3600, 4)。"""
+    return round(seconds / SECONDS_PER_HOUR, 4)
 
 
 def _import_validate_schema():
@@ -402,11 +440,13 @@ def _close_segment(capsule: Path, data: dict[str, Any], seg: dict, end_dt: dt.da
 def _settle_segment(capsule: Path, data: dict[str, Any], seg: dict, minutes: float) -> dict | None:
     """按原始时长把已收尾段结算为 logged / pending_approval，返回新 worklog（若有）。
 
-    门槛按原始分钟判定，先判门槛再取整（方案 §3.3）：481 分钟不能因取整成 8h 而绕过待批。
+    门槛按原始时长判定（方案 §3.3）：481 分钟不能被归成 8h 而绕过待批。
+    spent 由整数秒派生（round(秒/3600, 4)），不再取整到 0.25h（Tech-176 T2）；
+    段上的 machine_seconds/effective_seconds 字段与 actor 结算由 T3 承接。
     """
     if minutes <= AUTO_LIMIT_MIN:
         seg["state"] = "logged"
-        spent = q_minutes(minutes)
+        spent = _seconds_to_spent(max(1, round(minutes * 60.0)))
         stage = seg.get("stage") or _default_stage(capsule)[0]
         operator = _default_operator()
         entry = {
@@ -745,7 +785,7 @@ def approve_segment(capsule_dir: str | Path, seg_id: str, dry_run: bool = False)
         )
 
     target_seg["state"] = "logged"
-    spent = q_minutes(duration_m)
+    spent = _seconds_to_spent(max(1, round(duration_m * 60.0)))
     stage = target_seg.get("stage") or _default_stage(capsule)[0]
     operator = _default_operator()
     work_date = normalize_to_cst(target_seg["startAt"]).strftime("%Y-%m-%d")
@@ -976,8 +1016,8 @@ def override_worklog(capsule_dir: str | Path, ref: str, spent: float | None = No
         target_log["original_summary"] = target_log.get("summary", "")
 
     if spent is not None:
-        if spent <= 0 or spent > 24 or (spent % 0.25) != 0:
-            raise ToolError(f"❌ 工时不合法: {spent}（须 > 0、≤ 24 且为 0.25 的倍数）")
+        if spent <= 0 or spent > 24:
+            raise ToolError(f"❌ 工时不合法: {spent}（须 > 0、≤ 24）")
         target_log["spent"] = spent
     if summary is not None:
         summary_clean = str(summary).strip()
@@ -1085,7 +1125,7 @@ def log_time(capsule_dir: str | Path, spent: float, stage: str | None = None, su
     try:
         hours = float(spent)
     except (TypeError, ValueError):
-        raise ToolError(f"❌ 工时不合法: {spent!r}\n👉 修复建议: 传数字（如 1.5），步长 0.25h。") from None
+        raise ToolError(f"❌ 工时不合法: {spent!r}\n👉 修复建议: 传数字小时（如 1.5 或 0.3），任意小数均可（秒级化后无步长限制）。") from None
 
     # 分配持久 ref
     cid = _capsule_id(capsule, text)
@@ -1189,7 +1229,7 @@ def main() -> int:
     parser.add_argument("--delivered", nargs="?", const=date.today().isoformat(), metavar="YYYY-MM-DD",
                         help="标记已交付（代码合入主干且全量测试通过），省略日期取今天")
     parser.add_argument("--log-time", type=float, metavar="HOURS",
-                        help="登记工时（小时，0 < spent <= 24，步长 0.25h）")
+                        help="登记工时（小时，0 < spent <= 24，任意小数；时长文本语法由 T4 承接）")
     parser.add_argument("--stage", help="工时所属阶段（如 02_方案 或 misc）")
     parser.add_argument("--summary", help="工时摘要（做了什么，≤120 字）")
     parser.add_argument("--operator", help="登记人（缺省读 git user.name）")

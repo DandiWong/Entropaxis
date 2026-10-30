@@ -3,7 +3,7 @@
 
 严格覆盖 02_方案.md 与 04_Spec_Tech-120.md 的可测验收条件 AC-1 ~ AC-5：
   AC-1: init_capsule 生成含空 worklogs 契约，Schema 校验通过，反向拦截未加引号或格式错误日期；
-  AC-2: update_capsule.log_time 正常登记、默认重复拒绝、--idempotent 幂等放行，严格拒绝 0/-1/0.3/25/超长摘要；
+  AC-2: update_capsule.log_time 正常登记、默认重复拒绝、--idempotent 幂等放行，严格拒绝 0/-1/超上限/超长摘要；
   AC-3: record_iteration 联动、Tasks 真源重算与中途崩溃重跑幂等恢复；
   AC-4: finish_branch 注入 Task-ID 与 Time-Spent Trailer；
   AC-5: aggregate_worklog 两阶段聚合、窗外真源/窗内 Trailer 抑制、孤儿 commit 补位与纯只读性。
@@ -85,12 +85,11 @@ class TestWorklogSystem(unittest.TestCase):
         self.assertEqual(res_idem["status"], "existing")
         self.assertEqual(res_idem["total"], 1.5)
 
-        # 4. 边界非法值拒绝
+        # 4. 边界非法值拒绝（0.25 步长随秒级化契约删除，0.3 已合法，见 TestDurationUtils）
         invalid_cases = [
             (0, "spent 须 > 0"),
             (-1, "spent 须 > 0"),
-            (0.3, "不是 0.25 的整数倍"),
-            (25, "spent 须 > 0、≤ 24"),
+            (24.5, "spent 须 > 0、≤ 24"),
         ]
         for bad_spent, desc in invalid_cases:
             with self.assertRaises(update_capsule.ToolError, msg=f"应拒绝 spent={bad_spent}"):
@@ -273,6 +272,40 @@ class TestWorklogSystem(unittest.TestCase):
 
         md_task = aggregate_worklog.format_markdown(data, by="task")
         self.assertIn("| Task-ID | 主题 |", md_task)
+
+
+class TestDurationUtils(unittest.TestCase):
+    """秒级化时长工具（Tech-176 T2，方案 4.4 判定 1）：parse_duration / fmt_hms / _seconds_to_spent。"""
+
+    def test_parse_duration_accepted_forms(self):
+        cases = {
+            "1.5": 5400, "1h23m": 4980, "01:23:45": 5025, "45s": 45,
+            "45m": 2700, "1h23m45s": 5025, "0.75": 2700, "24h": 86400,
+            "1:00:00": 3600, "0:00:01": 1,
+        }
+        for text, seconds in cases.items():
+            self.assertEqual(update_capsule.parse_duration(text), seconds, text)
+
+    def test_parse_duration_rejects(self):
+        for bad in ("0", "-1", "1x", "25h", "", "abc", "1h 23m", "12:60:00", "0s", "24:00:01", "1:2:3"):
+            with self.assertRaises(update_capsule.ToolError, msg=bad):
+                update_capsule.parse_duration(bad)
+
+    def test_fmt_hms(self):
+        self.assertEqual(update_capsule.fmt_hms(5025), "1:23:45")
+        self.assertEqual(update_capsule.fmt_hms(45), "0:00:45")
+        self.assertEqual(update_capsule.fmt_hms(3600), "1:00:00")
+        self.assertEqual(update_capsule.fmt_hms(420), "0:07:00")
+
+    def test_seconds_to_spent(self):
+        self.assertEqual(update_capsule._seconds_to_spent(420), 0.1167)
+        self.assertEqual(update_capsule._seconds_to_spent(5400), 1.5)
+        self.assertEqual(update_capsule._seconds_to_spent(2400), 0.6667)
+        self.assertEqual(update_capsule._seconds_to_spent(86400), 24.0)
+
+    def test_q_minutes_removed(self):
+        """q_minutes 及 0.25h 步长契约已删除（方案一·1），不得残留可用入口。"""
+        self.assertFalse(hasattr(update_capsule, "q_minutes"))
 
 
 class TestWorklogCliEntry(unittest.TestCase):

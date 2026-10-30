@@ -147,6 +147,38 @@
                   "$comment": "本次执行所依据的输入指纹。assignment 上的 target_* 只反映最新一跳，依赖历史随执行记录走。",
                   "type": "string",
                   "pattern": "^[0-9a-f]{64}$"
+                },
+                "dispatch_id": {
+                  "$comment": "run 级调度 ID（uuid4 hex）；一次 run 的所有 attempt 共用，与胶囊任务段的 dispatch_id 相同。",
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{32}$"
+                },
+                "usage": {
+                  "$comment": "执行过的 attempt 必带：能解析写 parse_usage 输出的对象（session_id/models/cost_usd），超时、解析失败或无 agent 的 profile 写 \"unknown\"；未执行的（NOT_EXECUTABLE、verify:、ack:、configured→local）不写。",
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "session_id": { "type": "string" },
+                        "models": {
+                          "type": "object",
+                          "patternProperties": {
+                            ".+": {
+                              "type": "object",
+                              "properties": {
+                                "in": { "type": "integer", "minimum": 0 },
+                                "out": { "type": "integer", "minimum": 0 },
+                                "cache_read": { "type": "integer", "minimum": 0 },
+                                "cache_write": { "type": "integer", "minimum": 0 }
+                              }
+                            }
+                          }
+                        },
+                        "cost_usd": { "type": ["number", "null"] }
+                      }
+                    },
+                    { "type": "string", "enum": ["unknown"] }
+                  ]
                 }
               }
             }

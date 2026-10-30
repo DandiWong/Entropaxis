@@ -30,11 +30,46 @@
           "startAt": { "type": "string", "format": "date-time" },
           "endAt": { "type": "string", "format": "date-time" },
           "lastActivityAt": { "type": "string", "format": "date-time" },
-          "trigger": { "type": "string", "enum": ["deliver", "delivered", "uat", "verbal", "switch", "inferred"] },
+          "trigger": { "type": "string", "enum": ["deliver", "delivered", "uat", "verbal", "switch", "inferred", "dispatch", "manager"] },
           "inferred": { "type": "boolean" },
           "evidence": { "type": "string" },
-          "state": { "type": "string", "enum": ["open", "pending_approval", "logged", "unmeasured"] },
-          "note": { "type": "string" }
+          "state": { "type": "string", "enum": ["open", "pending_approval", "logged", "unmeasured", "failed"] },
+          "note": { "type": "string" },
+          "actor": {
+            "$comment": "执行主体：role=角色调度段（自开自结）、manager=Manager 事务段；缺省=升级前旧段，按旧语义收尾。",
+            "type": "string",
+            "enum": ["role", "manager"]
+          },
+          "role": {
+            "$comment": "actor=role 时必带（update_capsule 写前校验）；取值同 roles_manifest.schema.json 的 role 枚举。",
+            "type": "string",
+            "enum": ["Architecture", "Researcher", "Designer", "Builder", "Reviewer", "Maintainer", "Reporter"]
+          },
+          "dispatch_id": {
+            "$comment": "run 级调度 ID（uuid4 hex），actor=role 时必带；同一胶囊内唯一。",
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "baseline": {
+            "$comment": "Manager 段开段时的胶囊文件指纹：{相对路径: sha256 前 16 位}；不含 capsule.yaml 与点开头路径。",
+            "type": "object",
+            "patternProperties": { ".+": { "type": "string", "pattern": "^[0-9a-f]{16}$" } }
+          },
+          "evidence_sha256": {
+            "$comment": "Manager 段结段时证据文件的 sha256 前 16 位，须与 baseline 中不同。",
+            "type": "string",
+            "pattern": "^[0-9a-f]{16}$"
+          },
+          "machine_seconds": {
+            "$comment": "段墙钟时长（秒）：max(1, round(endAt − startAt))，结段时写入。",
+            "type": "integer",
+            "minimum": 1
+          },
+          "effective_seconds": {
+            "$comment": "有效秒（角色段扣失败 attempt、Manager 段扣重叠与尾部空档），只有 actor 段有；门槛判定与入账都读它。",
+            "type": "integer",
+            "minimum": 0
+          }
         }
       }
     },
@@ -47,13 +82,42 @@
         "properties": {
           "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
           "stage": { "type": "string", "pattern": "^(\\d{2}_\\S+|misc)$" },
-          "spent": { "type": "number", "exclusiveMinimum": 0, "maximum": 24, "multipleOf": 0.25 },
+          "spent": {
+            "$comment": "派生字段：round(seconds/3600, 4)；旧条目无 seconds 时为唯一真源（0.25 步长已随秒级化删除）。",
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 24
+          },
+          "seconds": {
+            "$comment": "工时真源（整数秒，等于段的 effective_seconds）；schema 可选、工具新写必带，旧条目由汇总补算。",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400
+          },
+          "actor": {
+            "$comment": "执行主体；旧条目缺省视为「未标注」，汇总不推断。",
+            "type": "string",
+            "enum": ["role", "manager", "human"]
+          },
+          "role": {
+            "$comment": "actor=role 时必带（update_capsule 写前校验）。",
+            "type": "string",
+            "enum": ["Architecture", "Researcher", "Designer", "Builder", "Reviewer", "Maintainer", "Reporter"]
+          },
           "summary": { "type": "string", "minLength": 1, "maxLength": 120 },
           "operator": { "type": "string", "minLength": 1 },
           "ref": { "type": "string", "pattern": "^[A-Za-z0-9_-]+#\\d+$" },
           "overridden": { "type": "boolean" },
-          "original_spent": { "type": "number", "exclusiveMinimum": 0, "maximum": 24, "multipleOf": 0.25 },
-          "original_summary": { "type": "string" }
+          "original_spent": { "type": "number", "exclusiveMinimum": 0, "maximum": 24 },
+          "original_seconds": {
+            "$comment": "首次覆盖时保存（无 seconds 则按 round(original_spent×3600) 补算）。",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400
+          },
+          "original_stage": { "type": "string", "pattern": "^(\\d{2}_\\S+|misc)$" },
+          "original_summary": { "type": "string" },
+          "override_reason": { "type": "string", "minLength": 1, "maxLength": 200 }
         }
       }
     },

@@ -141,15 +141,10 @@ class UpdateCapsuleTests(unittest.TestCase):
         self.assertEqual(bad.returncode, 1)
         self.assertIn("👉", bad.stderr)
 
-    def test_task_segment_lifecycle_and_rounding(self) -> None:
-        # 1. 验证取整算法 q_minutes
-        self.assertEqual(uc.q_minutes(7.0), 0.25)
-        self.assertEqual(uc.q_minutes(7.5), 0.25)
-        self.assertEqual(uc.q_minutes(8.0), 0.25)
-        self.assertEqual(uc.q_minutes(22.5), 0.5)
-        self.assertEqual(uc.q_minutes(479.0), 8.0)
-        self.assertEqual(uc.q_minutes(480.0), 8.0)
-        self.assertEqual(uc.q_minutes(481.0), 8.0)
+    def test_task_segment_lifecycle(self) -> None:
+        # 1. 秒级派生（Tech-176 T2）：q_minutes 已删除，spent 由整数秒派生
+        self.assertFalse(hasattr(uc, "q_minutes"))
+        self.assertEqual(uc._seconds_to_spent(4500), 1.25)
 
         # 2. 开段 --start-task
         res_start = uc.start_task(self.cap, name="功能开发", task_id="Tech-1", at="2026-10-15T09:00:00+08:00")
