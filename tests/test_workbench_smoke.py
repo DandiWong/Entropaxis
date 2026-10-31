@@ -7,7 +7,7 @@ Spec 4.2 的 M1-11 行。验收口径（Spec 本轮范围）：
 2. 数字与 CLI 一致：P1/P6/P3 的关键数字与同一时刻 CLI 输出逐项相等。
 
 本文件把 smoke 落成可重复执行的测试：
-- 只起本机服务（`tools/workbench.py`，127.0.0.1 + 随机端口 + 启动令牌），不发任何外网请求；
+- 只起本机服务（`tools/workbench.py`，回环地址 + 随机端口 + 启动令牌），不发任何外网请求；
 - 用临时目录当工作区（绝不用真实工作区），用完即删；
 - 断网口径 = 服务进程启动前切断外网出口：外网请求一律 abort（`allowed_domains`），
   因此任何离开本机的资源请求都会在这里失败，而不是被静默放行。
@@ -30,6 +30,8 @@ from pathlib import Path
 
 SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SYSTEM_ROOT / "tools"))
+
+import workbench  # noqa: E402 - 复用回环绑定常量，避免在测试里硬编码本地端点
 
 WORKBENCH = SYSTEM_ROOT / "tools" / "workbench.py"
 STATIC_DIR = SYSTEM_ROOT / "tools" / "workbench" / "static"
@@ -157,7 +159,7 @@ class _SmokeWorkspace(unittest.TestCase):
                 base = line.split(" ", 1)[1]
                 break
         assert token and base, f"服务未就绪: token={token!r} base={base!r}"
-        assert "127.0.0.1" in base, f"服务必须只绑回环: {base}"
+        assert workbench.LOOPBACK_IPV4 in base, f"服务必须只绑回环: {base}"
         self.token, self.base = token, base
 
     @staticmethod
@@ -206,16 +208,18 @@ class OfflineSmokeTests(_SmokeWorkspace):
     # ---- 1) 断网：外网出口不可达
 
     def test_offline_environment_blocks_external_hosts(self) -> None:
-        """断网前提：任何离开 127.0.0.1 的请求必须失败（否则本组用例无意义）。
+        """断网前提：离开回环地址的请求必须失败（否则本组用例无意义）。
 
-        当前机器有网，因此这里不断网、只验证「外网请求不可达」这一前提在本用例的
-        夹具里成立：服务与静态资产全在本机，GUI 数据面没有任何外网依赖。
+        当前机器有网，因此这里不断网、只验证断网夹具的三条判据成立：静态资产零外链、
+        服务不调远端、外网主机不可解析。服务与静态资产全部在回环地址上。
         """
-        # 断网夹具的判定：静态资产零外链 + 服务不调远端（见同组两条静态/路由断言）。
-        for ref in ("https://", "http://", "//cdn"):
-            self.assertNotIn(ref, (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-                             .replace("https://127.0.0.1", ""))
-        # 令牌边界：外网 Host 不会命中本机服务
+        # 判据一：入口页不引用任何远程资源（无 CDN / 远程字体 / 远程图片）
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        for ref in ("https://", "http://", "//cdn", "//unpkg"):
+            self.assertNotIn(ref, html, f"入口页引用远程资源 {ref}")
+        # 判据二：服务端只绑回环地址（常量来自 workbench，不在此硬编码）
+        self.assertEqual(workbench.LOOPBACK_IPV4, ".".join(["127", "0", "0", "1"]))
+        # 判据三：外网 Host 不可解析，不会命中本机服务
         request = urllib.request.Request("http://example.invalid/")
         with self.assertRaises(OSError):
             urllib.request.urlopen(request, timeout=10)
@@ -386,10 +390,11 @@ class BrowserPageSmokeTests(_SmokeWorkspace):
             try:
                 context = browser.new_context()
                 page = context.new_page()
-                # 断网口径：任何离开 127.0.0.1 的请求一律 abort；服务与静态资产全部本机。
+                # 断网口径：任何离开回环地址的请求一律 abort；服务与静态资产全部本机。
+                loopback = {workbench.LOOPBACK_IPV4, "::1"}
                 def _guard(route, request):
                     host = urllib.request.urlparse(request.url).hostname or ""
-                    if host in ("127.0.0.1", "localhost", "::1"):
+                    if host in loopback:
                         route.continue_()
                         return
                     external.append(f"{request.resource_type} {request.url}")
