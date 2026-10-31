@@ -2067,6 +2067,35 @@ class WorktimeSettleTests(DispatchRoleTestBase):
         self.assertEqual(segs[0]["actor"], "manager")
         self.assertEqual(update_capsule.read_worklogs(cap), [])
 
+    def test_segment_close_failure_warns_and_keeps_exit_code(self) -> None:
+        """AC-16 / IM-5：结段写失败 → stderr ⚠️（含 dispatch_id 与 --unmeasure-segment 处置）、
+        段保持 open、不写 worklog、outcome 与退出码不变。删除该警告分支时本用例必须失败。"""
+        cap = self._capsule()
+        self.write_config({"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}})
+        self.ok_body.write_text(proposal_doc(), encoding="utf-8")
+        out = cap / "02_方案.md"
+
+        # 开段真实执行、结段注入写盘失败（返回 None）：这正是真实结段失败的接口表现
+        with mock.patch.object(update_capsule, "start_dispatch_segment",
+                               side_effect=update_capsule.start_dispatch_segment), \
+                mock.patch.object(update_capsule, "end_dispatch_segment", return_value=None):
+            buf, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+                res = dr.run_direct_result(self.ws, "Architecture", prompt=str(out), out=out,
+                                           owner="t", capsule=cap)
+        self.assertEqual((res["outcome"], res["exit"]), ("succeeded", dr.EXIT_OK),
+                         "结段失败不改变判定与退出码（方案 9.4）")
+        self.assertEqual(res["worklog_refs"], [])
+        segs = update_capsule.read_segments(cap)
+        self.assertEqual(len(segs), 1)
+        self.assertEqual(segs[0]["state"], "open", "结段失败段停在 open，由人工处置")
+        self.assertEqual(update_capsule.read_worklogs(cap), [])
+        warning = err.getvalue()
+        self.assertIn("⚠️", warning)
+        self.assertIn("结段失败", warning)
+        self.assertIn(segs[0]["dispatch_id"], warning, "告警须含 dispatch_id")
+        self.assertIn("--unmeasure-segment", warning, "告警须含人工处置命令")
+
 
 class RunFileLifecycleTests(DispatchRoleTestBase):
     """运行态文件（RUN_DIR/<dispatch_id>.json）全生命周期测试。"""
