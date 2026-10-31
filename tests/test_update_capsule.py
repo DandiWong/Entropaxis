@@ -924,6 +924,21 @@ class ManagerEndSegmentTests(unittest.TestCase):
         # 区间 09:00–09:20 共 1200s，open role 段 09:10 起无 endAt 视为持续到 end → 重叠 600s
         self.assertEqual(res["segment"]["effective_seconds"], 600)
 
+    def test_sub_second_span_without_role_segments_reports_zero_span(self) -> None:
+        """IM-6：区间四舍五入为 0 秒且无 role 段 → 诊断写「不足 1 秒」，不误报角色重叠。"""
+        self._start(at="2026-10-15T09:00:00+08:00",
+                    last_activity="2026-10-15T09:00:00+08:00")
+        self._evidence()
+        # 正数 100ms 舍入到 0 秒：没有任何 role 段，真实原因是零区间
+        with self._freeze("2026-10-15T09:00:00.100000+08:00"):
+            res = uc.end_task(self.cap, evidence="04_Spec_Tech-1.md")
+        seg = res["segment"]
+        self.assertEqual(seg["state"], "unmeasured", "零区间不入账")
+        self.assertIn("不足 1 秒", seg["note"])
+        self.assertNotIn("重叠", seg["note"], "无 role 段时不得误报为角色调度重叠")
+        self.assertEqual(self._worklogs(), [])
+        self.assertNotIn("machine_seconds", seg)
+
     # ---------- (e) 尾部空档 ----------
 
     def test_idle_gap_over_threshold_truncates_to_last_activity(self) -> None:

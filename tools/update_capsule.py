@@ -1153,6 +1153,10 @@ def _end_manager_task(capsule: Path, data: dict[str, Any], text: str, seg: dict,
     overlap_s = _role_segment_overlap_seconds(segments, start_dt, end_dt)
     effective = span_s - overlap_s
     if effective <= 0:
+        if span_s <= 0:
+            # 区间本身不足 1 秒（如 100ms 舍入到 0）：与角色重叠无关，不误报
+            return finish("unmeasured",
+                          reason=f"区间不足 1 秒、不可计量（区间 {span_s}s）")
         return finish("unmeasured",
                       reason=f"全部与角色调度重叠（区间 {span_s}s，重叠 {overlap_s}s）")
     seg["machine_seconds"] = max(1, span_s)
