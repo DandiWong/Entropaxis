@@ -888,11 +888,15 @@ def _failed_attempt_seconds(attempts: list[dict[str, Any]]) -> int:
 def _run_with_segment(cwd: Path, role: str, deliverable: Path | None, capsule: Path | None,
                       execute: Any, dispatch_id: str = "",
                       lock_out: Path | None = None,
-                      release_deferred: bool = False) -> tuple[dict[str, Any], dict[str, Any] | None]:
+                      release_deferred: bool = False,
+                      has_external_chain: bool = True) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """两条 run 路径共用的「开段 → 执行 → 结段」接线（Tech-176 T10，方案 4.2）。
 
     调度自己开自己的段、自己结自己的段，段上写 run 级 dispatch_id。chain 为空
-    （LOCAL_CARRY）不开段（D-7）。结段失败只向 stderr 打 ⚠️，不改 outcome 与退出码
+    （LOCAL_CARRY）不开段（D-7）：`has_external_chain=False` 表示本次 run 没有外置执行链
+    （`preferences: []` / `configured→local`），没有外置角色劳动可计量——即使 `--verify`
+    通过也不开段、不写 worklog，只向 stderr 告警「本地承载·<角色>，无有效工时」，由
+    Manager 段计量（方案 D-7）。结段失败只向 stderr 打 ⚠️，不改 outcome 与退出码
     （方案 4.2 第 7 步、第六节）。工时写入的任何失败都不阻断调度（9.4）。
     `dispatch_id` 由调用方给定时与 `--out` 查重锁共用同一个 ID（T11）。
     `lock_out` 给定时本函数持有该 `--out` 的查重锁：异常路径必定释放（否则残留锁
@@ -910,9 +914,15 @@ def _run_with_segment(cwd: Path, role: str, deliverable: Path | None, capsule: P
             _release_out(lock_out, run_dispatch_id)
 
     try:
+        result, attempts = execute(run_dispatch_id)
+        if not has_external_chain:
+            # D-7：没有外置执行就没有机时。校验通过只是本地判据，不构成外置角色劳动。
+            print(f"⚠️ 本地承载·{role}，无有效工时：本次调度无外置执行链（preferences 为空），"
+                  f"未开角色段、未写 worklog；如需计量请由 Manager 段记录（dispatch_id="
+                  f"{run_dispatch_id}）。", file=sys.stderr)
+            return result, None
         opened = update_capsule.start_dispatch_segment(
             capsule, path=deliverable, dispatch_id=run_dispatch_id, role=role, deliverable=deliverable)
-        result, attempts = execute(run_dispatch_id)
         if opened is None:
             # 开段失败（无胶囊、终态、锁超时、数据异常）：静默，不影响判定
             return result, None
@@ -1196,7 +1206,7 @@ def run_assignment_result(cwd: Path, assignment_id: str, prompt: str, ack: str |
 
     chain_result, ended = _run_with_segment(cwd, role, deliverable, seg_capsule, run_chain,
                                             dispatch_id=run_dispatch_id, lock_out=deliverable,
-                                            release_deferred=True)
+                                            release_deferred=True, has_external_chain=bool(chain))
     attempts = chain_result.get("attempts") or []
     failure, succeeded = chain_result["failure_code"], chain_result["succeeded"]
 
@@ -1331,7 +1341,7 @@ def run_direct_result(cwd: Path, role: str, prompt: str, out: Path | None, owner
 
     chain_result, ended = _run_with_segment(cwd, role, deliverable, seg_capsule, run_chain,
                                             dispatch_id=run_dispatch_id, lock_out=deliverable,
-                                            release_deferred=True)
+                                            release_deferred=True, has_external_chain=bool(chain))
     failure, attempts, succeeded = chain_result["failure_code"], chain_result["attempts"], chain_result["succeeded"]
     verify_result = chain_result["verify_result"]
 

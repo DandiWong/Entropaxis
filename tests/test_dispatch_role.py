@@ -1986,6 +1986,87 @@ class WorktimeSettleTests(DispatchRoleTestBase):
         self.assertNotIn("actor", res["entry"], "旧段结算不推断执行主体")
         self.assertEqual(res["entry"]["seconds"], 420)
 
+    # ---------- D-7：空执行链（LOCAL_CARRY）不开角色段 ----------
+
+    def _empty_chain_config(self, verify_profile: str | None) -> None:
+        """Builder preferences 为空（无外置执行链）；verify 是唯一的成功判据。"""
+        block = {"default_dispatch_mode": "strict",
+                 "roles": {"Builder": {"duty": "build", "preferences": []}},
+                 "command_profiles": {}}
+        if verify_profile:
+            block["command_profiles"][verify_profile] = {
+                "argv": [sys.executable, "-c", "pass"], "timeout_s": 30}
+        self.config.write_text(yaml.safe_dump(block, allow_unicode=True, sort_keys=False),
+                               encoding="utf-8")
+
+    def _run_empty_chain(self, cap: Path, verify: str | None) -> dict:
+        out = cap / "04_Spec_Tech-901.md"
+        buf, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+            res = dr.run_direct_result(self.ws, "Builder", prompt=str(out), out=out,
+                                       owner="t", capsule=cap, verify=verify)
+        res["_stderr"] = err.getvalue()
+        res["_stdout"] = buf.getvalue()
+        return res
+
+    def test_empty_chain_without_verify_writes_no_role_segment(self) -> None:
+        """D-7：无外置执行链且不带 verify → 不开角色段、无 worklog，判定仍为 local_carry。"""
+        cap = self._capsule()
+        self._empty_chain_config(None)
+        res = self._run_empty_chain(cap, None)
+        self.assertEqual((res["outcome"], res["exit"]), ("local_carry", dr.EXIT_LOCAL))
+        self.assertEqual(update_capsule.read_segments(cap), [], "空链不得开角色段")
+        self.assertEqual(update_capsule.read_worklogs(cap), [], "空链不得写 worklog")
+
+    def test_empty_chain_with_passing_verify_writes_no_role_segment(self) -> None:
+        """D-7 / IM-4：空链 + verify 通过 → 仍不开角色段、无 worklog，并告警无机时可计量。"""
+        cap = self._capsule()
+        self._empty_chain_config("audit-verify")
+        res = self._run_empty_chain(cap, "audit-verify")
+        self.assertEqual((res["outcome"], res["exit"]), ("succeeded", dr.EXIT_OK))
+        self.assertEqual(res["worklog_refs"], [])
+        self.assertEqual(update_capsule.read_segments(cap), [],
+                         "校验通过不等于外置角色执行，不得写 role 段")
+        self.assertEqual(update_capsule.read_worklogs(cap), [],
+                         "不得把本地校验的成功记成 role 有效工时")
+        warning = res["_stderr"]
+        self.assertIn("⚠️", warning)
+        self.assertIn("本地承载·Builder", warning)
+        self.assertIn("无有效工时", warning)
+
+    def test_empty_chain_with_failing_verify_writes_no_role_segment(self) -> None:
+        """D-7：空链 + verify 失败 → 不开角色段、无 worklog，退出码与无链一致。"""
+        cap = self._capsule()
+        self._empty_chain_config("audit-verify")
+        self.config.write_text(yaml.safe_dump(
+            {"default_dispatch_mode": "strict",
+             "roles": {"Builder": {"duty": "build", "preferences": []}},
+             "command_profiles": {"audit-verify": {
+                 "argv": [sys.executable, str(self.scripts / "verify_fail.py")], "timeout_s": 30}}},
+            allow_unicode=True, sort_keys=False), encoding="utf-8")
+        (self.scripts / "verify_fail.py").write_text("import sys\nsys.exit(1)\n", encoding="utf-8")
+        out = cap / "04_Spec_Tech-901.md"
+        buf, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+            res = dr.run_direct_result(self.ws, "Builder", prompt=str(out), out=out,
+                                       owner="t", capsule=cap, verify="audit-verify")
+        self.assertEqual(res["exit"], dr.EXIT_BLOCKED, res)
+        self.assertEqual(res["failure_code"], "VERIFY_FAILED")
+        self.assertEqual(update_capsule.read_segments(cap), [], "空链失败也不开段")
+        self.assertEqual(update_capsule.read_worklogs(cap), [])
+
+    def test_empty_chain_with_open_manager_segment_leaves_it_open(self) -> None:
+        """D-7：空链调度不得误结或错误归入胶囊内 open 的 Manager 段。"""
+        cap = self._capsule()
+        update_capsule.start_task(cap, name="事务", task_id="Tech-901",
+                                  at="2026-10-15T09:00:00+08:00")
+        self._empty_chain_config("audit-verify")
+        self._run_empty_chain(cap, "audit-verify")
+        segs = update_capsule.read_segments(cap)
+        self.assertEqual([s["state"] for s in segs], ["open"])
+        self.assertEqual(segs[0]["actor"], "manager")
+        self.assertEqual(update_capsule.read_worklogs(cap), [])
+
 
 class RunFileLifecycleTests(DispatchRoleTestBase):
     """运行态文件（RUN_DIR/<dispatch_id>.json）全生命周期测试。"""
