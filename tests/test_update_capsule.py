@@ -1156,19 +1156,65 @@ class SettlementActorPolicyTests(unittest.TestCase):
         self.assertIn("--unmeasure-segment", str(ctx.exception))
         self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
 
-    def test_role_segment_pending_approval_rejected_by_approve(self) -> None:
-        """(e) pending_approval 的 role 段被 --approve-segment 拒绝（role 段由调度结段）。"""
+    def test_open_role_segment_rejected_by_approve(self) -> None:
+        """(e) open 的 role 段被 --approve-segment 拒绝（AC-15：无 dispatch_id 身份不结算 open role 段）。"""
+        role_seg = self._open_role_segment()
+        before = (self.cap / "capsule.yaml").read_bytes()
+        with self.assertRaises(uc.ToolError) as ctx:
+            uc.approve_segment(self.cap, seg_id=role_seg["seg_id"])
+        self.assertIn("actor=role", str(ctx.exception))
+        self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
+
+    def test_pending_role_segment_approved_by_effective_seconds(self) -> None:
+        """PA-1：已由调度结为 pending_approval 的 role 段按其 effective_seconds 批准入账（方案 4.4.1:200）。"""
         role_seg = self._open_role_segment()
         import yaml
         data = yaml.safe_load((self.cap / "capsule.yaml").read_text(encoding="utf-8"))
         data["task_segments"][0]["state"] = "pending_approval"
         data["task_segments"][0]["effective_seconds"] = 30000
+        data["task_segments"][0]["machine_seconds"] = 32400
+        data["task_segments"][0]["endAt"] = "2026-10-15T18:00:00+08:00"
+        (self.cap / "capsule.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        res = uc.approve_segment(self.cap, seg_id=role_seg["seg_id"])
+        self.assertEqual(res["entry"]["seconds"], 30000, "入账读段上 effective_seconds")
+        self.assertEqual(res["entry"]["spent"], round(30000 / 3600, 4))
+        self.assertEqual(res["entry"]["actor"], "role")
+        self.assertEqual(res["entry"]["role"], "Designer")
+        self.assertEqual(res["segment"]["state"], "logged")
+        self.assertEqual(res["segment"]["machine_seconds"], 32400, "机时保持事实值")
+        self.assertEqual(uc.read_worklogs(self.cap)[0]["ref"], role_seg["seg_id"])
+
+    def test_pending_role_segment_approved_when_wall_clock_exceeds_24h(self) -> None:
+        """IM-1：role 段墙钟 >24h 但有效秒 ≤24h → 门槛按有效秒判定，批准通过。"""
+        role_seg = self._open_role_segment()
+        import yaml
+        data = yaml.safe_load((self.cap / "capsule.yaml").read_text(encoding="utf-8"))
+        data["task_segments"][0].update(
+            startAt="2026-10-15T00:00:00+08:00", endAt="2026-10-16T01:00:00+08:00",
+            lastActivityAt="2026-10-16T01:00:00+08:00",
+            state="pending_approval", machine_seconds=90000, effective_seconds=32400)
+        (self.cap / "capsule.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        res = uc.approve_segment(self.cap, seg_id=role_seg["seg_id"])
+        self.assertEqual(res["entry"]["seconds"], 32400)
+        self.assertEqual(res["segment"]["state"], "logged")
+
+    def test_approve_effective_over_24h_rejected(self) -> None:
+        """IM-1：有效秒 >24h 仍按有效秒拒绝（不按墙钟放行）。"""
+        role_seg = self._open_role_segment()
+        import yaml
+        data = yaml.safe_load((self.cap / "capsule.yaml").read_text(encoding="utf-8"))
+        data["task_segments"][0].update(
+            startAt="2026-10-15T00:00:00+08:00", endAt="2026-10-16T01:00:00+08:00",
+            lastActivityAt="2026-10-16T01:00:00+08:00",
+            state="pending_approval", machine_seconds=90000, effective_seconds=90000)
         (self.cap / "capsule.yaml").write_text(
             yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
         before = (self.cap / "capsule.yaml").read_bytes()
         with self.assertRaises(uc.ToolError) as ctx:
             uc.approve_segment(self.cap, seg_id=role_seg["seg_id"])
-        self.assertIn("actor=role", str(ctx.exception))
+        self.assertIn("24h", str(ctx.exception))
         self.assertEqual((self.cap / "capsule.yaml").read_bytes(), before)
 
     # ---------- (f) manager 段被 split / open 被 fix 拒绝 ----------
@@ -1210,6 +1256,29 @@ class SettlementActorPolicyTests(unittest.TestCase):
         self.assertEqual(res["segment"]["machine_seconds"], 36000, "机时不按墙钟重写")
         self.assertEqual(res["segment"]["effective_seconds"], 30000)
         self.assertEqual(uc.read_worklogs(self.cap)[0]["ref"], "Tech-1#1")
+
+    def test_approve_manager_segment_wall_clock_over_24h_but_effective_legal(self) -> None:
+        """IM-1：Manager 段墙钟 25h、有效 9h（扣 16h role 重叠）→ 批准通过，入账读有效秒。"""
+        import yaml
+        role_seg = {"seq": 1, "seg_id": "Tech-1#1", "name": "Designer→03_设计.md",
+                    "startAt": "2026-10-15T00:00:00+08:00", "lastActivityAt": "2026-10-15T16:00:00+08:00",
+                    "endAt": "2026-10-15T16:00:00+08:00", "state": "logged", "actor": "role",
+                    "role": "Designer", "dispatch_id": "a" * 32, "trigger": "dispatch",
+                    "stage": "03_设计", "machine_seconds": 57600, "effective_seconds": 57600}
+        role_entry = {"date": "2026-10-15", "stage": "03_设计", "spent": 16.0, "seconds": 57600,
+                      "summary": "角色段", "operator": "t", "ref": "Tech-1#1",
+                      "actor": "role", "role": "Designer"}
+        mgr = {"seq": 2, "seg_id": "Tech-1#2", "name": "长事务",
+               "startAt": "2026-10-15T00:00:00+08:00", "lastActivityAt": "2026-10-16T01:00:00+08:00",
+               "endAt": "2026-10-16T01:00:00+08:00", "state": "pending_approval", "actor": "manager",
+               "trigger": "manager", "stage": "misc", "machine_seconds": 90000,
+               "effective_seconds": 32400, "evidence": "04_Spec_Tech-1.md",
+               "evidence_sha256": "a" * 16, "note": "超过 8h（9:00:00）"}
+        self._write_manifest({"task_segments": [role_seg, mgr], "worklogs": [role_entry], "seq_next": 3})
+        res = uc.approve_segment(self.cap, seg_id="Tech-1#2")
+        self.assertEqual(res["entry"]["seconds"], 32400)
+        self.assertEqual(res["segment"]["machine_seconds"], 90000, "机时保持事实值，不为通过审批伪改")
+        self.assertEqual(res["segment"]["state"], "logged")
 
     def test_fix_manager_pending_segment_recomputes_effective(self) -> None:
         """(g) pending_approval 的 manager 段 --fix-segment → 按 4.4 步骤②重算 effective_seconds 并入账。"""

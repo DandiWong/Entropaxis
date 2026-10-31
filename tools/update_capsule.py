@@ -1184,23 +1184,30 @@ def approve_segment(capsule_dir: str | Path, seg_id: str, dry_run: bool = False)
     if not target_seg:
         raise ToolError(f"❌ 未找到任务段: {seg_id}")
     # 方案 4.4.1：approve 读段上已有的 effective_seconds 入账（manager 段与 role 段都不得
-    # 按墙钟重算）；role 段由调度结段，本入口不结算（残留段用 --unmeasure-segment）。
-    if target_seg.get("actor") == "role":
+    # 按墙钟重算）。已由调度按 dispatch_id 结为 pending_approval 的 role 段按其
+    # effective_seconds 批准（方案 4.4.1:200）；open 的 role 段没有 dispatch_id 身份，
+    # 仍拒绝（AC-15），残留段用 --unmeasure-segment。
+    if target_seg.get("actor") == "role" and target_seg.get("state") != "pending_approval":
         raise _refuse_role_segment("--approve-segment", target_seg)
     if target_seg.get("state") != "pending_approval":
         raise ToolError(f"❌ 任务段 {seg_id} 状态为 {target_seg.get('state')}，不是 pending_approval，无需批准。")
 
-    duration_s = _segment_duration_seconds(target_seg)
-    if duration_s > APPROVAL_LIMIT_S:
+    # 门槛按有效秒判定（方案 4.4.2：8h/24h 读同一个 effective_seconds）。actor 段读段上
+    # effective_seconds；旧段（无 actor）没有该字段，沿用墙钟口径。墙钟只作展示。
+    wall_s = _segment_duration_seconds(target_seg)
+    raw_effective = target_seg.get("effective_seconds")
+    effective = (max(0, round(raw_effective))
+                 if isinstance(raw_effective, (int, float))
+                 else wall_s)
+    if effective > APPROVAL_LIMIT_S:
         raise ToolError(
-            f"❌ 任务段 {seg_id} 原始时长 > 24h（{fmt_hms(duration_s)}），禁止直接批准；\n"
+            f"❌ 任务段 {seg_id} 有效时长 > 24h（{fmt_hms(effective)}），禁止直接批准；\n"
+            f"   墙钟 {fmt_hms(wall_s)}（仅展示）。\n"
             "👉 修复建议: 用 --fix-segment 修正结束时间，或用 --split-segment --at <iso> 按时刻拆段。"
         )
 
     target_seg["state"] = "logged"
-    effective = target_seg.get("effective_seconds")
-    effective = max(0, round(effective)) if isinstance(effective, (int, float)) else duration_s
-    target_seg["machine_seconds"] = max(1, duration_s)
+    target_seg["machine_seconds"] = max(1, wall_s)
     spent = _seconds_to_spent(effective)
     stage = target_seg.get("stage") or "misc"
     operator = _default_operator()
