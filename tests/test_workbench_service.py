@@ -182,8 +182,12 @@ class ReadOnlyRouteTests(_WorkspaceCase):
             encoding="utf-8")
         status, payload, _ = self._get(self.base + "/api/projects", self.token)
         self.assertEqual(status, 200, payload)
-        self.assertEqual([p["id"] for p in payload], ["proj-a"])
+        # M1-6：树底部固定追加只读虚拟节点「系统（_root）」（Q-12 / D-17），
+        # 业务项目仍是 registry 原条目，只增不改。
+        self.assertEqual([p["id"] for p in payload], ["proj-a", "_root"])
         self.assertEqual(payload[0]["remote"], "r1:proj-a/")
+        self.assertTrue(payload[1]["is_system"])
+        self.assertEqual(payload[1]["remote"], "")
 
     def test_runs_route_lists_run_files(self) -> None:
         run_dir = self.root / ".entropaxis" / "data" / "logs" / "run"

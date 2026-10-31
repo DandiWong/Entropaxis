@@ -135,6 +135,11 @@ def _projects(root: Path) -> list[dict]:
     """项目清单：registry 规范化结果 + 该项目的 `remote` 绑定字段。
 
     `load_projects()` 的规范化字典不含 `remote`（M0 只增不改其契约），这里从原始条目补齐。
+
+    M1-6（P5 项目树）在行上补三个只读视图字段：
+    - `dir_missing`：主目录不存在 = 注册表断链（前端标黄「目录不存在」，不自动修）；
+    - `is_system`：树底部固定追加的只读虚拟节点「系统（_root）」（Q-12 / D-17）；
+    - `parent` 已由 `load_projects()` 给出（缺省空串 = 顶层），层级只取 parent。
     """
     raw: dict[str, dict] = {}
     registry = project_registry.registry_path(root)
@@ -151,7 +156,14 @@ def _projects(root: Path) -> list[dict]:
     for entry in project_registry.load_projects(root):
         row = dict(entry)
         row["remote"] = str(raw.get(str(entry.get("id")), {}).get("remote") or "")
+        row["dir_missing"] = not (root / str(entry.get("path") or "")).is_dir()
+        row["is_system"] = False
         rows.append(row)
+    # 系统胶囊归 `_root` 只读虚拟节点（Q-12 / D-17）：不在 registry.yaml，无远端、无干系人、
+    # 无新建与拉取入口；系统胶囊只在本机，不同步（NG-7）。
+    rows.append({"id": "_root", "name": "系统（_root）", "path": ".entropaxis/data/docs/",
+                 "parent": "", "aliases": ["系统"], "boards": {}, "code": [], "note": "",
+                 "remote": "", "dir_missing": False, "is_system": True})
     return rows
 
 

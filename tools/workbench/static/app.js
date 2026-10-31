@@ -41,6 +41,8 @@ async function api(path, options = {}) {
 
 // ---------- 工具 ----------
 const LIFE_PILL = { draft: '', active: 'brand', delivered: 'green', archived: 'ghost' };
+// P4 头部状态机（方案 4.2 P4：draft → active → delivered → archived）
+const LIFECYCLES = ['draft', 'active', 'delivered', 'archived'];
 const GATE_META = {
   prototype_review: { icon: '▣', tone: 'violet', label: '原型' },
   preview_review: { icon: '▶', tone: 'brand', label: '预览' },
@@ -162,7 +164,19 @@ function renderMyCaps() {
       <div class="row small"><span class="muted">最后活动</span><b>${esc(lastActivity(c))}</b></div>
     </div>`).join('');
   $('#navCapCnt').textContent = String(STATE.capsules.length);
-  $$('#myCaps .ccard').forEach(el => el.onclick = () => toast(`胶囊 ${el.dataset.cap}（P4 详情 M1-6 落地）`));
+  $$('#myCaps .ccard').forEach(el => el.onclick = () => openCapsule(el.dataset.cap));
+}
+
+function renderMyProjects() {
+  // P1「我的项目」芯片：registry 项目 + 该系统/项目下的在办胶囊数（M1-6）
+  const rows = STATE.projects.filter(p => !p.is_system).map(p => {
+    const caps = STATE.capsules.filter(c => c.project === p.id && !c.bad);
+    return `<span class="chip" data-proj="${esc(p.id)}">${esc(p.name)}
+      <span class="small faint">在办 ${caps.length}</span>
+      ${p.dir_missing ? '<span class="pill amber">目录不存在</span>' : ''}</span>`;
+  }).join('');
+  $('#myProjects').innerHTML = rows || '<div class="faint small">注册表为空</div>';
+  $$('#myProjects .chip').forEach(el => el.onclick = () => { curProj = el.dataset.proj; renderP5(); go('p5'); });
 }
 
 function renderWeek() {
@@ -238,9 +252,19 @@ function go(p) {
   $$('.nav').forEach(e => e.classList.toggle('active', e.dataset.p === p));
   closePops();
   $('#main').scrollTop = 0;
+  if (p === 'p4' && curCap) renderP4(curCap);
   if (location.hash !== '#' + p) history.replaceState(null, '', '#' + p);
 }
-$$('.nav').forEach(b => b.onclick = () => go(b.dataset.p));
+$$('.nav').forEach(b => b.onclick = () => { if (b.dataset.p === 'p4' && curCap) renderP4(curCap); go(b.dataset.p); });
+
+// M1-6：P3/P4/P5 打开即用当前数据渲染（数据在 boot 时已由 /api/* 取全）
+function openCapsule(id, tab) {
+  const c = STATE.capsules.find(x => x.id === id);
+  if (!c) return toast(`未找到胶囊 ${id}`);
+  curCap = id;
+  renderP4(id, tab);
+  go('p4');
+}
 
 // ---------- 弹层 / 提示 ----------
 function closePops() { $$('.pop').forEach(p => p.classList.remove('open')); }
@@ -365,6 +389,214 @@ function send() {
   $('#msgs').scrollTop = 1e6;
 }
 
+// ---------- P3 胶囊列表（M1-6：数据来自 /api/capsules） ----------
+const CUR_STATES = ['running', 'residual', 'parked'];
+let sortK = 'id', sortDir = 1;
+function capStage(c) {
+  const cur = (c.stage_bar || []).find(s => CUR_STATES.includes(s.state));
+  return cur ? cur : null;
+}
+function fillFilters() {
+  const projSel = $('[data-f="proj"]');
+  if (projSel.dataset.filled) return;
+  projSel.dataset.filled = '1';
+  const opts = STATE.projects.map(p =>
+    `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  projSel.insertAdjacentHTML('beforeend', opts);
+  const owners = [...new Set(STATE.capsules.map(c => c.owner).filter(Boolean))].sort();
+  $('[data-f="owner"]').insertAdjacentHTML('beforeend',
+    owners.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join(''));
+  const members = [...new Set(STATE.capsules.flatMap(c => c.members || []))].sort();
+  $('[data-f="member"]').insertAdjacentHTML('beforeend',
+    members.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join(''));
+}
+function renderP3() {
+  fillFilters();
+  const f = {};
+  $$('#filters [data-f]').forEach(e => f[e.dataset.f] = e.type === 'checkbox' ? e.checked : e.value);
+  const q = (f.q || '').trim().toLowerCase();
+  const rows = STATE.capsules.filter(c => {
+    const st = capStage(c);
+    return (!f.proj || c.project === f.proj)
+      && (!f.life || c.lifecycle === f.life)
+      && (!f.stage || (st ? st.state === f.stage : f.stage === 'uninstantiated'))
+      && (!f.owner || c.owner === f.owner)
+      && (!f.member || (c.members || []).includes(f.member))
+      && (!f.from || lastActivity(c).slice(0, 10) >= f.from)
+      && (!f.to || lastActivity(c).slice(0, 10) <= f.to)
+      && (!q || (c.id + ' ' + c.topic).toLowerCase().includes(q));
+  }).sort((a, b) => {
+    const key = k => sortK === 'projName' ? (k.project_label || k.project || '')
+      : sortK === 'life' ? (k.lifecycle || '')
+        : sortK === 'stage' ? ((capStage(k) || {}).state || '')
+          : sortK === 'hours' ? (k.worklog_seconds || 0)
+            : sortK === 'tokens' ? usageTotal(k) : String(k[sortK] || '');
+    const av = key(a), bv = key(b);
+    return (av > bv ? 1 : av < bv ? -1 : 0) * sortDir;
+  });
+  $('#capTable tbody').innerHTML = rows.map(c => {
+    const st = capStage(c);
+    const stageText = st ? `${st.label} · ${STATE_LABEL[st.state] || st.state}` : '—';
+    const sync = isSystem(c)
+      ? '<span class="pill ghost">系统</span><span class="pill ghost">不同步</span>'
+      : `<span class="pill ghost">${esc(c.sync_state === 'local' ? '仅本地' : c.sync_state)}</span>`;
+    return `<tr class="click" data-cap="${esc(c.id)}"><td onclick="event.stopPropagation()">
+        <input type="checkbox" class="sel" value="${esc(c.id)}"></td>
+      <td class="mono">${esc(c.id)}</td><td>${esc(c.topic)}</td>
+      <td>${esc(c.project_label || c.project || '')}</td>
+      <td><span class="pill ${LIFE_PILL[c.lifecycle] || ''}">${esc(c.lifecycle || '—')}</span></td>
+      <td>${esc(stageText)}</td><td class="mono small">${esc(c.owner || '—')}</td>
+      <td class="num">${(c.worklog_seconds / 3600).toFixed(2)}</td>
+      <td class="num">${fmtToken(usageTotal(c))}</td><td>${sync}</td></tr>`;
+  }).join('');
+  $('#capCount').textContent = `共 ${rows.length} 行`;
+  $('#pullBtn').disabled = !selected().length;
+  $$('#capTable tbody tr.click').forEach(tr => tr.onclick = () => openCapsule(tr.dataset.cap));
+}
+const selected = () => $$('#capTable .sel:checked').map(e => e.value);
+$('#filters').addEventListener('input', renderP3);
+$('#filters').addEventListener('change', renderP3);
+$('#capTable').addEventListener('change', e => {
+  if (e.target.id === 'selAll') $$('#capTable .sel').forEach(x => x.checked = e.target.checked);
+  $('#pullBtn').disabled = !selected().length;
+});
+$$('#capTable th.sort').forEach(th => th.onclick = () => {
+  sortDir = sortK === th.dataset.k ? -sortDir : 1;
+  sortK = th.dataset.k;
+  renderP3();
+});
+
+// ---------- P4 胶囊详情（M1-6：数据来自 /api/capsules/{id} 同一行） ----------
+const P4_TABS = [['assign', '角色指派'], ['conf', '角色配置'], ['files', '交付物'],
+  ['time', '工时'], ['tok', 'Token'], ['audit', '审计']];
+function renderP4(id, tab = 'assign') {
+  const c = STATE.capsules.find(x => x.id === id);
+  if (!c) { $('#p4body').innerHTML = '<div class="empty">未找到该胶囊</div>'; return; }
+  curCap = id;
+  const run = runOf(c);
+  const sys = isSystem(c);
+  const T = (k, l) => `<button class="tab ${k === tab ? 'on' : ''}" data-t="${k}">${l}</button>`;
+  const P = (k, h) => `<div class="tabpane ${k === tab ? 'on' : ''}" data-t="${k}">${h}</div>`;
+  const lease = sys ? '<span class="pill ghost">无需租约（系统胶囊不同步）</span>'
+    : '<span class="pill">无人持有</span>';
+  $('#p4sub').textContent = `${c.id} · ${c.project_label || c.project || '—'}`;
+  $('#p4acts').innerHTML = sys ? '' : `
+    <button class="btn sm" onclick="toast('update_capsule.py --start-task（写路由 M1-2）')">开任务段</button>
+    <button class="btn sm" onclick="toast('update_capsule.py --log-time（写路由 M1-2）')">记工时</button>
+    <button class="btn sm pri" onclick="go('p2');$('#bindCap').value='${esc(c.id)}';toast('已在 P2 绑定 ${esc(c.id)}')">派角色 → 会话</button>`;
+  const assignRows = (c.assignments || []).map(a => `<tr>
+      <td><b>${esc(a.role || '—')}</b></td><td class="mono small">${esc(a.assignment_id || '—')}</td>
+      <td><span class="pill ${a.status === 'succeeded' ? 'green' : a.status === 'failed' ? 'rose' : a.status === 'running' ? 'violet' : ''}">${esc(a.status || '—')}</span></td>
+      <td class="mono small">${esc(a.deliverable || '—')}</td>
+      <td class="num">${a.attempts == null ? '—' : esc(a.attempts)}</td></tr>`).join('');
+  const segRows = (c.open_segments || []).map(s => `<tr>
+      <td class="mono small">${esc(s.seg_id || '—')}</td><td>${esc(s.name || '—')}</td>
+      <td>${esc(s.actor || '—')}</td><td class="mono small">${esc(s.dispatch_id || '—')}</td>
+      <td class="small">${esc((s.startAt || '').slice(5, 16).replace('T', ' '))}</td></tr>`).join('');
+  const usageRows = ['role', 'manager', 'total'].map(k => {
+    const u = (c.usage || {})[k] || {};
+    return `<tr><td>${k === 'role' ? '角色调度' : k === 'manager' ? 'Manager 会话' : '合计'}</td>
+      <td class="num">${fmtInt(u.in)}</td><td class="num">${fmtInt(u.out)}</td>
+      <td class="num">${fmtInt(u.cache_read)}</td><td class="num">${fmtInt(u.cache_write)}</td></tr>`;
+  }).join('');
+  $('#p4body').innerHTML = `
+    <div class="card">
+      <div class="row wrap"><span class="mono muted">${esc(c.id)}</span>
+        <span class="pill ${LIFE_PILL[c.lifecycle] || ''}">${esc(c.lifecycle || '—')}</span>
+        <span class="pill">${esc(c.project_label || c.project || '')}</span>
+        ${sys ? '<span class="pill ghost">不同步</span>' : ''}${lease}
+        <span style="margin-left:auto" class="row"><span class="small muted">owner</span>
+          <b class="mono small">${esc(c.owner || '—')}</b>
+          <span class="small muted" style="margin-left:8px">成员</span>
+          <span class="small mono">${esc((c.members || []).join('、') || '—')}</span></span></div>
+      <h1 style="margin:8px 0 12px;font-size:20px">${esc(c.topic)}</h1>
+      <div class="stages">${stageBarHtml(c)}</div>
+      <div class="row wrap" style="margin-top:10px">
+        <div class="lifecycle">${LIFECYCLES.map(s =>
+          `<span class="${s === c.lifecycle ? 'on' : ''}">${s}</span>`).join('<i>→</i>')}</div>
+        <span class="small muted" style="margin-left:12px">review_due_at <b>${esc(c.review_due_at || '—')}</b>
+          · closure_deadline <b>${esc(c.closure_deadline || '—')}</b></span>
+        <span class="small muted" style="margin-left:auto">open 段 ${esc((c.open_segments || []).length)}
+          · 缺用量 ${fmtInt((c.usage || {}).unknown_count)} 次</span></div>
+      ${run ? `<div class="banner blue flex" style="margin:12px 0 0">⇢ ${esc(run.role)} 运行中 ·
+        ${esc(run.profile)} · ${esc(run.agent)}/${esc(run.model)} · 偏好 #${esc(run.preference_number ?? '—')} ·
+        胶囊 ${esc(run.capsule_id || '未绑定胶囊')}</div>` : ''}
+    </div>
+    <div class="tabs">${P4_TABS.map(([k, l]) => T(k, l)).join('')}</div>
+    ${P('assign', `<div class="card" style="padding:0"><table>
+      <tr><th>角色</th><th>assignment_id</th><th>状态</th><th>交付物</th><th class="num">attempts</th></tr>
+      ${assignRows || '<tr><td colspan="5" class="faint">暂无指派</td></tr>'}</table></div>
+      <div class="small muted" style="margin-top:6px">状态五态：pending · running · succeeded · failed · blocked。</div>`)}
+    ${P('conf', `<div class="card"><h3>生效链<span class="hint">dispatch_role.py resolve · 只读</span></h3>
+      <table><tr><th>层级</th><th>来源</th><th>值</th></tr>
+        <tr><td>第 1 级</td><td>胶囊档案 roles_manifest.assignments[].command_profile</td>
+          <td class="mono">${esc((run || {}).profile || '—')}</td></tr>
+        <tr><td>第 3 级</td><td>roles.yaml 偏好与超时</td>
+          <td class="mono">超时 ${esc((run || {}).timeout_s ?? '—')}s</td></tr></table></div>`)}
+    ${P('files', `<div class="card"><div class="empty">交付物清单由胶囊目录与 Front Matter 汇总，M1-7 随 P6 一并接入。</div></div>`)}
+    ${P('time', `<div class="card" style="padding:0"><table>
+      <tr><th>seg_id</th><th>名称</th><th>actor</th><th>dispatch_id</th><th>开始</th></tr>
+      ${segRows || '<tr><td colspan="5" class="faint">无未结角色段</td></tr>'}</table></div>
+      <div class="small muted" style="margin-top:6px">工时合计 ${(c.worklog_seconds / 3600).toFixed(2)} h（窗口内）· 机时 ${((c.machine_seconds || 0) / 3600).toFixed(2)} h</div>`)}
+    ${P('tok', `<div class="card" style="padding:0"><table>
+      <tr><th>小计</th><th class="num">in</th><th class="num">out</th><th class="num">cache 读</th><th class="num">cache 写</th></tr>
+      ${usageRows}</table></div>
+      <div class="small muted" style="margin-top:6px">缺用量 ${fmtInt((c.usage || {}).unknown_count)} 次（单列，不按 0 计，6.5.1）</div>`)}
+    ${P('audit', `<div class="card"><div class="empty">审计问题表读 03_方案审计报告.md / 05_实施审计报告.md 的 audit-state 围栏；「待我拍板」出卡见首页。</div></div>`)}`;
+  $$('#p4 .tab').forEach(b => b.onclick = () => {
+    $$('#p4 .tab, #p4 .tabpane').forEach(x => x.classList.toggle('on', x.dataset.t === b.dataset.t));
+  });
+}
+
+// ---------- P5 项目（M1-6：数据来自 /api/projects + /api/capsules） ----------
+let curProj = '';
+function projById(id) { return STATE.projects.find(p => p.id === id); }
+function projCaps(pid) { return STATE.capsules.filter(c => c.project === pid && !c.bad); }
+function renderP5() {
+  const projs = STATE.projects;
+  if (!curProj || !projById(curProj)) curProj = projs.length ? projs[0].id : '';
+  const tree = [...projs.filter(p => !p.parent), ...projs.filter(p => p.parent)];
+  $('#ptree').innerHTML = '<div class="small faint" style="padding:0 8px 6px">registry.yaml · 按 parent 层级</div>'
+    + tree.map(p => `<div class="node ${p.parent ? 'child' : ''} ${p.id === curProj ? 'on' : ''}"
+        data-id="${esc(p.id)}"${p.is_system ? ' style="margin-top:8px;border-top:1px dashed var(--border);border-radius:0"' : ''}>
+        ${p.is_system ? '⚙' : p.parent ? '└' : '▾'} ${esc(p.name)}
+        ${p.is_system ? '<span class="pill ghost" style="margin-left:auto">只读</span>' : ''}
+        ${p.dir_missing ? '<span class="pill amber" title="注册表断链：主目录不存在，不自动修">目录不存在</span>' : ''}
+        ${p.remote ? '<span class="small faint" style="margin-left:auto">☁</span>' : ''}</div>`).join('');
+  $$('#ptree .node').forEach(n => n.onclick = () => { curProj = n.dataset.id; renderP5(); });
+  const p = projById(curProj);
+  if (!p) { $('#pdetail').innerHTML = '<div class="empty">注册表为空</div>'; return; }
+  const caps = projCaps(p.id);
+  const hours = caps.reduce((s, c) => s + (c.worklog_seconds || 0), 0) / 3600;
+  const tokens = caps.reduce((s, c) => s + usageTotal(c), 0);
+  $('#pullProj').disabled = $('#newCapProj').disabled = !!p.is_system;
+  const capRows = caps.map(c => `<div class="row" style="padding:5px 0;cursor:pointer" data-cap="${esc(c.id)}">
+      <span class="mono small">${esc(c.id)}</span>${esc(c.topic)}
+      <span class="pill ${LIFE_PILL[c.lifecycle] || ''}" style="margin-left:auto">${esc(c.lifecycle || '')}</span></div>`).join('');
+  $('#pdetail').innerHTML = p.is_system ? `
+    <div class="banner blue flex">ⓘ 虚拟节点，不在 registry.yaml。系统胶囊只在本机，不同步、无租约（NG-7）；团队视角不含。</div>
+    <div class="card" style="margin-bottom:12px"><div class="row">
+      <h1 style="margin:0;font-size:18px">${esc(p.name)}</h1>
+      <span class="pill ghost">只读</span><span class="pill ghost">不同步</span></div>
+      <dl class="kv" style="margin-top:12px"><dt>主目录</dt><dd class="mono">${esc(p.path)}</dd>
+        <dt>本月投入</dt><dd>${hours.toFixed(2)} h · ${fmtInt(tokens)} token</dd></dl></div>
+    <div class="card"><h3>在办系统胶囊</h3>${capRows || '<div class="faint small">无在办系统胶囊</div>'}</div>`
+    : `${p.dir_missing ? `<div class="banner amber flex">注册表断链：目录 ${esc(p.path)} 不存在。不自动修，请确认目录迁移或注销登记。</div>` : ''}
+    <div class="card" style="margin-bottom:12px"><div class="row">
+      <h1 style="margin:0;font-size:18px">${esc(p.name)}</h1>
+      ${(p.aliases || []).map(a => `<span class="pill">${esc(a)}</span>`).join('')}
+      <span style="margin-left:auto" class="row">${p.remote
+        ? `<span class="pill brand">${esc(p.remote.split(':')[0])}</span> <span class="mono small">${esc(p.remote)}</span>`
+        : '<span class="faint small">未绑定远端 · 单机</span>'}</span></div>
+      <dl class="kv" style="margin-top:12px"><dt>id</dt><dd class="mono">${esc(p.id)}</dd>
+        <dt>主目录</dt><dd class="mono">${esc(p.path)}</dd>
+        <dt>代码目录</dt><dd class="mono">${esc((p.code || []).join('、') || '—')}</dd>
+        <dt>本月投入</dt><dd>${hours.toFixed(2)} h · ${fmtInt(tokens)} token</dd></dl></div>
+    <div class="card"><h3>在办胶囊<span class="hint">lifecycle ∈ {draft, active}</span></h3>
+      ${capRows || '<div class="faint small">无在办胶囊</div>'}</div>`;
+  $$('#pdetail [data-cap]').forEach(el => el.onclick = () => openCapsule(el.dataset.cap));
+}
+
 // ---------- P7 存储与同步（M2 落地，当前单机模式只读提示） ----------
 function renderP7() {
   $('#remoteList').innerHTML = '<div class="faint small">未配置远端（workspace-config.yaml::remotes 为空）· 单机模式，全部功能可用。</div>';
@@ -392,9 +624,12 @@ async function boot() {
   renderMe();
   renderGates();
   renderMyCaps();
+  renderMyProjects();
   renderWeek();
   renderTodos();
   renderP2();
+  renderP3();
+  renderP5();
   renderP7();
   renderP9();
   renderRuns();

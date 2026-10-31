@@ -178,11 +178,12 @@
           <div class="row wrap" id="filters">
             <select data-f="proj"><option value="">全部项目</option></select>
             <select data-f="life"><option value="">全部生命周期</option><option>draft</option><option>active</option><option>delivered</option><option>archived</option></select>
-            <select data-f="stage"><option value="">全部阶段</option></select>
+            <select data-f="stage"><option value="">全部阶段</option><option value="running">运行中</option><option value="residual">残留待处置</option><option value="parked">停驻</option><option value="done">已完成阶段</option><option value="todo">待开始</option><option value="uninstantiated">未实例化</option></select>
             <select data-f="owner"><option value="">任意 owner</option></select>
             <select data-f="member"><option value="">任意成员</option></select>
             <input type="date" data-f="from" title="最后活动起"><span class="faint">—</span><input type="date" data-f="to" title="最后活动止">
             <label class="row small"><input type="checkbox" data-f="conflict"> 仅有冲突</label>
+            <input type="search" data-f="q" placeholder="检索 ID / 主题" title="本地过滤（全量检索用 /api/find）">
             <span class="small muted" id="capCount" style="margin-left:auto"></span>
           </div>
         </div>
@@ -193,8 +194,12 @@
         </div>
       </section>
 
-      <!-- ===== P4 胶囊详情（JS 渲染） ===== -->
-      <section class="page" id="p4"></section>
+      <!-- ===== P4 胶囊详情（M1-6：JS 渲染，数据来自 /api/capsules/{id}） ===== -->
+      <section class="page" id="p4">
+        <div class="ph"><div><h1>胶囊详情</h1><div class="sub" id="p4sub">阶段、角色、交付物、工时都挂在胶囊上 · 数据来自 capsule_index 单行</div></div>
+          <div class="acts" id="p4acts"></div></div>
+        <div id="p4body"></div>
+      </section>
 
       <!-- ===== P5 项目 ===== -->
       <section class="page" id="p5">
