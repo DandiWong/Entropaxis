@@ -284,17 +284,76 @@ $('#themeBtn').onclick = () => setTheme(document.documentElement.dataset.theme =
 $('#themeSel').onchange = e => setTheme(e.target.value);
 $('#offSw').onchange = e => setScenario(e.target.checked ? 'offline' : 'normal');
 
-// ---------- P2 会话（M1-5 起接真实数据） ----------
-function renderP2() {
-  $('#bindCap').innerHTML = STATE.capsules.length
-    ? STATE.capsules.map(c => `<option>${esc(c.id)} ${esc(c.topic)}</option>`).join('') + '<option>不绑定</option>'
-    : '<option>不绑定</option>';
-  $('#sessList').innerHTML = STATE.capsules.length
-    ? STATE.capsules.slice(0, 8).map(c => `<div class="sess"><div class="t">${esc(c.id)} ${esc(c.topic)}</div>
-        <div class="row small muted"><span class="mono">${esc(c.id)}</span><span class="pill">本机</span></div></div>`).join('')
-    : '<div class="empty" style="padding:20px 8px">无胶囊</div>';
-  $('#msgs').innerHTML = '<div class="empty" style="margin:auto"><h4>从一句话开始</h4><div>P2 会话流在 M1-5 接入真实数据。</div></div>';
+// ---------- P2 会话（M1-5：接真实只读数据） ----------
+// 会话列表 = capsule_index 的「我的」行（会话正文由 Agent CLI 自存，GUI 不代理模型）；
+// 右栏阶段条 = 行上的 stage_bar；角色卡与徽标 = /api/runs（Q-4：胶囊 ID 读 capsule.yaml::id）。
+let curCap = '';
+function p2Caps() { return STATE.capsules.filter(c => !c.bad); }
+function runOf(cap) {
+  if (!cap) return null;
+  return STATE.runs.find(r => r.capsule_id === cap.id) || null;
 }
+function execEndLabel(v) {
+  return v === 'default' ? '→ 本机（P8 默认）' : '显式选择，覆盖 P8';
+}
+function roleCardHtml(cap) {
+  const run = runOf(cap);
+  if (!run) return '<div class="empty" style="padding:14px">当前无运行中的角色调度</div>';
+  const secs = run.timeout_s ? Math.max(0, Math.round(run.timeout_s)) : null;
+  return `<div class="row"><span class="dot ${run.alive ? 'pulse' : ''}" style="background:${run.alive ? 'var(--brand-2)' : 'var(--faint)'}"></span>
+      <span class="rn">${esc(run.role || '—')}</span>
+      <span class="pill ${run.alive ? 'brand' : 'ghost'}" style="margin-left:auto">${run.alive ? 'running' : '已退出'}</span></div>
+    <dl class="kv" style="margin:10px 0 8px">
+      <dt>承载 profile</dt><dd><b class="mono" style="color:var(--brand-2)">${esc(run.profile || '—')}</b></dd>
+      <dt>agent / model</dt><dd class="mono">${esc(run.agent || '—')} / ${esc(run.model || '—')}</dd>
+      <dt>执行端</dt><dd>本机</dd>
+      <dt>胶囊</dt><dd class="mono">${esc(run.capsule_id || '未绑定胶囊')}</dd>
+      <dt>偏好序号</dt><dd class="mono">${run.preference_number == null ? '—' : '#' + esc(run.preference_number)}</dd>
+      <dt>超时上限</dt><dd class="mono">${secs == null ? '—' : secs + 's'}</dd>
+    </dl>`;
+}
+function usageHtml(cap) {
+  const u = (cap && cap.usage) || {};
+  const role = u.role || {}, manager = u.manager || {}, total = u.total || {};
+  const sum = t => (t.in || 0) + (t.out || 0) + (t.cache_read || 0) + (t.cache_write || 0);
+  return `<dl class="kv">
+      <dt>角色调度</dt><dd class="mono">${fmtInt(sum(role))}</dd>
+      <dt>Manager 会话</dt><dd class="mono">${fmtInt(sum(manager))}</dd>
+      <dt>合计</dt><dd class="mono">${fmtInt(sum(total))}</dd>
+      <dt>cache 读 / 写</dt><dd class="mono">${fmtInt(total.cache_read)} / ${fmtInt(total.cache_write)}</dd>
+      <dt>缺用量</dt><dd class="mono">${fmtInt(u.unknown_count)} 次</dd>
+    </dl>`;
+}
+function renderP2() {
+  const caps = p2Caps();
+  if (!curCap || !caps.some(c => c.id === curCap)) curCap = caps.length ? caps[0].id : '';
+  const cap = caps.find(c => c.id === curCap) || null;
+  $('#bindCap').innerHTML = caps.map(c =>
+    `<option value="${esc(c.id)}"${c.id === curCap ? ' selected' : ''}>${esc(c.id)} ${esc(c.topic)}</option>`).join('')
+    + '<option value="">不绑定</option>';
+  $('#sessList').innerHTML = caps.length ? caps.map(c => `
+    <div class="sess${c.id === curCap ? ' active' : ''}" data-cap="${esc(c.id)}">
+      <div class="t">${esc(c.topic)}</div>
+      <div class="row small muted"><span class="mono">${esc(c.id)}</span>
+        <span class="pill">本机</span><span style="margin-left:auto">${esc(lastActivity(c))}</span></div></div>`).join('')
+    : '<div class="empty" style="padding:20px 8px">无胶囊</div>';
+  $('#ctxCapId').textContent = cap ? cap.id : '—';
+  $('#p2stages').innerHTML = cap ? stageBarHtml(cap) : '';
+  $('#roleCard').innerHTML = roleCardHtml(cap);
+  $('#sessUsage').innerHTML = usageHtml(cap);
+  $('#msgs').innerHTML = cap
+    ? `<div class="empty" style="margin:auto"><h4>${esc(cap.topic)}</h4>
+       <div>阶段与角色事实来自本机只读工具；正文由 Agent CLI 自存，GUI 不代理模型。</div></div>`
+    : '<div class="empty" style="margin:auto"><h4>从一句话开始</h4><div>先在 P1 或 P3 选一个胶囊。</div></div>';
+  $$('#sessList .sess').forEach(el => el.onclick = () => { curCap = el.dataset.cap; renderP2(); });
+}
+$('#bindCap').onchange = e => { curCap = e.target.value; renderP2(); };
+$('#execSeg').onclick = e => {
+  const b = e.target.closest('button');
+  if (!b || b.disabled) return;
+  $$('#execSeg button').forEach(x => x.classList.toggle('on', x === b));
+  $('#execHint').textContent = execEndLabel(b.dataset.v);
+};
 $('#input').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } };
 function send() {
   const v = $('#input').value.trim();

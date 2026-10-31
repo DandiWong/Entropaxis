@@ -170,13 +170,16 @@ def _capsules_with_stage_bar(root: Path, since: str, until: str, me: str | None,
     复用 M0 的 `capsule_index()` 做扫描与归属，`stage_bar()` 取 M1-9 的纯函数；
     运行态 `runs` 由本函数注入，纯函数本身仍不扫盘。
 
+    M1-5：阶段条判据要原样 `task_segments`（open 角色段）与 `roles_manifest.assignments`，
+    M0 投影行不含这两项，故按 `_raw_capsule()` 还原后再喂纯函数（不另写扫描逻辑）。
+
     显示口径（Q-12 / AC-20）：系统胶囊（`project == "_root"`）的 `project_label` 为「系统」，
     `sync_state` 为 `no_sync`（前端渲染灰色「不同步」徽标）。非系统胶囊 `project_label`
     为项目 id，`sync_state` 本轮为 `local`（M2 同步落地后才有远端状态）。
     """
     rows = _capsule_index(root, since, until, me, project)
     for row in rows:
-        row["stage_bar"] = workbench_view.stage_bar(row, runs=runs)
+        row["stage_bar"] = workbench_view.stage_bar(_raw_capsule(row), runs=runs)
         row["project_label"] = "系统" if row.get("project") == "_root" else str(row.get("project") or "")
         row["sync_state"] = "no_sync" if row.get("project") == "_root" else "local"
     return rows
@@ -221,8 +224,10 @@ def _raw_capsule(row: dict) -> dict:
     capsule = dict(parsed)
     capsule["id"] = row.get("id") or parsed.get("id")
     capsule["lifecycle"] = row.get("lifecycle") or parsed.get("lifecycle")
-    # `parse_capsule_file()` 把 assignments 摊平到顶层；判据读 `roles_manifest.assignments`。
+    # `parse_capsule_file()` 把 assignments 摊平到顶层、段列名为 `role_segments`；
+    # 判据读 `roles_manifest.assignments` 与 `task_segments`，这里改名对齐输入形状。
     capsule["roles_manifest"] = {"assignments": parsed.get("assignments") or []}
+    capsule["task_segments"] = parsed.get("role_segments") or []
     return capsule
 
 
@@ -244,6 +249,22 @@ def _gates(root: Path, since: str, until: str, me: str | None,
     return cards
 
 
+def _run_capsule_id(capsule: object) -> str | None:
+    """徽标用的胶囊 ID：读 `<capsule>/capsule.yaml::id`（Q-4 / AC-12）。
+
+    只认 run 文件里 `capsule` 指向的目录。`null`、缺键、目录不存在或读不出 id
+    一律返回 None（前端显示「未绑定胶囊」）——不从 cwd 或交付物路径反推。
+    """
+    if not capsule:
+        return None
+    path = Path(str(capsule)) / "capsule.yaml"
+    if not path.is_file():
+        return None
+    parsed = aggregate_worklog.parse_capsule_file(path)
+    cid = (parsed or {}).get("id")
+    return str(cid).strip() or None
+
+
 def _runs(root: Path) -> list[dict]:
     """扫 `data/logs/run/*.json`：运行中调度（含 capsule、preference_number、timeout_s）。
 
@@ -262,6 +283,8 @@ def _runs(root: Path) -> list[dict]:
             continue
         row = dict(data)
         row["alive"] = _pid_alive(data.get("pid"))
+        # 徽标胶囊 ID 按 Q-4 只读 capsule 指向的 capsule.yaml，缺省 None = 未绑定胶囊。
+        row["capsule_id"] = _run_capsule_id(data.get("capsule"))
         row["run_file"] = str(path)
         rows.append(row)
     return rows
@@ -595,6 +618,8 @@ def _read_me(root: Path) -> str | None:
     except Exception:  # noqa: BLE001 - 配置损坏不阻断服务启动，只是没有本机身份
         return None
     me = data.get("me") if isinstance(data, dict) else None
+    if me is None:
+        return None
     return str(me).strip() or None
 
 

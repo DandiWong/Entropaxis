@@ -136,7 +136,7 @@
               <textarea id="input" placeholder="输入指令，Enter 发送，Shift+Enter 换行"></textarea>
               <div class="row">
                 <span class="small muted" title="只作用于本会话之后发出的角色调度；Manager 会话始终在本机。优先级：此处显式选择 > P8 每角色默认 > 本机（D-13）">执行端</span>
-                <span class="seg" id="execSeg"><button class="on" data-v="default">按角色默认</button><button data-v="local">本机</button><button data-v="server">服务端</button></span>
+                <span class="seg" id="execSeg"><button class="on" data-v="default">按角色默认</button><button data-v="local">本机</button><button data-v="server" disabled title="M4 服务端执行落地前不可选（Q-8 / D-13）">服务端</button></span>
                 <span class="small faint" id="execHint">→ 本机（P8 默认）</span>
                 <span class="small muted" style="margin-left:8px">绑定胶囊</span>
                 <select id="bindCap"></select>
