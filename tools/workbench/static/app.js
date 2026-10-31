@@ -22,9 +22,12 @@ const STATE = {
   capsules: [],        // capsule_index 行（"我的"过滤由服务端做）
   todos: [],           // todo_index 分组
   worklog: null,       // aggregate 输出（本周窗口）
+  usage: null,         // P6「我」视角（/api/worklog-usage：两小计/合计/缺用量/actor 四列）
   gates: [],           // pending_gates 六类卡片
   runs: [],            // 本机运行态
   projects: [],        // registry 项目
+  executors: null,     // P8 本机承载（roles.yaml 只读）
+  settings: null,      // P10 设置（只读）
   me: '',              // 本机人员 id
   error: '',
 };
@@ -114,24 +117,34 @@ function workbenchStageBar(cap) {
 
 // ---------- P1 ----------
 async function loadAll() {
-  const [capsules, todos, worklog, gates, runs, projects] = await Promise.all([
-    api('/api/capsules'), api('/api/todos'), api('/api/worklog'),
-    api('/api/gates'), api('/api/runs'), api('/api/projects'),
-  ]);
+  const [capsules, todos, worklog, usage, gates, runs, projects, executors, settings] =
+    await Promise.all([
+      api('/api/capsules'), api('/api/todos'), api('/api/worklog'),
+      api('/api/worklog-usage'), api('/api/gates'), api('/api/runs'),
+      api('/api/projects'), api('/api/executors'), api('/api/settings'),
+    ]);
   STATE.capsules = capsules;
   STATE.todos = todos;
   STATE.worklog = worklog;
+  STATE.usage = usage;
   STATE.gates = gates;
   STATE.runs = runs;
   STATE.projects = projects;
+  STATE.executors = executors;
+  STATE.settings = settings;
 }
 
 function renderMe() {
+  // 本机身份只来自服务端 /api/settings（--me 或 workspace-config.yaml::me）。
+  // M1-8：缺省时 P1 显示绑定引导，不自动写入任何配置文件（AC-18）。
+  const missing = STATE.settings ? STATE.settings.me_missing : !STATE.me;
   $('#meName').textContent = STATE.me ? STATE.me : '未绑定';
   $('#idBtn').innerHTML = STATE.me
     ? `<span class="avatar" style="background:#0d9488">${esc(STATE.me.slice(0, 1))}</span>${esc(STATE.me)}`
     : '<span class="avatar" style="background:#64748b">?</span>未绑定';
-  $('#wsRoot').value = location.origin;
+  const banner = $('#meBind');
+  if (banner) banner.style.display = missing ? '' : 'none';
+  $('#wsRoot').value = STATE.settings ? STATE.settings.workspace_root : location.origin;
   const opts = (STATE.projects.length ? STATE.projects : [])
     .map(p => `<option value="${esc(p.id)}">${esc(p.id)}</option>`).join('');
   $('#meSelect').innerHTML = opts || '<option>（无项目）</option>';
@@ -206,16 +219,28 @@ function renderTodos() {
 }
 
 function renderP6() {
-  const w = STATE.worklog;
-  const byActor = w.by_actor || {};
+  // M1-7：P6「我」视角。数据全部来自 /api/worklog-usage（capsule_index 同窗口 +
+  // aggregate by_actor）；token 按方案 6.5.1 分「角色调度 / Manager 会话」两小计再求合计，
+  // `usage == "unknown"` 不计数值，单列「缺用量 N 次」。
+  const u = STATE.usage;
+  if (!u) { $('#kpi6').innerHTML = ''; $('#pivot').innerHTML = ''; return; }
+  const t = u.totals || {};
+  const tok = k => fmtInt((k || {}).in || 0) + ' / ' + fmtInt((k || {}).out || 0)
+    + ' / ' + fmtInt((k || {}).cache_read || 0);
   $('#kpi6').innerHTML = [
-    ['人工有效工时', fmtHours(w.effective_seconds) + ' h', 'worklogs.spent'],
-    ['Agent 机时', fmtHours(w.machine_seconds) + ' h', 'attempts.duration_s'],
-    ['token 合计', fmtToken(STATE.capsules.reduce((s, c) => s + usageTotal(c), 0)), 'attempts.usage'],
-    ['条目数', String((w.items || []).length), 'aggregate items'],
-  ].map(k => `<div class="kpi"><div class="v" style="font-size:18px">${k[1]}</div><div class="l">${k[0]} · <span class="faint">${k[2]}</span></div></div>`).join('');
+    ['人工有效工时', fmtHours(u.effective_seconds) + ' h', 'worklogs.spent'],
+    ['Agent 机时', fmtHours(u.machine_seconds) + ' h', 'attempts.duration_s'],
+    ['token 角色调度', tok(t.role), 'attempts.usage（6.5.1 ①）'],
+    ['token Manager 会话', tok(t.manager), 'sessions.jsonl（6.5.1 ②）'],
+    ['token 合计', tok(t.total), '两小计之和'],
+    ['缺用量', fmtInt(t.unknown_count) + ' 次', 'usage == "unknown"，不计数值'],
+  ].map(k => `<div class="kpi"><div class="v" style="font-size:16px">${k[1]}</div>
+    <div class="l">${k[0]} · <span class="faint">${k[2]}</span></div></div>`).join('');
+  const byActor = u.by_actor || {};
+  const ACTOR_LABEL = { role: 'role · 角色调度', manager: 'manager · Manager 会话',
+    human: 'human · 人工', unlabeled: 'unlabeled · 未标注' };
   const rows = Object.entries(byActor).map(([k, v]) =>
-    `<tr><td>${esc(k)}</td><td class="num">${fmtHours(v)}</td></tr>`).join('');
+    `<tr><td>${esc(ACTOR_LABEL[k] || k)}</td><td class="num">${fmtHours(v)}</td></tr>`).join('');
   $('#pivot').innerHTML = `<table><tr><th>actor</th><th class="num">秒 / 折算小时</th></tr>${rows}</table>`;
 }
 
@@ -604,6 +629,53 @@ function renderP7() {
   $('#noConflict').style.display = scenario === 'conflict' ? 'none' : '';
 }
 
+// ---------- P8 Agent 执行端（M1-8：roles.yaml 只读展示，无写入口） ----------
+// 偏好链、超时、硬门禁锁全部来自服务端 /api/executors（setup_agents.list_roles 同一读者）；
+// 本页不提供任何改 roles.yaml 的入口——roles.yaml 影响全部调度，只能由用户明确操作
+// （rules/角色协作.md:48）。
+function renderP8() {
+  const e = STATE.executors;
+  if (!e) { $('#roleTable').innerHTML = ''; $('#runTable').innerHTML = ''; return; }
+  const rows = (e.roles || []).map(r => {
+    const chain = (r.preferences || []).map(p =>
+      `${p.number}. ${esc(p.agent)}${p.model ? '/' + esc(p.model) : ''}`).join(' → ')
+      || '内置 Subagent 承载';
+    const lock = r.gate === 'hard' ? ' <span class="pill rose" title="硬门禁角色">🔒 硬门禁</span>'
+      : r.gate === 'soft' ? ' <span class="pill ghost">软外置</span>' : '';
+    return `<tr><td><b>${esc(r.role)}</b>${lock}<div class="small faint">${esc(r.duty || '')}</div></td>
+      <td class="mono small">${chain}</td>
+      <td class="num">${esc(r.timeout_s ?? '—')}</td></tr>`;
+  }).join('');
+  $('#roleTable').innerHTML = rows
+    || `<tr><td colspan="3" class="faint small">${esc(e.error || 'roles.yaml 未配置角色')}</td></tr>`;
+  $('#runTable').innerHTML = STATE.runs.map(r => `<tr>
+    <td class="mono">${esc(r.dispatch_id || '')}</td><td>${esc(r.role || '')}</td>
+    <td>${esc(r.capsule_id || '未绑定胶囊')}</td>
+    <td>${r.alive ? '<span class="pill violet">running</span>' : '<span class="pill ghost">已退出</span>'}</td>
+    <td class="num">${esc(r.preference_number ?? '—')}</td></tr>`).join('');
+  const hint = $('#rolesHint');
+  if (hint) hint.textContent = e.writable_hint || '修改 roles.yaml 会影响全部调度';
+}
+
+// ---------- P10 设置（M1-8：只读展示，不代写 workspace-config.yaml） ----------
+function renderP10() {
+  const s = STATE.settings;
+  if (!s) return;
+  const people = (s.people || []).map(p =>
+    `<option value="${esc(p.id)}"${p.id === s.me ? ' selected' : ''}>${esc(p.name)}（${esc(p.id)}）</option>`).join('');
+  $('#meSelect').innerHTML = people || '<option>（人员主库为空）</option>';
+  $('#wsRoot').value = s.workspace_root || '';
+  const opener = $('#openerCfg');
+  if (opener) opener.value = (s.preferences && s.preferences.openers_config) || '—';
+  const logDir = $('#logDir');
+  if (logDir) logDir.value = (s.diagnostics && s.diagnostics.logs_dir) || '—';
+  const miss = $('#meBindTip');
+  if (miss) miss.style.display = s.me_missing ? '' : 'none';
+  const links = Object.entries(s.links || {}).map(([k, v]) =>
+    `<span class="chip mono">${esc(k)}: ${esc(v)}</span>`).join('');
+  $('#settingsLinks').innerHTML = links || '<div class="faint small">无</div>';
+}
+
 // ---------- P9 成员 ----------
 function renderP9() {
   $('#memberTable').innerHTML = '<div class="faint small">stakeholders.yaml 人员主库（resolve_stakeholder）在 M1-8 接入。</div>';
@@ -616,7 +688,7 @@ async function boot() {
   if (qs.get('theme')) setTheme(qs.get('theme'));
   try {
     await loadAll();
-    STATE.me = (STATE.capsules[0] && STATE.capsules[0].owner) || '';
+    STATE.me = (STATE.settings && STATE.settings.me) || '';
   } catch (error) {
     STATE.error = String(error && error.message || error);
     $('#gates').innerHTML = `<div class="banner rose flex">加载失败：${esc(STATE.error)}</div>`;
@@ -630,6 +702,9 @@ async function boot() {
   renderP2();
   renderP3();
   renderP5();
+  renderP6();
+  renderP8();
+  renderP10();
   renderP7();
   renderP9();
   renderRuns();

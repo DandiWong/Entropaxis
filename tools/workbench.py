@@ -31,12 +31,16 @@ from typing import Any
 try:
     from . import paths
     from . import project_registry
+    from . import resolve_stakeholder
+    from . import role_preferences
     from . import update_audit_state
     from . import workbench_view
 except ImportError:  # 脚本方式运行
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import paths  # type: ignore
     import project_registry  # type: ignore
+    import resolve_stakeholder  # type: ignore
+    import role_preferences  # type: ignore
     import update_audit_state  # type: ignore
     import workbench_view  # type: ignore
 
@@ -58,7 +62,8 @@ SUBPROCESS_TIMEOUT_S = 120
 # 只读路由表：路径 → 转调的 argv 构造。写路由在下方单独登记，本表不含任何写操作。
 # AC-18：此表与写路由表都不含存储授权策略、租约签发、冲突裁决类接口。
 READ_ROUTES = ("/api/capsules", "/api/todos", "/api/worklog",
-               "/api/resume", "/api/find", "/api/projects", "/api/runs", "/api/gates")
+               "/api/worklog-usage", "/api/resume", "/api/find", "/api/projects",
+               "/api/runs", "/api/gates", "/api/settings", "/api/executors")
 WRITE_ROUTES = ("/api/capsules", "/api/segments/open", "/api/segments/end",
                 "/api/worklog", "/api/files/open")
 # 静态资产（M1-3）：可版本化的前端文件，只读提供；不在 data/ 下。
@@ -195,6 +200,121 @@ def _capsules_with_stage_bar(root: Path, since: str, until: str, me: str | None,
         row["project_label"] = "系统" if row.get("project") == "_root" else str(row.get("project") or "")
         row["sync_state"] = "no_sync" if row.get("project") == "_root" else "local"
     return rows
+
+
+def _usage_view(root: Path, since: str, until: str, me: str | None,
+                project: str | None) -> dict[str, Any]:
+    """P6「我」视角（方案 4.2 P6、6.5.1）：两小计 + 合计 + 缺用量 + actor 四列。
+
+    一次 `capsule_index()` 扫描同时供「我的胶囊」与「合计」使用（不另起扫描逻辑）；
+    `by_actor` / 有效工时 / 机时取 `aggregate_worklog.py --json` 同一窗口的输出，
+    与 CLI 逐项相等（AC-6）。系统胶囊（`project == "_root"`）随 `_root` 行返回，
+    显示口径字段与 P1/P3 同源（AC-20）。
+
+    `usage == "unknown"` 不计数值，只累计 `unknown_count`（6.5.1「缺用量」单列）。
+    """
+    rows = _capsules_with_stage_bar(root, since, until, me, project, _runs(root))
+    aggregate = _aggregate(root, since, until)
+    totals = {"role": {key: 0 for key in ("in", "out", "cache_read", "cache_write")},
+              "manager": {key: 0 for key in ("in", "out", "cache_read", "cache_write")},
+              "total": {key: 0 for key in ("in", "out", "cache_read", "cache_write")}}
+    unknown_count = 0
+    capsules = []
+    for row in rows:
+        usage = row.get("usage") or {}
+        for bucket in ("role", "manager", "total"):
+            for key in totals[bucket]:
+                totals[bucket][key] += int((usage.get(bucket) or {}).get(key) or 0)
+        unknown_count += int(usage.get("unknown_count") or 0)
+        capsules.append({
+            "capsule_id": row["id"], "topic": row["topic"], "project": row["project"],
+            "project_label": row["project_label"], "sync_state": row["sync_state"],
+            "lifecycle": row.get("lifecycle"), "owner": row.get("owner"),
+            "worklog_seconds": row.get("worklog_seconds"),
+            "machine_seconds": row.get("machine_seconds"),
+            "usage": usage,
+        })
+    return {"since": since, "until": until, "me": me, "project": project,
+            "effective_seconds": aggregate.get("effective_seconds"),
+            "machine_seconds": aggregate.get("machine_seconds"),
+            "total_hours": aggregate.get("total_hours"),
+            "by_actor": aggregate.get("by_actor"),
+            "items": aggregate.get("items"), "warnings": aggregate.get("warnings"),
+            "capsules": capsules,
+            "totals": {"role": totals["role"], "manager": totals["manager"],
+                       "total": totals["total"], "unknown_count": unknown_count}}
+
+
+def _people(root: Path) -> dict[str, dict]:
+    """人员主库 `{id: person}`（只读真源，M1-8 P10 身份选择）。"""
+    try:
+        return resolve_stakeholder.load_people_map(root)
+    except Exception:  # noqa: BLE001 - 底册缺失/损坏时退化为无候选，不阻断服务
+        return {}
+
+
+def _settings(root: Path, me: str | None) -> dict[str, Any]:
+    """P10 设置（只读）：本机身份、工作区根、偏好与诊断入口。
+
+    只读展示，不提供写入口：`workspace-config.yaml` 的 `me` 由用户在 P10 选定后
+    人工填写（方案 4.2 P10「改动按字段合并，不整体重写」），本服务不代写（AC-18：
+    不新增写存储授权策略接口，也不新增任何配置文件写路由）。
+    """
+    people = _people(root)
+    opener = root / paths.SYSTEM_DIRNAME / "data" / "templates" / "file-opener.json"
+    return {
+        "me": me,
+        "me_missing": me is None,
+        "workspace_root": str(root),
+        "people": [{"id": pid, "name": str(p.get("name") or pid),
+                    "aliases": [str(a) for a in (p.get("aliases") or [])]}
+                   for pid, p in sorted(people.items())],
+        "preferences": {
+            "openers_config": str(opener),
+            "openers_present": opener.is_file(),
+            "languages": ["zh-CN"],
+            "themes": ["dark", "light", "system"],
+        },
+        "diagnostics": {
+            "logs_dir": str(root / paths.SYSTEM_DIRNAME / "data" / "logs"),
+            "export": "由用户手动打包 data/logs/（本服务不导出、不外发）",
+        },
+        "links": {
+            "rules": ".entropaxis/rules/",
+            "tools": ".entropaxis/tools/",
+            "skills": ".entropaxis/skills/",
+        },
+    }
+
+
+def _executors(root: Path) -> dict[str, Any]:
+    """P8 Agent 执行端（只读）：本机 roles.yaml 承载链 + 每角色默认执行端。
+
+    偏好链、超时与硬门禁锁全部来自 `setup_agents.list_roles()`（第 3 级 roles.yaml
+    的唯一读者），本函数不复制解析逻辑。默认执行端 = 每角色第 1 偏好（P2 显式选择
+    优先于它，Q-8）。**不提供任何改 roles.yaml 的写入口**：roles.yaml 影响全部调度，
+    只能由用户明确操作（`rules/角色协作.md:48`）。
+    """
+    roles_path = paths.DATA_DIR / "templates" / "roles.yaml"
+    payload: dict[str, Any] = {
+        "roles_config": str(roles_path),
+        "present": roles_path.is_file(),
+        "default_timeout_s": role_preferences.FALLBACK_TIMEOUT_S,
+        "roles": [],
+        "error": "",
+        "executors": [{"id": "local", "name": "本机", "kind": "local", "online": True}],
+        "writable": False,
+        "writable_hint": "修改 roles.yaml 会影响全部调度，请直接编辑该文件（本页只读）",
+    }
+    try:
+        import setup_agents
+        data = setup_agents.load_config(roles_path)
+        payload["default_timeout_s"] = data.get("default_timeout_s",
+                                                role_preferences.FALLBACK_TIMEOUT_S)
+        payload["roles"] = setup_agents.list_roles(data)
+    except Exception as error:  # noqa: BLE001 - 配置缺失/损坏时给说明，不阻断其它路由
+        payload["error"] = str(error)
+    return payload
 
 
 def _audit_gates(root: Path, row: dict) -> dict | None:
@@ -470,6 +590,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         if route == "/api/worklog":
             self._send_json(200, _aggregate(root, since, until))
             return
+        if route == "/api/worklog-usage":
+            self._send_json(200, _usage_view(root, since, until, me, project))
+            return
         if route == "/api/resume":
             self._send_json(200, _resume(root))
             return
@@ -488,6 +611,12 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             return
         if route == "/api/gates":
             self._send_json(200, _gates(root, since, until, me, project))
+            return
+        if route == "/api/settings":
+            self._send_json(200, _settings(root, me))
+            return
+        if route == "/api/executors":
+            self._send_json(200, _executors(root))
             return
         self._send_error_detail(404, f"未知路由 {route}")
 

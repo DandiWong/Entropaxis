@@ -76,6 +76,9 @@
         <div class="ph"><div><h1>你好，<span class="not-empty" id="meName">…</span><span class="sc-only on-empty">新成员</span></h1><div class="sub" id="p1Date">—</div></div>
           <div class="acts"><button class="btn" onclick="go('p2')">打开会话</button><button class="btn pri" onclick="modal('新建胶囊','将调用 init_capsule.py 在所选项目下建胶囊目录与 capsule.yaml。',[['取消'],['选择项目…','pri',()=>go('p5')]])">＋ 新建胶囊</button></div></div>
 
+        <!-- M1-8：本机身份缺省时的绑定引导。只提示、不自动写入（workspace-config.yaml::me 由人工填）。 -->
+        <div class="banner blue flex" id="meBind" style="display:none">ⓘ 未绑定本机身份（`workspace-config.yaml::me`）：「我的」过滤、P6「我」视角与写前检查都需要它。<button class="btn sm pri" onclick="go('p10')">去 P10 绑定</button></div>
+
         <div class="banner blue sc-only on-empty flex">ⓘ 未配置身份：「我的」过滤需要人员主库 id。<button class="btn sm pri" onclick="go('p9')">去 P9 绑定</button></div>
 
         <div class="grid g-main">
@@ -243,6 +246,7 @@
         <div class="ph"><div><h1>Agent 执行端</h1><div class="sub">本机与服务端执行 · 本机 roles.yaml 承载链只读展示</div></div></div>
         <div class="card" style="margin-bottom:12px"><h3>本机承载 · 角色 → 偏好链<span class="hint">roles.yaml · 🔒 = 硬门禁角色</span></h3>
           <table id="roleTable"><tr><th>角色</th><th>偏好链（序号 · profile · agent/model）</th><th class="num">超时</th></tr></table>
+          <div class="banner amber flex" id="rolesHintBox" style="margin-top:12px"><span class="small" id="rolesHint"></span><button class="btn sm" onclick="toast('请直接编辑 data/templates/roles.yaml（本页不提供写入口）')">打开 roles.yaml</button></div>
         </div>
         <div class="card"><h3>运行中 / 最近调度<span class="hint">data/logs/run/ · dispatch_role.py trace</span></h3>
           <table><tr><th>dispatch_id</th><th>角色</th><th>胶囊</th><th>状态</th><th class="num">偏好序号</th></tr><tbody id="runTable"></tbody></table>
@@ -257,20 +261,29 @@
 
       <!-- ===== P10 设置 ===== -->
       <section class="page" id="p10">
-        <div class="ph"><div><h1>设置</h1><div class="sub">本机偏好 · 写 workspace-config.yaml，按字段合并，不整体重写</div></div></div>
+        <div class="ph"><div><h1>设置</h1><div class="sub">本机偏好 · 只读展示；改动按字段合并，不整体重写</div></div></div>
+        <div class="banner blue flex" id="meBindTip" style="display:none">ⓘ 未绑定本机身份。请在 <span class="mono">data/templates/workspace-config.yaml</span> 增加 <span class="mono">me: &lt;people.id&gt;</span>，或启动时加 <span class="mono">--me</span>；本页不自动写入。</div>
         <div class="grid g2">
-          <div class="card"><h3>本机</h3>
+          <div class="card"><h3>本机<span class="hint">身份 = 人员主库 id（stakeholders.yaml::people）</span></h3>
             <div class="form">
               <label>身份</label><select id="meSelect"></select>
               <label>工作区根</label><input class="mono" id="wsRoot" value="—">
-              <label>主题</label><select id="themeSel"><option value="dark">暗色</option><option value="light">亮色</option></select>
+              <label>默认打开程序</label><input class="mono" id="openerCfg" value="—" readonly>
+              <label>主题</label><select id="themeSel"><option value="dark">暗色</option><option value="light">亮色</option><option value="system">跟随系统</option></select>
             </div></div>
-          <div class="card"><h3>同步</h3>
+          <div class="card"><h3>同步<span class="hint">M2 同步器落地后生效</span></h3>
             <div class="form">
               <label>同步频率</label><select><option>每 5 分钟（GUI 打开时）</option><option>仅手动</option></select>
               <label>离线模式</label><div class="row"><label class="switch"><input type="checkbox" id="offSw"><span></span></label><span class="small muted">打开后不连远端，只写本地</span></div>
             </div></div>
-          <div class="card"><h3>关于</h3><div class="small muted">M1 静态资产 · Tech-175 · 数据来自本机只读工具（capsule_index / todo_index / aggregate_worklog）。加 <span class="mono">?os=win</span> 看 Windows 版（无中断按钮）。</div></div>
+          <div class="card"><h3>诊断</h3>
+            <div class="form">
+              <label>日志目录</label><input class="mono" id="logDir" value="—" readonly>
+              <label>导出</label><button class="btn" onclick="toast('请手动打包 data/logs/（本服务不导出、不外发）')">导出日志</button>
+            </div></div>
+          <div class="card"><h3>规则 · 工具 · Skill<span class="hint">只读链接，不在 GUI 内编辑</span></h3>
+            <div class="row" id="settingsLinks" style="flex-wrap:wrap;gap:8px"></div>
+            <div class="small muted" style="margin-top:10px">M1 静态资产 · Tech-175 · 数据来自本机只读工具（capsule_index / todo_index / aggregate_worklog）。加 <span class="mono">?os=win</span> 看 Windows 版（无中断按钮）。</div></div>
         </div>
       </section>
     </main>
