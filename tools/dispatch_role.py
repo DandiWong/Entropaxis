@@ -896,8 +896,11 @@ def _run_with_segment(cwd: Path, role: str, deliverable: Path | None, capsule: P
     （LOCAL_CARRY）不开段（D-7）：`has_external_chain=False` 表示本次 run 没有外置执行链
     （`preferences: []` / `configured→local`），没有外置角色劳动可计量——即使 `--verify`
     通过也不开段、不写 worklog，只向 stderr 告警「本地承载·<角色>，无有效工时」，由
-    Manager 段计量（方案 D-7）。结段失败只向 stderr 打 ⚠️，不改 outcome 与退出码
-    （方案 4.2 第 7 步、第六节）。工时写入的任何失败都不阻断调度（9.4）。
+    Manager 段计量（方案 D-7）。有链路径严格「开段 → 执行（含 verify）→ 结段」：段的区间
+    必须覆盖外置执行时间（IM-7 / AC-1a、AC-1b），`machine_seconds = round(endAt − startAt)`，
+    `effective_seconds = machine_seconds − 失败 attempt 秒`（最少 1 秒）。结段失败只向
+    stderr 打 ⚠️，不改 outcome 与退出码（方案 4.2 第 7 步、第六节）。工时写入的任何失败都
+    不阻断调度（9.4）。
     `dispatch_id` 由调用方给定时与 `--out` 查重锁共用同一个 ID（T11）。
     `lock_out` 给定时本函数持有该 `--out` 的查重锁：异常路径必定释放（否则残留锁
     会让同一 `--out` 一直被拒，须人工清理）；`release_deferred=True` 表示调用方还要
@@ -914,9 +917,12 @@ def _run_with_segment(cwd: Path, role: str, deliverable: Path | None, capsule: P
             _release_out(lock_out, run_dispatch_id)
 
     try:
-        result, attempts = execute(run_dispatch_id)
         if not has_external_chain:
-            # D-7：没有外置执行就没有机时。校验通过只是本地判据，不构成外置角色劳动。
+            # D-7：没有外置执行就没有机时。先执行、后判定，但不开段（IM-7）——
+            # 分支判断放在执行之前只是为了让「空链」走「不开段」这条路，不是把
+            # 执行整体提前；有链路径仍是「开段 → 执行 → 结段」。
+            result, attempts = execute(run_dispatch_id)
+            # 校验通过只是本地判据，不构成外置角色劳动。
             print(f"⚠️ 本地承载·{role}，无有效工时：本次调度无外置执行链（preferences 为空），"
                   f"未开角色段、未写 worklog；如需计量请由 Manager 段记录（dispatch_id="
                   f"{run_dispatch_id}）。", file=sys.stderr)
@@ -925,7 +931,9 @@ def _run_with_segment(cwd: Path, role: str, deliverable: Path | None, capsule: P
             capsule, path=deliverable, dispatch_id=run_dispatch_id, role=role, deliverable=deliverable)
         if opened is None:
             # 开段失败（无胶囊、终态、锁超时、数据异常）：静默，不影响判定
-            return result, None
+            return execute(run_dispatch_id)[0], None
+        # 段的区间必须覆盖真实外置执行（含 verify）：先开段、再执行、再结段。
+        result, attempts = execute(run_dispatch_id)
         ended = update_capsule.end_dispatch_segment(
             run_dispatch_id, bool(result.get("succeeded")),
             failed_attempt_seconds=_failed_attempt_seconds(attempts),

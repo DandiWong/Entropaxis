@@ -1935,6 +1935,69 @@ class WorktimeSettleTests(DispatchRoleTestBase):
         self.assertEqual(end["dispatch_id"], start["dispatch_id"])
         self.assertEqual(update_capsule.read_worklogs(cap), [])
 
+    def test_t10_f_external_execution_is_covered_by_segment_window(self) -> None:
+        """IM-7 / AC-1a：外置执行必须落在角色段区间内，段机时覆盖真实子进程耗时。
+
+        外置脚本执行中读取胶囊：必须已存在 open 的 role 段（开段在执行之前）；
+        脚本真实 sleep 2.1s，段 machine_seconds ≥ 2，worklog seconds 等于它。
+        """
+        cap = self._capsule()
+        out = cap / "02_方案.md"
+        seen = self.ws / "seen_during_run.txt"
+        slow_ok = self.scripts / "slow_ok.py"
+        slow_ok.write_text(
+            "import sys, time\nfrom pathlib import Path\n"
+            f"sys.path.insert(0, {str(SYSTEM_ROOT)!r})\n"
+            "time.sleep(2.1)\n"
+            "from tools import update_capsule\n"
+            f"open_segs = [s for s in update_capsule.read_segments({str(cap)!r})\n"
+            "              if s.get('actor') == 'role' and s['state'] == 'open']\n"
+            f"Path({str(seen)!r}).write_text(str(len(open_segs)))\n"
+            f"Path({str(out)!r}).write_text({proposal_doc()!r})\n",
+            encoding="utf-8")
+        self.write_config({"architecture-primary": {"argv": [sys.executable, str(slow_ok), "{PROMPT}"],
+                                                    "timeout_s": 30}})
+        res = dr.run_direct_result(self.ws, "Architecture", prompt=str(out), out=out,
+                                   owner="t", capsule=cap)
+        self.assertEqual((res["outcome"], res["exit"]), ("succeeded", dr.EXIT_OK), res)
+        self.assertEqual(seen.read_text(encoding="utf-8"), "1",
+                         "外置执行期间必须已开角色段（开段在执行之前）")
+        segs = [s for s in update_capsule.read_segments(cap) if s.get("actor") == "role"]
+        self.assertEqual(len(segs), 1)
+        seg = segs[0]
+        self.assertGreaterEqual(seg["machine_seconds"], 2,
+                                "外置脚本 sleep 2.1s，段机时必须覆盖它，不能只是开结段尾声")
+        self.assertEqual(seg["effective_seconds"], seg["machine_seconds"])
+        logs = [w for w in update_capsule.read_worklogs(cap) if w.get("actor") == "role"]
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]["seconds"], seg["machine_seconds"],
+                         "worklog 秒数必须等于段机时，不是 0～1 秒的尾声")
+        self.assertEqual(logs[0]["ref"], seg["seg_id"])
+
+    def test_t10_g_failed_external_execution_is_covered_by_segment_window(self) -> None:
+        """IM-7 / AC-7：外置失败同样落在段区间内；failed 段计机时、无 worklog、无有效秒。"""
+        cap = self._capsule()
+        out = cap / "02_方案.md"
+        slow_fail = self.scripts / "slow_fail.py"
+        slow_fail.write_text("import sys, time\ntime.sleep(2.1)\nsys.exit(1)\n", encoding="utf-8")
+        self.write_config({"architecture-primary": {"argv": [sys.executable, str(slow_fail), "{PROMPT}"],
+                                                    "timeout_s": 30}})
+        buf, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+            res = dr.run_direct_result(self.ws, "Architecture", prompt=str(out), out=out,
+                                       owner="t", capsule=cap)
+        self.assertEqual((res["outcome"], res["exit"]), ("aborted", dr.EXIT_BLOCKED),
+                         "软角色 strict 下全链失败是 aborted，不是 blocked；退出码 2 不变")
+        self.assertEqual(res["worklog_refs"], [])
+        segs = [s for s in update_capsule.read_segments(cap) if s.get("actor") == "role"]
+        self.assertEqual(len(segs), 1)
+        seg = segs[0]
+        self.assertEqual(seg["state"], "failed")
+        self.assertGreaterEqual(seg["machine_seconds"], 2,
+                                "失败 attempt 的 2.1s 必须在段区间内，不是开结段尾声")
+        self.assertNotIn("effective_seconds", seg)
+        self.assertEqual(update_capsule.read_worklogs(cap), [])
+
     def test_t10_attempts_carry_dispatch_id_usage_and_duration(self) -> None:
         """执行过的 attempt 带 dispatch_id / usage / duration_s；超时写 usage: "unknown"。"""
         out = self.ws / "02_方案.md"
@@ -2017,6 +2080,10 @@ class WorktimeSettleTests(DispatchRoleTestBase):
         self.assertEqual((res["outcome"], res["exit"]), ("local_carry", dr.EXIT_LOCAL))
         self.assertEqual(update_capsule.read_segments(cap), [], "空链不得开角色段")
         self.assertEqual(update_capsule.read_worklogs(cap), [], "空链不得写 worklog")
+        warning = res["_stderr"]
+        self.assertIn("⚠️", warning)
+        self.assertIn("本地承载·Builder", warning)
+        self.assertIn("无有效工时", warning)
 
     def test_empty_chain_with_passing_verify_writes_no_role_segment(self) -> None:
         """D-7 / IM-4：空链 + verify 通过 → 仍不开角色段、无 worklog，并告警无机时可计量。"""
@@ -2050,10 +2117,15 @@ class WorktimeSettleTests(DispatchRoleTestBase):
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
             res = dr.run_direct_result(self.ws, "Builder", prompt=str(out), out=out,
                                        owner="t", capsule=cap, verify="audit-verify")
-        self.assertEqual(res["exit"], dr.EXIT_BLOCKED, res)
+        self.assertEqual((res["outcome"], res["exit"]), ("aborted", dr.EXIT_BLOCKED),
+                         "软角色 strict 下 verify 失败是 aborted，不是 blocked；退出码 2 不变")
         self.assertEqual(res["failure_code"], "VERIFY_FAILED")
         self.assertEqual(update_capsule.read_segments(cap), [], "空链失败也不开段")
         self.assertEqual(update_capsule.read_worklogs(cap), [])
+        warning = err.getvalue()
+        self.assertIn("⚠️", warning)
+        self.assertIn("本地承载·Builder", warning)
+        self.assertIn("无有效工时", warning)
 
     def test_empty_chain_with_open_manager_segment_leaves_it_open(self) -> None:
         """D-7：空链调度不得误结或错误归入胶囊内 open 的 Manager 段。"""
