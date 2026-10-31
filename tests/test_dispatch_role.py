@@ -2132,7 +2132,9 @@ class RunFileLifecycleTests(DispatchRoleTestBase):
         self.assertTrue(ok)
         expected_fields = {"dispatch_id", "pid", "role", "profile", "agent", "model", "cwd", "started_at",
                            # M0（AC-12）：只增不改，采集器按键名取值，新增三个键不进入它的输出
-                           "capsule", "preference_number", "timeout_s"}
+                           "capsule", "preference_number", "timeout_s",
+                           # IM-2：attempt 序号另存字段，不进键名（live key 保持 run 级 32hex）
+                           "attempt_number"}
         self.assertEqual(set(captured.keys()), expected_fields)
         self.assertEqual(captured["pid"], os.getpid())
         self.assertEqual(captured["role"], "Researcher")
@@ -2256,6 +2258,91 @@ class RunFileCapsuleFieldTests(DispatchRoleTestBase):
         self.assertEqual(item["status"], "running")
         self.assertEqual(item["model"], "gemini-3.8-flash")
         self.assertEqual((item["task"], item["tokens"]), (None, None))
+
+    def test_live_dispatch_items_key_stays_run_level_and_validates(self) -> None:
+        """IM-2：run 文件 live key 必须是 32hex run 级 dispatch_id，并通过服务端真实验证器。
+
+        生产路径：真实 `_write_run_file` → 真实采集器 `live_dispatch_items` → 真实服务端
+        `agent_perf.validate_live`。attempt 层级 id（`<dispatch_id>.<n>`）只进 trace，
+        不进 run 文件：否则整个 live 载荷被判 400。
+        """
+        import importlib.util
+        scripts_dir = self._dashboard_scripts_dir()
+        spec = importlib.util.spec_from_file_location(
+            "collect_agent_perf", scripts_dir / "collect_agent_perf.py")
+        collector = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(collector)
+        api = self._server_agent_perf()
+
+        # RUN_DIR 改成采集器的真实布局 `<data>/logs/run`，让生产链路逐环对上
+        data_dir = self.ws / "data"
+        run_dir = data_dir / "logs" / "run"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        with mock.patch.object(dr, "RUN_DIR", run_dir):
+            out = self.ws / "02_方案.md"
+            self.ok_body.write_text(proposal_doc(), encoding="utf-8")
+            prof = {"name": "p-ok", "argv": [self.ok, "{PROMPT}"], "timeout_s": 30}
+            run_id = "f" * 32
+            captured: dict = {}
+            real_run = dr.subprocess.run
+
+            def fake_run(*args, **kwargs):
+                files = list(run_dir.glob("*.json"))
+                self.assertEqual(len(files), 1)
+                captured["name"] = files[0].stem
+                captured.update(json.loads(files[0].read_text(encoding="utf-8")))
+                return real_run(*args, **kwargs)
+
+            with mock.patch("tools.dispatch_role.subprocess.run", side_effect=fake_run):
+                code, attempts, ok = dr.execute_chain([prof], f"将本次产出写入：{out}", self.ws,
+                                                      out, "Architecture", dispatch_id=run_id)
+        self.assertTrue(ok)
+
+        # run 文件：文件名与 dispatch_id 都是 run 级 32hex；attempt 序号另存字段
+        self.assertEqual(captured["name"], run_id)
+        self.assertEqual(captured["dispatch_id"], run_id)
+        self.assertEqual(captured["attempt_number"], 1)
+        self.assertRegex(captured["dispatch_id"], r"^[0-9a-f]{32}$")
+        # attempt 上的 dispatch_id 仍是 run 级（档案配对用），trace 里才是层级 id
+        self.assertEqual(attempts[0]["dispatch_id"], run_id)
+
+        # 采集器扫的是运行中的 run 文件：用上面捕获的真实字段复现生产载荷。
+        # agent 是服务端 live 契约的必填项：无 agent 的 profile 会写成 null，由采集器
+        # 映射为 None——那属另一个既有消费边界，与本条的 live key 无关，这里补真实值。
+        captured["agent"] = "claude"
+        captured["model"] = "sonnet"
+        (run_dir / f"{run_id}.json").write_text(json.dumps(captured, ensure_ascii=False),
+                                                encoding="utf-8")
+        payload = {"host_id": "a" * 16, "items": collector.live_dispatch_items(data_dir)}
+        self.assertEqual([i["key"] for i in payload["items"]], [run_id])
+        api.validate_live(payload)  # 不抛 PayloadError 即通过服务端键契约
+
+        # 反例：把层级 id 当 key 必须被服务端拒绝（AC-14 既有消费契约）
+        payload["items"][0]["key"] = f"{run_id}.1"
+        with self.assertRaises(api.PayloadError) as ctx:
+            api.validate_live(payload)
+        self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(ctx.exception.field, "$.items[0].key")
+
+    def _dashboard_scripts_dir(self) -> Path:
+        scripts_dirs = sorted((SYSTEM_ROOT / "skills").glob("*-dashboard/scripts"))
+        scripts_dir = next((d for d in scripts_dirs
+                            if (d / "collect_agent_perf.py").is_file()), None)
+        self.assertIsNotNone(scripts_dir, "dashboard Skill 下未找到 collect_agent_perf.py")
+        assert scripts_dir is not None
+        sys.path.insert(0, str(scripts_dir))
+        return scripts_dir
+
+    def _server_agent_perf(self):
+        """真实服务端验证器：dashboard 在工作区根（相对控制面的兄弟目录），按包导入。"""
+        server = SYSTEM_ROOT.parent / "dashboard" / "multiuser" / "agent_perf.py"
+        if not server.is_file():
+            self.skipTest("未找到 dashboard/multiuser/agent_perf.py（非本机部署）")
+        pkg_root = SYSTEM_ROOT.parent
+        if str(pkg_root) not in sys.path:
+            sys.path.insert(0, str(pkg_root))
+        from dashboard.multiuser import agent_perf as api
+        return api
 
 
 class OutLockTests(DispatchRoleTestBase):

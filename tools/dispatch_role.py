@@ -1006,15 +1006,19 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
         t0 = time.time()
         # 开始记录：子进程跑到一半时会话断掉，只有结束记录的话分不清"没跑/在跑/被杀"；
         # resume_context.py 按 dispatch_id 配对，无结束记录时再看 pid 是否存活。
-        # T10：id 升级为 `<run dispatch_id>.<链上序号>`——前缀关联 run 级段与 attempt。
+        # 两套 id 各有契约：trace 的 id 是 `<run dispatch_id>.<链上序号>`（D-1 配对/关联）；
+        # run 文件的文件名与 dispatch_id 保持 run 级 32hex——看板采集器把它原样当 live key，
+        # 服务端验证器只收 32hex/12hex（IM-2：层级 id 会让整个 live 载荷被 400 拒掉）。
+        # attempt 序号另存 `attempt_number` 字段，不进键名。
         attempt_id = f"{run_id}.{ordinal_no}"
         trace({"event": "start", "dispatch_id": attempt_id, "pid": os.getpid(), "role": role,
                "profile": prof["name"], "agent": prof.get("agent"), "model": prof.get("model"),
                "cwd": str(cwd), "deliverable": str(deliverable)})
         produces_file = deliverable != cwd
         before = _sha256_path(deliverable) if produces_file and deliverable.exists() else None
-        _write_run_file(attempt_id, {
-            "dispatch_id": attempt_id,
+        _write_run_file(run_id, {
+            "dispatch_id": run_id,
+            "attempt_number": ordinal_no,
             "pid": os.getpid(),
             "role": role,
             "profile": prof["name"],
@@ -1095,7 +1099,7 @@ def execute_chain(chain: list[dict[str, Any]], prompt: str, cwd: Path, deliverab
                    "cwd": str(cwd), "executed": True, "failure_code": "TIMEOUT", "duration_s": round(time.time() - t0, 1)})
             codes.add("TIMEOUT")
         finally:
-            _remove_run_file(attempt_id)
+            _remove_run_file(run_id)
     if not codes:
         codes.add("CHAIN_EXHAUSTED")
     aggregate = min(codes, key=lambda c: _FAILURE_PRIORITY[c])
