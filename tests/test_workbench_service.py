@@ -113,8 +113,19 @@ class ReadOnlyRouteTests(_WorkspaceCase):
         cli = _run([str(SYSTEM_ROOT / "tools" / "aggregate_worklog.py"),
                     "--json", "--root", str(self.root), "capsule-index"])
         self.assertEqual(cli.returncode, 0, cli.stderr)
-        self.assertEqual(payload, json.loads(cli.stdout))
+        rows = json.loads(cli.stdout)
         self.assertTrue(any(row["id"] == "Tech-9" for row in payload))
+        # M1-4：路由在 capsule_index 行上叠加 `stage_bar` 与显示口径字段（project_label /
+        # sync_state），其余字段逐项相等。
+        view_fields = ("stage_bar", "project_label", "sync_state")
+        self.assertEqual([{k: v for k, v in row.items() if k not in view_fields} for row in payload],
+                         [{k: v for k, v in row.items() if k not in view_fields} for row in rows])
+        for row in payload:
+            self.assertIn("stage_bar", row)
+            self.assertEqual([s["stage"] for s in row["stage_bar"]],
+                             ["01_调研", "02_方案", "03_设计", "04_Spec", "05_审计", "07_验收", "08_汇报"])
+            self.assertIn("project_label", row)
+            self.assertIn("sync_state", row)
 
     def test_capsule_detail_route_returns_single_row(self) -> None:
         status, payload, _ = self._get(self.base + "/api/capsules/Tech-9", self.token)
