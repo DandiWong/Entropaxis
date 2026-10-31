@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entropaxis 团队协作工作台 · Tech-175 M1</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="sc-normal">
+<!--
+  Entropaxis 团队协作工作台 · M1-3 静态资产（可版本化）
+  原型视觉与交互真源：data/docs/20261029_Entropaxis团队协作工作台/prototypes/workbench.html（过程证据，不随版本库演进）
+  本目录 = 原型 v2 视觉骨架的可版本化副本：index.html + style.css + app.js + 本地图片。
+  零外链：无 CDN、无远程字体、无远程图片；断网可直接打开。
+  启动令牌：服务端每次启动打印 token <值> 到 stderr，前端所有请求带 X-Entropaxis-Token。
+-->
+<div class="app">
+  <!-- 顶栏：全局框架元素 -->
+  <header class="titlebar">
+    <div class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+    <div class="brand">
+      <img src="attaxis_logo.svg" alt="" onerror="this.style.display='none'">
+      <b>ENTROPAXIS</b><span class="tag">团队工作台</span>
+    </div>
+    <div class="search">
+      <input id="gsearch" placeholder="搜索主题词 / 项目别名 / 胶囊 ID（find_capsule · resolve_project）" autocomplete="off">
+      <div class="pop search-pop" id="searchPop"></div>
+    </div>
+    <div class="spacer"></div>
+    <select class="scenario" id="scenario" title="演示用：切换空态与异常态">
+      <option value="normal">演示态：正常</option>
+      <option value="offline">演示态：离线</option>
+      <option value="conflict">演示态：同步冲突</option>
+      <option value="fail">演示态：调度失败</option>
+      <option value="empty">演示态：空态（新成员）</option>
+    </select>
+    <button class="badge-btn" id="connBtn" data-pop="connPop"></button>
+    <button class="badge-btn" id="agentBtn" data-pop="agentPop"></button>
+    <button class="badge-btn" id="themeBtn" title="切换亮/暗主题">◐ <span id="themeLbl">暗</span></button>
+    <button class="badge-btn" id="idBtn" data-pop="idPop"></button>
+
+    <div class="pop" id="connPop" style="right:250px;top:42px;width:330px"></div>
+    <div class="pop" id="agentPop" style="right:150px;top:42px;width:380px"></div>
+    <div class="pop" id="idPop" style="right:10px;top:42px;width:280px">
+      <h4>当前成员 · 来自 P9 身份映射</h4>
+      <div class="pop-row not-empty"><span class="avatar" style="background:#0d9488">丹</span><div><div>王丹迪 <span class="faint mono">wang.dandi</span></div><div class="small muted">git: Dandi Wong · dashboard: dandi</div></div></div>
+      <div class="pop-row sc-only on-empty flex"><span class="avatar" style="background:#64748b">?</span><div>未绑定身份 <a onclick="go('p10')">去 P10 选定</a></div></div>
+      <h4 style="margin-top:10px">切换工作区</h4>
+      <div class="pop-row"><span class="dot" style="background:var(--emerald)"></span><span class="mono">/Users/dandi/Work/FosunPharma</span><span class="pill brand" style="margin-left:auto">当前</span></div>
+    </div>
+  </header>
+
+  <div class="body">
+    <nav class="sidenav" id="sidenav">
+      <div class="grp">我的</div>
+      <button class="nav" data-p="p1"><span class="pn">P1</span>工作台首页</button>
+      <button class="nav" data-p="p2"><span class="pn">P2</span>会话<span class="cnt sc-only on-fail red">失败</span></button>
+      <div class="grp">事务</div>
+      <button class="nav" data-p="p3"><span class="pn">P3</span>胶囊列表<span class="cnt not-empty" id="navCapCnt">—</span></button>
+      <button class="nav" data-p="p4"><span class="pn">P4</span>胶囊详情</button>
+      <button class="nav" data-p="p5"><span class="pn">P5</span>项目</button>
+      <button class="nav" data-p="p6"><span class="pn">P6</span>工时与 Token</button>
+      <div class="grp">团队与执行</div>
+      <button class="nav" data-p="p7"><span class="pn">P7</span>存储与同步<span class="cnt sc-only on-conflict red">2</span></button>
+      <button class="nav" data-p="p8"><span class="pn">P8</span>Agent 执行端</button>
+      <button class="nav" data-p="p9"><span class="pn">P9</span>成员与权限</button>
+      <button class="nav" data-p="p10"><span class="pn">P10</span>设置</button>
+      <div class="foot">本地服务 127.0.0.1<br>真源：本机文件 · GUI 不内置模型</div>
+    </nav>
+
+    <main id="main">
+      <div class="banner amber sc-only on-offline flex">⚠ 离线，显示本地副本。写操作照常落本地，标记「未汇合」，恢复后推送。<button class="btn sm" onclick="go('p7')">查看同步队列</button></div>
+
+      <!-- ===== P1 工作台首页（M1-4：卡片数据来自 /api/capsules 与 /api/todos） ===== -->
+      <section class="page" id="p1">
+        <div class="ph"><div><h1>你好，<span class="not-empty" id="meName">…</span><span class="sc-only on-empty">新成员</span></h1><div class="sub" id="p1Date">—</div></div>
+          <div class="acts"><button class="btn" onclick="go('p2')">打开会话</button><button class="btn pri" onclick="modal('新建胶囊','将调用 init_capsule.py 在所选项目下建胶囊目录与 capsule.yaml。',[['取消'],['选择项目…','pri',()=>go('p5')]])">＋ 新建胶囊</button></div></div>
+
+        <div class="banner blue sc-only on-empty flex">ⓘ 未配置身份：「我的」过滤需要人员主库 id。<button class="btn sm pri" onclick="go('p9')">去 P9 绑定</button></div>
+
+        <div class="grid g-main">
+          <div class="grid" style="align-content:start">
+            <div class="card">
+              <h3>待我拍板 <span class="pill rose not-empty" id="gateCnt">0</span><span class="hint">判据 11.3：下一棒未开始即待确认（不加确认标记，D-10）· check_audit_gate · Tech-176 段状态</span></h3>
+              <div id="gates"></div>
+              <div class="empty" id="gatesEmpty" style="display:none;padding:14px">暂无需要你拍板的事项</div>
+            </div>
+
+            <div class="card">
+              <h3>我的胶囊<span class="hint">owner / members + task_segments.lastActivityAt</span></h3>
+              <div class="grid g2 not-empty" id="myCaps"></div>
+              <div class="sc-only on-empty">
+                <div class="empty"><img src="attaxis_mascot_figurine.png" alt="" onerror="this.style.display='none'"><h4>还没有你的胶囊</h4><div>胶囊是一件事务的全部文件。从这里开始：</div>
+                  <div class="row" style="justify-content:center;margin-top:12px"><button class="btn pri" onclick="toast('将调用 init_capsule.py 新建胶囊')">新建胶囊</button><button class="btn" onclick="go('p5')">从项目选</button></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid" style="align-content:start">
+            <div class="card">
+              <h3>本周投入<span class="hint">与 P6 同源</span></h3>
+              <div class="grid g3 not-empty" id="weekKpi">
+                <div class="kpi"><div class="v" id="wkHuman">—</div><div class="l">人工有效工时</div></div>
+                <div class="kpi"><div class="v" id="wkMachine">—</div><div class="l">Agent 机时</div></div>
+                <div class="kpi"><div class="v" id="wkToken">—</div><div class="l">token 合计</div></div>
+              </div>
+              <div class="grid g3 sc-only on-empty"><div class="kpi"><div class="v">0</div><div class="l">人工工时</div></div><div class="kpi"><div class="v">0</div><div class="l">机时</div></div><div class="kpi"><div class="v">0</div><div class="l">token</div></div></div>
+            </div>
+            <div class="card">
+              <h3>我的 TODO<span class="hint">勾选只改本地 Tasks.md</span></h3>
+              <div id="todoBox"></div>
+              <div class="empty sc-only on-empty" style="padding:14px">暂无 TODO</div>
+            </div>
+            <div class="card">
+              <h3>我的项目<span class="hint">registry + stakeholders + members</span></h3>
+              <div class="not-empty" id="myProjects"></div>
+              <div class="sc-only on-empty"><button class="btn" onclick="go('p5')">浏览项目</button></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== P2 会话（M1-5 起接真实数据，当前为视觉骨架） ===== -->
+      <section class="page" id="p2">
+        <div class="ph"><div><h1>会话</h1><div class="sub">以 Manager 身份对话 · 正文由 Agent CLI 自存，GUI 只存 session_id 与胶囊绑定</div></div>
+          <div class="acts"><button class="btn" onclick="toast('调用 resume_context.py：汇集 Active 项、open 审计问题与进行中调度')">继续（resume_context）</button><button class="btn pri" onclick="toast('已新建会话')">＋ 新会话</button></div></div>
+        <div class="chat">
+          <div class="sess-list">
+            <div id="sessList"></div>
+          </div>
+
+          <div class="flow">
+            <div class="msgs" id="msgs"></div>
+            <div class="composer">
+              <div class="banner amber sc-only on-offline flex" style="margin:0">服务端不可达：发往服务端的消息标「待发送」，恢复后需你点确认才补发。</div>
+              <textarea id="input" placeholder="输入指令，Enter 发送，Shift+Enter 换行"></textarea>
+              <div class="row">
+                <span class="small muted" title="只作用于本会话之后发出的角色调度；Manager 会话始终在本机。优先级：此处显式选择 > P8 每角色默认 > 本机（D-13）">执行端</span>
+                <span class="seg" id="execSeg"><button class="on" data-v="default">按角色默认</button><button data-v="local">本机</button><button data-v="server">服务端</button></span>
+                <span class="small faint" id="execHint">→ 本机（P8 默认）</span>
+                <span class="small muted" style="margin-left:8px">绑定胶囊</span>
+                <select id="bindCap"></select>
+                <button class="btn sm" title="附件">📎</button>
+                <span class="small faint win-only" style="margin-left:auto" title="Windows 上 os.kill 等同强杀，会残留 out 锁（Q-7）">Windows 版不提供中断</span>
+                <button class="btn danger" id="stopBtn" style="margin-left:auto" onclick="modal('中断当前调度','本机：向 run 文件中的 pid 发 SIGINT（不发 SIGKILL），子进程收尾并释放 out 锁。若角色段仍 open，会进入首页「工时待核决」，由你点击结段。',[['取消'],['确认中断','pri',()=>toast('已发送 SIGINT')]])">■ 中断</button>
+                <button class="btn pri" onclick="send()">发送</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="ctx">
+            <div>
+              <div class="row small muted" style="margin-bottom:4px">阶段 · <span class="mono" id="ctxCapId">—</span><a style="margin-left:auto" onclick="openCapsule($('#ctxCapId').textContent)">详情 ›</a></div>
+              <div class="stages" id="p2stages"></div>
+            </div>
+            <div>
+              <div class="small muted" style="margin-bottom:6px">当前工作角色</div>
+              <div class="rolecard" id="roleCard"></div>
+            </div>
+            <div class="card" style="padding:12px">
+              <h3 style="margin-bottom:8px">本会话用量<span class="hint">流式 usage + attempts</span></h3>
+              <dl class="kv" id="sessUsage">
+                <dt>token in</dt><dd class="mono">—</dd>
+                <dt>token out</dt><dd class="mono">—</dd>
+                <dt>cache 读 / 写</dt><dd class="mono">—</dd>
+                <dt>机时</dt><dd class="mono">—</dd>
+              </dl>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== P3 胶囊列表 ===== -->
+      <section class="page" id="p3">
+        <div class="ph"><div><h1>胶囊列表</h1><div class="sub">全量检索 · 数据来自 capsule_index（复用 aggregate_worklog 扫描函数，不落盘缓存）</div></div>
+          <div class="acts"><button class="btn" id="pullBtn" disabled onclick="toast('已加入拉取队列：'+selected().join('、'))">拉取到本地</button></div></div>
+        <div class="card" style="margin-bottom:12px">
+          <div class="row wrap" id="filters">
+            <select data-f="proj"><option value="">全部项目</option></select>
+            <select data-f="life"><option value="">全部生命周期</option><option>draft</option><option>active</option><option>delivered</option><option>archived</option></select>
+            <select data-f="stage"><option value="">全部阶段</option></select>
+            <select data-f="owner"><option value="">任意 owner</option></select>
+            <select data-f="member"><option value="">任意成员</option></select>
+            <input type="date" data-f="from" title="最后活动起"><span class="faint">—</span><input type="date" data-f="to" title="最后活动止">
+            <label class="row small"><input type="checkbox" data-f="conflict"> 仅有冲突</label>
+            <span class="small muted" id="capCount" style="margin-left:auto"></span>
+          </div>
+        </div>
+        <div class="card" style="padding:0;overflow:auto">
+          <table id="capTable"><thead><tr><th style="width:28px"><input type="checkbox" id="selAll"></th>
+            <th class="sort" data-k="id">ID</th><th class="sort" data-k="topic">主题</th><th class="sort" data-k="projName">项目</th><th class="sort" data-k="life">生命周期</th><th class="sort" data-k="stage">当前阶段</th><th class="sort" data-k="owner">owner</th><th class="sort num" data-k="hours">工时</th><th class="sort num" data-k="tokens">token</th><th>同步状态</th></tr></thead><tbody></tbody></table>
+          <div class="empty sc-only on-empty"><h4>暂无胶囊</h4>项目未配置远端时只列本地胶囊。<div style="margin-top:10px"><button class="btn pri" onclick="go('p5')">去项目新建</button></div></div>
+        </div>
+      </section>
+
+      <!-- ===== P4 胶囊详情（JS 渲染） ===== -->
+      <section class="page" id="p4"></section>
+
+      <!-- ===== P5 项目 ===== -->
+      <section class="page" id="p5">
+        <div class="ph"><div><h1>项目</h1><div class="sub">registry.yaml · stakeholders.yaml（resolve_stakeholder）· 胶囊聚合 · docs/Tasks.md</div></div>
+          <div class="acts"><button class="btn" id="pullProj" onclick="toast('拉取整个项目：已加入同步队列')">拉取整个项目</button><button class="btn pri" id="newCapProj" onclick="toast('将调用 init_capsule.py 在当前项目下新建胶囊')">＋ 新建胶囊</button></div></div>
+        <div class="split not-empty">
+          <div class="card tree" id="ptree"></div>
+          <div id="pdetail"></div>
+        </div>
+        <div class="card sc-only on-empty"><div class="empty"><h4>注册表为空</h4>运行 bootstrap.py 扫描工作区，生成候选项目后由你确认登记。<div style="margin-top:10px"><button class="btn pri" onclick="toast('bootstrap.py 扫描中')">扫描候选项目</button></div></div></div>
+      </section>
+
+      <!-- ===== P6 工时与 Token ===== -->
+      <section class="page" id="p6">
+        <div class="ph"><div><h1>工时与 Token</h1><div class="sub">时间 × 项目 × 胶囊 × agent · 「我」= 本机聚合（离线可用）</div></div>
+          <div class="acts"><span class="seg" id="viewSeg"><button class="on" data-v="me">我</button><button data-v="team" disabled title="M3：dashboard /api/agent-perf">团队</button></span><button class="btn" onclick="exportCsv()">导出 CSV</button></div></div>
+        <div class="grid g4" style="margin-bottom:12px" id="kpi6"></div>
+        <div class="grid g-main" style="margin-bottom:12px">
+          <div class="card chart"><h3>时间序列<span class="seg" id="metricSeg" style="margin-left:12px"><button class="on" data-v="h">人工工时</button><button data-v="m">机时</button></span><span class="hint">点柱下钻</span></h3><div id="ts"></div><div class="legend" id="tsLegend"></div></div>
+          <div class="card chart"><h3>token 构成 · 按 agent/model<span class="hint">in / out / cache</span></h3><div id="tokBars"></div><div class="legend"><span><i style="background:var(--blue)"></i>in</span><span><i style="background:var(--violet)"></i>out</span><span><i style="background:var(--faint)"></i>cache 读</span></div></div>
+        </div>
+        <div class="card" style="margin-bottom:12px"><h3>actor 四列（「我」视角）<span class="hint">与 aggregate --json 的 by_actor 逐项相等（AC-6）</span></h3><div style="overflow:auto" id="pivot"></div></div>
+      </section>
+
+      <!-- ===== P7 存储与同步 ===== -->
+      <section class="page" id="p7">
+        <div class="ph"><div><h1>存储与同步</h1><div class="sub">远端是同一套文件的汇合点 · 胶囊租约 · 冲突只报告不自动合并</div></div>
+          <div class="acts"><button class="btn" id="pauseBtn" onclick="togglePause()">⏸ 暂停同步</button><button class="btn pri" onclick="syncNow()">⟳ 立即同步</button></div></div>
+        <div class="banner rose sc-only on-conflict flex">存在冲突。工具只执行你的选择，不自动选边。<button class="btn sm" onclick="document.getElementById('conflicts').scrollIntoView({behavior:'smooth'})">去处理</button></div>
+        <div class="card" style="margin-bottom:12px"><h3>远端列表<span class="hint">workspace-config.yaml::remotes · 凭据在系统钥匙串，不入文件</span></h3>
+          <div id="remoteList"></div>
+        </div>
+        <div class="card" id="conflicts"><h3>冲突列表<span class="hint">保留远端 / 保留本地 / 两份都留（人工合并后删副本）</span></h3>
+          <div id="conflictBox"></div>
+          <div class="faint small" id="noConflict">✓ 当前无冲突</div>
+        </div>
+      </section>
+
+      <!-- ===== P8 Agent 执行端 ===== -->
+      <section class="page" id="p8">
+        <div class="ph"><div><h1>Agent 执行端</h1><div class="sub">本机与服务端执行 · 本机 roles.yaml 承载链只读展示</div></div></div>
+        <div class="card" style="margin-bottom:12px"><h3>本机承载 · 角色 → 偏好链<span class="hint">roles.yaml · 🔒 = 硬门禁角色</span></h3>
+          <table id="roleTable"><tr><th>角色</th><th>偏好链（序号 · profile · agent/model）</th><th class="num">超时</th></tr></table>
+        </div>
+        <div class="card"><h3>运行中 / 最近调度<span class="hint">data/logs/run/ · dispatch_role.py trace</span></h3>
+          <table><tr><th>dispatch_id</th><th>角色</th><th>胶囊</th><th>状态</th><th class="num">偏好序号</th></tr><tbody id="runTable"></tbody></table>
+        </div>
+      </section>
+
+      <!-- ===== P9 成员与权限 ===== -->
+      <section class="page" id="p9">
+        <div class="ph"><div><h1>成员与权限</h1><div class="sub">成员身份映射 · 项目权限只读展示</div></div></div>
+        <div class="card" style="margin-bottom:12px"><h3>成员表</h3><div id="memberTable"></div></div>
+      </section>
+
+      <!-- ===== P10 设置 ===== -->
+      <section class="page" id="p10">
+        <div class="ph"><div><h1>设置</h1><div class="sub">本机偏好 · 写 workspace-config.yaml，按字段合并，不整体重写</div></div></div>
+        <div class="grid g2">
+          <div class="card"><h3>本机</h3>
+            <div class="form">
+              <label>身份</label><select id="meSelect"></select>
+              <label>工作区根</label><input class="mono" id="wsRoot" value="—">
+              <label>主题</label><select id="themeSel"><option value="dark">暗色</option><option value="light">亮色</option></select>
+            </div></div>
+          <div class="card"><h3>同步</h3>
+            <div class="form">
+              <label>同步频率</label><select><option>每 5 分钟（GUI 打开时）</option><option>仅手动</option></select>
+              <label>离线模式</label><div class="row"><label class="switch"><input type="checkbox" id="offSw"><span></span></label><span class="small muted">打开后不连远端，只写本地</span></div>
+            </div></div>
+          <div class="card"><h3>关于</h3><div class="small muted">M1 静态资产 · Tech-175 · 数据来自本机只读工具（capsule_index / todo_index / aggregate_worklog）。加 <span class="mono">?os=win</span> 看 Windows 版（无中断按钮）。</div></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<div class="tip" id="tip"></div>
+<div class="modal-bg" id="modalBg"><div class="modal"><h3 id="mTitle"></h3><div class="muted" id="mBody"></div><div class="acts" id="mActs"></div></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

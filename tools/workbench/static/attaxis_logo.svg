@@ -1,0 +1,186 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800">
+  <defs>
+    <!-- 背景径向渐变 -->
+    <radialGradient id="bgGrad" cx="50%" cy="50%" r="65%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="60%" stop-color="#090d16" />
+      <stop offset="100%" stop-color="#020408" />
+    </radialGradient>
+
+    <!-- 叶片/晶体发光渐变 (Emerald to Cyan to Violet) -->
+    <linearGradient id="leafGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#059669" stop-opacity="0.9" />
+      <stop offset="40%" stop-color="#10b981" />
+      <stop offset="75%" stop-color="#06b6d4" />
+      <stop offset="100%" stop-color="#8b5cf6" />
+    </linearGradient>
+
+    <!-- 叶片高光刻面 -->
+    <linearGradient id="facetTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a7f3d0" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0.2" />
+    </linearGradient>
+
+    <linearGradient id="facetBot" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#047857" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0.6" />
+    </linearGradient>
+
+    <!-- 蚂蚁外壳钛金金属质感渐变 -->
+    <linearGradient id="chitinGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f8fafc" />
+      <stop offset="35%" stop-color="#94a3b8" />
+      <stop offset="70%" stop-color="#334155" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+
+    <!-- 蚂蚁头部/大颚金色能量渐变 (Mandible Energy) -->
+    <linearGradient id="goldEnergy" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+
+    <!-- 辉光滤镜 (Glow Filter) -->
+    <filter id="neonGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur1" />
+      <feGaussianBlur stdDeviation="24" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000000" flood-opacity="0.6" />
+    </filter>
+  </defs>
+
+  <!-- 背景暗夜基底 -->
+  <rect width="800" height="800" rx="160" fill="url(#bgGrad)" />
+
+  <!-- 背景科技网格微光 (Subtle Taxis Grid) -->
+  <g stroke="#334155" stroke-width="1" opacity="0.15">
+    <circle cx="400" cy="400" r="180" fill="none" stroke-dasharray="4 8" />
+    <circle cx="400" cy="400" r="280" fill="none" stroke-dasharray="6 12" />
+    <circle cx="400" cy="400" r="360" fill="none" stroke-dasharray="2 6" />
+    <line x1="400" y1="40" x2="400" y2="760" stroke-dasharray="6 6" />
+    <line x1="40" y1="400" x2="760" y2="400" stroke-dasharray="6 6" />
+  </g>
+
+  <!-- 主体 Group (居中微调) -->
+  <g transform="translate(40, 20)">
+
+    <!-- 1. 背负的“负熵秩序晶体叶片” (The Negative Entropy Crystal Leaf) -->
+    <!-- 带有霓虹辉光与多边形几何刻面，象征将混乱数据剪切转化为结构化资产 -->
+    <g filter="url(#neonGlow)">
+      <!-- 叶片主轮廓 -->
+      <path d="M 370,160 
+               C 490,90 630,130 660,260 
+               C 680,350 620,460 480,510 
+               L 370,440 Z" 
+            fill="url(#leafGrad)" 
+            filter="url(#softShadow)" />
+
+      <!-- 叶片上部高光三角刻面 -->
+      <polygon points="370,160 520,130 660,260 480,270" fill="url(#facetTop)" />
+      <!-- 叶片侧面几何折面 -->
+      <polygon points="480,270 660,260 620,460 480,510" fill="url(#facetBot)" />
+      <polygon points="370,160 480,270 370,440" fill="#047857" opacity="0.6" />
+
+      <!-- 叶脉科技线路与协同光点 (Taxis Circuit Veins) -->
+      <g stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.85">
+        <!-- 主脉 -->
+        <line x1="370" y1="440" x2="630" y2="200" stroke="#a7f3d0" stroke-width="4" />
+        <!-- 侧脉与分工节点 -->
+        <line x1="440" y1="375" x2="520" y2="440" />
+        <line x1="490" y1="330" x2="590" y2="380" />
+        <line x1="530" y1="290" x2="620" y2="310" />
+        <line x1="450" y1="365" x2="430" y2="240" />
+        <line x1="520" y1="300" x2="510" y2="180" />
+
+        <!-- 数据流通节点光点 (Data Nodes) -->
+        <circle cx="630" cy="200" r="6" fill="#67e8f9" filter="url(#neonGlow)" />
+        <circle cx="520" cy="440" r="4.5" fill="#34d399" />
+        <circle cx="590" cy="380" r="4.5" fill="#34d399" />
+        <circle cx="620" cy="310" r="4.5" fill="#a78bfa" />
+        <circle cx="510" cy="180" r="4.5" fill="#67e8f9" />
+      </g>
+    </g>
+
+    <!-- 2. 切叶蚁的六足架构 (The 6 Robotic Legs - Precision Engineering) -->
+    <!-- 形成类似“X”与张力几何支架，象征支撑多租户系统的六大/八大职能闭环 -->
+    <g stroke="url(#chitinGrad)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <!-- 后足 (Hind Leg) -->
+      <polyline points="230,470 140,430 80,520 60,600" />
+      <polyline points="250,450 160,370 100,430" stroke-width="4" opacity="0.5" />
+
+      <!-- 中足 (Middle Leg - 形成稳固支撑角) -->
+      <polyline points="290,460 210,530 160,650 140,710" stroke-width="9" />
+      
+      <!-- 前足 (Front Leg - 强劲着地) -->
+      <polyline points="350,470 320,580 340,680 370,720" stroke-width="9" />
+    </g>
+
+    <!-- 3. 切叶蚁躯干三段论 (Abdomen, Thorax, Head) -->
+    <g filter="url(#softShadow)">
+      <!-- 腹部 (Gaster / Abdomen) - 几何水滴形多边形 -->
+      <path d="M 230,420 
+               C 170,420 120,460 120,510 
+               C 120,560 160,590 220,570 
+               C 270,550 280,480 260,430 Z" 
+            fill="url(#chitinGrad)" />
+      <!-- 腹部甲壳分节线 -->
+      <path d="M 160,460 C 180,510 210,540 250,530" stroke="#475569" stroke-width="3" fill="none" />
+      <path d="M 190,440 C 210,480 230,510 260,490" stroke="#475569" stroke-width="2.5" fill="none" />
+
+      <!-- 结节与胸部 (Petiole & Thorax) - 机械工工整整的动力核心 -->
+      <polygon points="260,440 310,420 340,460 290,480" fill="#334155" />
+      <!-- 胸部主块 (Thorax) -->
+      <path d="M 310,410 L 390,390 L 410,460 L 330,470 Z" fill="url(#chitinGrad)" />
+
+      <!-- 头部 (Geometric Head) - 强壮的切叶蚁头部轮廓 -->
+      <path d="M 370,390 
+               C 390,320 440,320 470,360 
+               C 490,390 470,440 430,460 
+               L 370,440 Z" 
+            fill="url(#chitinGrad)" />
+
+      <!-- 眼睛 (Cybernetic Eye - 湛蓝高精传感器) -->
+      <circle cx="440" cy="365" r="7" fill="#06b6d4" filter="url(#neonGlow)" />
+      <circle cx="441" cy="364" r="2.5" fill="#ffffff" />
+
+      <!-- 4. 标志性强力大切颚 (Powerful Mandibles) - 切割一切混乱与繁杂 -->
+      <path d="M 440,430 
+               C 480,450 510,430 520,380 
+               C 500,400 470,400 450,390 Z" 
+            fill="url(#goldEnergy)" 
+            filter="url(#neonGlow)" />
+      <!-- 上颚咬合齿齿纹 -->
+      <polygon points="480,415 488,410 484,420" fill="#ffffff" />
+      <polygon points="495,405 503,400 499,410" fill="#ffffff" />
+
+      <!-- 5. 触角 (Antennae - 敏锐的雷达探测触须) -->
+      <g stroke="#94a3b8" stroke-width="4.5" stroke-linecap="round" fill="none">
+        <!-- 左触角 (向前折射) -->
+        <polyline points="440,340 480,280 540,260" stroke="#38bdf8" />
+        <circle cx="540" cy="260" r="4" fill="#38bdf8" filter="url(#neonGlow)" />
+        <!-- 右触角 (向后呼应) -->
+        <polyline points="420,335 440,260 480,220" opacity="0.6" />
+      </g>
+    </g>
+
+    <!-- 6. 底部光影底座 (Taxis Axis Base Grounding) -->
+    <ellipse cx="360" cy="710" rx="260" ry="24" fill="#06b6d4" opacity="0.08" filter="url(#neonGlow)" />
+  </g>
+
+  <!-- 7. 品牌标准字 (Typography: ATTAXIS) -->
+  <g transform="translate(400, 715)" text-anchor="middle">
+    <text font-family="'Inter', -apple-system, sans-serif" font-weight="900" font-size="44" letter-spacing="12" fill="#ffffff">
+      ATTA<tspan fill="#06b6d4">X</tspan>IS
+    </text>
+    <text y="30" font-family="'Inter', -apple-system, sans-serif" font-weight="500" font-size="12" letter-spacing="4" fill="#94a3b8">
+      HUMAN-AI COLLABORATIVE OPERATING SYSTEM
+    </text>
+  </g>
+</svg>

@@ -31,12 +31,20 @@ from typing import Any
 try:
     from . import paths
     from . import project_registry
+    from . import update_audit_state
     from . import workbench_view
 except ImportError:  # 脚本方式运行
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import paths  # type: ignore
     import project_registry  # type: ignore
+    import update_audit_state  # type: ignore
     import workbench_view  # type: ignore
+
+# 只读聚合层：`capsule_index()` 的投影不含 attempts 明细，`_gates()` 需要原样胶囊。
+try:
+    from . import aggregate_worklog
+except ImportError:  # 脚本方式运行
+    import aggregate_worklog  # type: ignore
 
 TOOLS_DIR = Path(__file__).resolve().parent
 SYSTEM_DIR = TOOLS_DIR.parent
@@ -50,9 +58,13 @@ SUBPROCESS_TIMEOUT_S = 120
 # 只读路由表：路径 → 转调的 argv 构造。写路由在下方单独登记，本表不含任何写操作。
 # AC-18：此表与写路由表都不含存储授权策略、租约签发、冲突裁决类接口。
 READ_ROUTES = ("/api/capsules", "/api/todos", "/api/worklog",
-               "/api/resume", "/api/find", "/api/projects", "/api/runs")
+               "/api/resume", "/api/find", "/api/projects", "/api/runs", "/api/gates")
 WRITE_ROUTES = ("/api/capsules", "/api/segments/open", "/api/segments/end",
                 "/api/worklog", "/api/files/open")
+# 静态资产（M1-3）：可版本化的前端文件，只读提供；不在 data/ 下。
+STATIC_DIR = TOOLS_DIR / "workbench" / "static"
+STATIC_ROUTES = ("/", "/index.html", "/style.css", "/app.js",
+                 "/attaxis_logo.svg", "/attaxis_mascot_figurine.png")
 
 
 # ---------------------------------------------------------------- 工具转调
@@ -151,6 +163,87 @@ def _pid_alive(pid: object) -> bool:
         return False
 
 
+def _capsules_with_stage_bar(root: Path, since: str, until: str, me: str | None,
+                             project: str | None, runs: list[dict]) -> list[dict]:
+    """`capsule_index()` 行 + `stage_bar()` + 显示口径字段：前端只渲染，不复制判据（M1-4）。
+
+    复用 M0 的 `capsule_index()` 做扫描与归属，`stage_bar()` 取 M1-9 的纯函数；
+    运行态 `runs` 由本函数注入，纯函数本身仍不扫盘。
+
+    显示口径（Q-12 / AC-20）：系统胶囊（`project == "_root"`）的 `project_label` 为「系统」，
+    `sync_state` 为 `no_sync`（前端渲染灰色「不同步」徽标）。非系统胶囊 `project_label`
+    为项目 id，`sync_state` 本轮为 `local`（M2 同步落地后才有远端状态）。
+    """
+    rows = _capsule_index(root, since, until, me, project)
+    for row in rows:
+        row["stage_bar"] = workbench_view.stage_bar(row, runs=runs)
+        row["project_label"] = "系统" if row.get("project") == "_root" else str(row.get("project") or "")
+        row["sync_state"] = "no_sync" if row.get("project") == "_root" else "local"
+    return rows
+
+
+def _audit_gates(root: Path, row: dict) -> dict | None:
+    """审计门禁注入：读该胶囊的 `03_方案审计报告.md` 的 audit-state 围栏。
+
+    缺报告、无围栏或解析失败一律返回 None——`pending_gates()` 据此不出「方案待确认」
+    与「审计熔断」两类卡片，不推断阻断数（M1-9 已定契约）。
+    """
+    report = Path(row["path"]).parent / "03_方案审计报告.md"
+    if not report.is_file():
+        return None
+    try:
+        text = report.read_text(encoding="utf-8")
+        state = update_audit_state.load_state(text)
+    except (OSError, ValueError, update_audit_state.AuditStateError):
+        return None
+    issues = state.get("issues") if isinstance(state, dict) else None
+    if not isinstance(issues, list):
+        return None
+    gate = {"phase": "plan", "issues": [i for i in issues if isinstance(i, dict)]}
+    rounds = state.get("max_rounds") if isinstance(state, dict) else None
+    if isinstance(rounds, int) and not isinstance(rounds, bool):
+        gate["max_rounds"] = rounds
+    return gate
+
+
+def _raw_capsule(row: dict) -> dict:
+    """把 `capsule_index()` 投影行还原成 `pending_gates()` 需要的原样胶囊。
+
+    M0 契约把 `assignments[]` 投影成 attempts 计数、只保留 open 段；而 11.3 判据要
+    原始 `attempts[].started_at/ended_at/exit_code` 与全部 `task_segments`。这里按
+    `path` 重新解析该胶囊文件（复用 M0 的 `parse_capsule_file()`，不另写扫描），
+    再按 `workbench_view` 的输入形状重建 `roles_manifest`；取不到时退回投影行——
+    判据拿不到 attempts 就不出卡，不猜。
+    """
+    parsed = aggregate_worklog.parse_capsule_file(Path(row["path"]) / "capsule.yaml")
+    if not parsed:
+        return row
+    capsule = dict(parsed)
+    capsule["id"] = row.get("id") or parsed.get("id")
+    capsule["lifecycle"] = row.get("lifecycle") or parsed.get("lifecycle")
+    # `parse_capsule_file()` 把 assignments 摊平到顶层；判据读 `roles_manifest.assignments`。
+    capsule["roles_manifest"] = {"assignments": parsed.get("assignments") or []}
+    return capsule
+
+
+def _gates(root: Path, since: str, until: str, me: str | None,
+           project: str | None) -> list[dict]:
+    """「待我拍板」六类卡片（方案 11.3）：对每个「我的」胶囊跑 `pending_gates()`。
+
+    复用 M0 的 `capsule_index()` 扫描（不另写扫描逻辑）与 M1-9 的纯函数判据；
+    运行态来自 `/api/runs` 同一份 run 文件。运行全程不写文件。
+    """
+    runs = _runs(root)
+    rows = _capsules_with_stage_bar(root, since, until, me, project, runs)
+    cards: list[dict] = []
+    for row in rows:
+        gate = _audit_gates(root, row)
+        for card in workbench_view.pending_gates(_raw_capsule(row), audit_gate=gate, runs=runs):
+            cards.append({**card, "capsule_id": row["id"], "topic": row["topic"],
+                          "project": row["project"], "path": row["path"]})
+    return cards
+
+
 def _runs(root: Path) -> list[dict]:
     """扫 `data/logs/run/*.json`：运行中调度（含 capsule、preference_number、timeout_s）。
 
@@ -245,14 +338,42 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             raise ToolCallError(400, "请求体不是合法 JSON", str(error))
         return payload if isinstance(payload, dict) else {}
 
+    # ---- 静态资产（M1-3）：只读、白名单、无目录遍历
+
+    _STATIC_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+                     ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml",
+                     ".png": "image/png", ".ico": "image/x-icon"}
+
+    def _send_static(self, route: str) -> None:
+        """按白名单发静态文件。路径来自路由表常量，不来自请求体，故无遍历面。"""
+        name = "index.html" if route in ("/", "/index.html") else route.lstrip("/")
+        path = (STATIC_DIR / name).resolve()
+        if not str(path).startswith(str(STATIC_DIR.resolve())) or not path.is_file():
+            self._send_error_detail(404, f"未找到静态资源 {route}")
+            return
+        suffix = path.suffix.lower()
+        body = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", self._STATIC_TYPES.get(suffix, "application/octet-stream"))
+        self.send_header("Content-Length", str(len(body)))
+        # 静态资产随版本库走，但每次启动令牌会变：禁缓存避免旧页带上旧令牌。
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     # ---- 分发
 
     def do_GET(self) -> None:  # noqa: N802 - http.server 约定
+        parsed = urllib.parse.urlsplit(self.path)
+        route = parsed.path.rstrip("/") or "/"
+        # 静态资产在令牌边界之前放行：入口页必须能取到自己的 CSS/JS 才能带上令牌请求 API。
+        # 只读、只服务 STATIC_ROUTES 白名单内的已知文件，不做目录遍历。
+        if route in STATIC_ROUTES:
+            self._send_static(route)
+            return
         if not self._authorized():
             self._send_error_detail(401, f"缺少或错误的 {TOKEN_HEADER} 启动令牌")
             return
-        parsed = urllib.parse.urlsplit(self.path)
-        route = parsed.path.rstrip("/") or "/"
         query = urllib.parse.parse_qs(parsed.query)
         try:
             self._dispatch_get(route, query)
@@ -293,14 +414,15 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         project = (query.get("project") or [""])[0] or None
 
         if route == "/api/capsules":
-            self._send_json(200, _capsule_index(root, since, until, me, project))
+            self._send_json(200, _capsules_with_stage_bar(
+                root, since, until, me, project, _runs(root)))
             return
         if route.startswith("/api/capsules/"):
             capsule_id = urllib.parse.unquote(route[len("/api/capsules/"):]).strip("/")
             if not capsule_id:
                 self._send_error_detail(400, "缺少胶囊 ID")
                 return
-            rows = _capsule_index(root, since, until, me, project)
+            rows = _capsules_with_stage_bar(root, since, until, me, project, _runs(root))
             row = next((r for r in rows if str(r.get("id")) == capsule_id), None)
             if row is None:
                 self._send_error_detail(404, f"未找到胶囊 {capsule_id}")
@@ -328,6 +450,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             return
         if route == "/api/runs":
             self._send_json(200, _runs(root))
+            return
+        if route == "/api/gates":
+            self._send_json(200, _gates(root, since, until, me, project))
             return
         self._send_error_detail(404, f"未知路由 {route}")
 
