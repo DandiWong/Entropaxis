@@ -1218,43 +1218,48 @@ def run_assignment_result(cwd: Path, assignment_id: str, prompt: str, ack: str |
     carrier_ref = _profile_command_text(carrier, config) if carrier != "session-local" else "当前会话 Agent"
     # 档案声明了 target_path 就必须把它绑进回执，否则同一份报告走 run 与 run_direct
     # 两条路径会得到"绑定/未绑定受审对象"两种回执，门禁的 C-03 校验随入口而变。
-    receipt = _issue_receipt(role, attempts, deliverable, target_file, carrier, carrier_ref) if succeeded else {}
-    # 先盖章再取指纹。失败时承载三项一律传 None（不动）：没有回执就没有承载事实。
-    stamped = stamp_carrier(deliverable,
-                            carrier if succeeded else None,
-                            carrier_ref if succeeded else None,
-                            "" if succeeded else _FAILURE_TO_REASON.get(failure, ""),
-                            audit=(role == "Reviewer"),
-                            receipt_id=receipt.get("receipt_id", "") if succeeded else None)
-
-    store = ManifestStore(archive)
-    if not store.acquire(owner):
-        raise UsageError(f"档案被有效锁占用: {store.lock_dir}", "等锁持有者结束，或确认租约过期后重试")
-
-    def mutate(m: dict[str, Any]) -> None:
-        m["revision"] = int(m.get("revision", 0)) + 1
-        for item in m.get("assignments", []):
-            if item.get("assignment_id") == assignment_id:
-                item.setdefault("attempts", [])
-                if ack:
-                    item["attempts"].append({"profile": f"ack:{ack}", "argv_sha256": _sha256_str(ack or ""), "started_at": _now_iso(), "ended_at": _now_iso(),
-                                             "detail": "问题级豁免引用（有效性由 check_audit_gate.py 校验）"})
-                item["attempts"].extend(attempts)
-                if succeeded:
-                    item["status"] = "succeeded"
-                    item["deliverable_sha256"] = _sha256_path(deliverable)
-                else:
-                    item["status"] = "blocked" if adjudicate(mode, gate, failure)["outcome"] == "blocked" else "failed"
-
+    # T11：`--out` 查重锁从这里起由本函数负责释放。盖章、档案 acquire/update 任何一步
+    # 抛异常，都必须先释放自己的锁再向上抛——否则残留锁会让同一 --out 的重试被自己
+    # 拒绝（IM-3，方案 4.4.3 release finally）。manifest 锁不代替 out 锁。
     try:
-        updated = store.update(mutate, owner)
+        receipt = _issue_receipt(role, attempts, deliverable, target_file, carrier, carrier_ref) if succeeded else {}
+        # 先盖章再取指纹。失败时承载三项一律传 None（不动）：没有回执就没有承载事实。
+        stamped = stamp_carrier(deliverable,
+                                carrier if succeeded else None,
+                                carrier_ref if succeeded else None,
+                                "" if succeeded else _FAILURE_TO_REASON.get(failure, ""),
+                                audit=(role == "Reviewer"),
+                                receipt_id=receipt.get("receipt_id", "") if succeeded else None)
+
+        store = ManifestStore(archive)
+        if not store.acquire(owner):
+            raise UsageError(f"档案被有效锁占用: {store.lock_dir}", "等锁持有者结束，或确认租约过期后重试")
+
+        def mutate(m: dict[str, Any]) -> None:
+            m["revision"] = int(m.get("revision", 0)) + 1
+            for item in m.get("assignments", []):
+                if item.get("assignment_id") == assignment_id:
+                    item.setdefault("attempts", [])
+                    if ack:
+                        item["attempts"].append({"profile": f"ack:{ack}", "argv_sha256": _sha256_str(ack or ""), "started_at": _now_iso(), "ended_at": _now_iso(),
+                                                 "detail": "问题级豁免引用（有效性由 check_audit_gate.py 校验）"})
+                    item["attempts"].extend(attempts)
+                    if succeeded:
+                        item["status"] = "succeeded"
+                        item["deliverable_sha256"] = _sha256_path(deliverable)
+                    else:
+                        item["status"] = "blocked" if adjudicate(mode, gate, failure)["outcome"] == "blocked" else "failed"
+
+        try:
+            updated = store.update(mutate, owner)
+        finally:
+            store.release()
     finally:
-        store.release()
+        # T11：release 只在自己的执行链、结段与档案写入都结束后调用（方案 4.4.3）。
+        _release_out(deliverable, run_dispatch_id)
 
     # T10：角色段已由上面的「开段→执行→结段」结掉，`worklog_refs` 取结段结果。
     worktime: dict[str, Any] | None = ended
-    # T11：release 排在自己的执行链、结段与档案写入都结束之后（方案 4.4.3）。
-    _release_out(deliverable, run_dispatch_id)
 
     if succeeded:
         return {"outcome": "succeeded", "tier": tier, "role": role, "gate": gate, "mode": mode, "source": source,
@@ -1357,84 +1362,89 @@ def run_direct_result(cwd: Path, role: str, prompt: str, out: Path | None, owner
     status = "succeeded" if succeeded else ("blocked" if verdict["outcome"] == "blocked" else "failed")
     # T10：角色段已由上面的「开段→执行→结段」结掉，`worklog_refs` 取结段结果。
     worktime: dict[str, Any] | None = ended
-    # 先盖章再取指纹，否则档案记的是盖章前的文件
-    receipt = _issue_receipt(role, attempts, deliverable, target_file, carrier, carrier_ref) if succeeded else {}
-    duration_s = ok_attempt.get("duration_s") if (succeeded and ok_attempt) else None
-    stamped = (stamp_carrier(deliverable,
-                             carrier if succeeded else None,
-                             carrier_ref if succeeded else None,
-                             fallback_reason,
-                             audit=(role == "Reviewer"),
-                             receipt_id=receipt.get("receipt_id", "") if succeeded else None,
-                             duration_s=duration_s)
-               if deliverable is not None else False)
+    # T11：`--out` 查重锁从这里起由本函数负责释放。盖章、回执签发、档案 acquire/update
+    # 任何一步抛异常，都必须先释放自己的锁再向上抛——否则残留锁会让同一 --out 的重试
+    # 被自己拒绝（退出码 4），只能人工清锁（IM-3，方案 4.4.3 release finally）。
+    # manifest 锁（`store.release()`）只管档案目录锁，不代替 out 锁。
+    try:
+        receipt = _issue_receipt(role, attempts, deliverable, target_file, carrier, carrier_ref) if succeeded else {}
+        duration_s = ok_attempt.get("duration_s") if (succeeded and ok_attempt) else None
+        stamped = (stamp_carrier(deliverable,
+                                 carrier if succeeded else None,
+                                 carrier_ref if succeeded else None,
+                                 fallback_reason,
+                                 audit=(role == "Reviewer"),
+                                 receipt_id=receipt.get("receipt_id", "") if succeeded else None,
+                                 duration_s=duration_s)
+                   if deliverable is not None else False)
 
-    tier, archive = find_archive_any(cwd)
-    archived = False
-    archive_error = None
-    if archive is not None:
-        key = str(deliverable) if deliverable is not None else f"{role}:{verify or ''}:{target_file}"
-        aid = f"{role}-{_sha256_str(key)[:8]}"  # 同一交付物重跑复用同一 ID，禁重编号
-        store = ManifestStore(archive)
-        if store.acquire(owner):
-            def mutate(m: dict[str, Any]) -> None:
-                m["revision"] = int(m.get("revision", 0)) + 1
-                m.setdefault("assignments", [])
-                rec = next((x for x in m["assignments"] if x.get("assignment_id") == aid), None)
-                if rec is None:
-                    rec = {"assignment_id": aid, "role": role,
-                           "command_profile": source if chain else f"{role.lower()}-1",
-                           "status": status, "attempts": []}
-                    m["assignments"].append(rec)
-                else:
-                    rec["status"] = status
-                    rec.setdefault("attempts", [])
-                if deliverable is not None:
-                    rec["deliverable"] = os.path.relpath(deliverable, archive.parent)
-                if verify:
-                    # 代码型产出散在多文件，修订标识与文档交付物并存而非二选一
-                    rec["verify_profile"] = verify
-                    rec["deliverable_ref"] = _workspace_ref(cwd)
-                elif deliverable is None:
-                    rec["deliverable_ref"] = _workspace_ref(cwd)
-                if target_file is not None:
-                    # 依据指纹：依据变了，既有 succeeded 即失效（resolve 会标 stale）
-                    rec["target_path"] = os.path.relpath(target_file, archive.parent)
-                    rec["target_sha256"] = _receipt_module().target_sha256(target_file)
-                if target_file is not None:
-                    # 依据指纹随每次执行留痕：assignment 上的 target_* 只反映最新一跳，
-                    # 「这版方案当初基于哪份调研」必须在执行记录里查得到。
-                    for at in attempts:
-                        at.setdefault("target_sha256", _receipt_module().target_sha256(target_file))
-                rec["attempts"].extend(attempts)
-                if succeeded and deliverable is not None:
-                    rec["deliverable_sha256"] = _sha256_path(deliverable)
-            try:
-                store.update(mutate, owner)
-                archived = True
-            finally:
-                store.release()
-        else:
-            archive_error = f"档案被有效锁占用，本次指派未落笔: {store.lock_dir}"
+        tier, archive = find_archive_any(cwd)
+        archived = False
+        archive_error = None
+        if archive is not None:
+            key = str(deliverable) if deliverable is not None else f"{role}:{verify or ''}:{target_file}"
+            aid = f"{role}-{_sha256_str(key)[:8]}"  # 同一交付物重跑复用同一 ID，禁重编号
+            store = ManifestStore(archive)
+            if store.acquire(owner):
+                def mutate(m: dict[str, Any]) -> None:
+                    m["revision"] = int(m.get("revision", 0)) + 1
+                    m.setdefault("assignments", [])
+                    rec = next((x for x in m["assignments"] if x.get("assignment_id") == aid), None)
+                    if rec is None:
+                        rec = {"assignment_id": aid, "role": role,
+                               "command_profile": source if chain else f"{role.lower()}-1",
+                               "status": status, "attempts": []}
+                        m["assignments"].append(rec)
+                    else:
+                        rec["status"] = status
+                        rec.setdefault("attempts", [])
+                    if deliverable is not None:
+                        rec["deliverable"] = os.path.relpath(deliverable, archive.parent)
+                    if verify:
+                        # 代码型产出散在多文件，修订标识与文档交付物并存而非二选一
+                        rec["verify_profile"] = verify
+                        rec["deliverable_ref"] = _workspace_ref(cwd)
+                    elif deliverable is None:
+                        rec["deliverable_ref"] = _workspace_ref(cwd)
+                    if target_file is not None:
+                        # 依据指纹：依据变了，既有 succeeded 即失效（resolve 会标 stale）
+                        rec["target_path"] = os.path.relpath(target_file, archive.parent)
+                        rec["target_sha256"] = _receipt_module().target_sha256(target_file)
+                    if target_file is not None:
+                        # 依据指纹随每次执行留痕：assignment 上的 target_* 只反映最新一跳，
+                        # 「这版方案当初基于哪份调研」必须在执行记录里查得到。
+                        for at in attempts:
+                            at.setdefault("target_sha256", _receipt_module().target_sha256(target_file))
+                    rec["attempts"].extend(attempts)
+                    if succeeded and deliverable is not None:
+                        rec["deliverable_sha256"] = _sha256_path(deliverable)
+                try:
+                    store.update(mutate, owner)
+                    archived = True
+                finally:
+                    store.release()
+            else:
+                archive_error = f"档案被有效锁占用，本次指派未落笔: {store.lock_dir}"
 
-    receipt = {"outcome": verdict["outcome"], "role": role, "gate": gate, "mode": f"{mode}（{mode_why}）",
-               "carrier": None if verdict["outcome"] == "aborted" else carrier, "carrier_ref": carrier_ref, "carrier_stamped": stamped,
-               "selected_preference": ok_attempt.get("preference_number") if succeeded and ok_attempt else None,
-               "receipt_id": receipt.get("receipt_id") or None, "receipt_signed": receipt.get("mac", "") not in ("", "unsigned"),
-               "deliverable": str(deliverable) if deliverable else None,
-               "target": str(target_file) if target_file else None,
-               "archived": archived, "archive_error": archive_error, "tier": tier, "failure_code": failure or None,
-               "fallback_reason": fallback_reason or None, "reason": verdict.get("reason", ""),
-               "needs_external_review": verdict.get("needs_external_review", False), "attempts": len(attempts)}
-    if verdict["outcome"] == "aborted":
-        receipt["failed_preferences"] = _failed_preferences(attempts)
-    receipt["worklog_refs"] = (worktime or {}).get("worklog_refs") or []
-    if verify_result is not None:
-        receipt["verify"] = {"profile": verify, "passed": verify_result["passed"], "exit_code": verify_result.get("exit_code")}
-    receipt["exit"] = verdict["exit"]
-    # T11：释放自己的锁（release 只在自己的执行链、结段与档案写入都结束后调用）。
-    if deliverable is not None:
-        _release_out(deliverable, run_dispatch_id)
+        receipt = {"outcome": verdict["outcome"], "role": role, "gate": gate, "mode": f"{mode}（{mode_why}）",
+                   "carrier": None if verdict["outcome"] == "aborted" else carrier, "carrier_ref": carrier_ref, "carrier_stamped": stamped,
+                   "selected_preference": ok_attempt.get("preference_number") if succeeded and ok_attempt else None,
+                   "receipt_id": receipt.get("receipt_id") or None, "receipt_signed": receipt.get("mac", "") not in ("", "unsigned"),
+                   "deliverable": str(deliverable) if deliverable else None,
+                   "target": str(target_file) if target_file else None,
+                   "archived": archived, "archive_error": archive_error, "tier": tier, "failure_code": failure or None,
+                   "fallback_reason": fallback_reason or None, "reason": verdict.get("reason", ""),
+                   "needs_external_review": verdict.get("needs_external_review", False), "attempts": len(attempts)}
+        if verdict["outcome"] == "aborted":
+            receipt["failed_preferences"] = _failed_preferences(attempts)
+        receipt["worklog_refs"] = (worktime or {}).get("worklog_refs") or []
+        if verify_result is not None:
+            receipt["verify"] = {"profile": verify, "passed": verify_result["passed"], "exit_code": verify_result.get("exit_code")}
+        receipt["exit"] = verdict["exit"]
+    finally:
+        # T11：释放自己的锁（release 只在自己的执行链、结段与档案写入都结束后调用）。
+        if deliverable is not None:
+            _release_out(deliverable, run_dispatch_id)
     return receipt
 
 

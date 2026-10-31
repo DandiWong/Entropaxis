@@ -2517,6 +2517,41 @@ class OutLockTests(DispatchRoleTestBase):
                                      owner="t", capsule=cap)
         self.assertFalse(lock.exists(), "异常路径也必须释放自己持有的锁")
 
+    def test_archive_write_failure_releases_out_lock(self) -> None:
+        """IM-3：盖章与档案写回之间抛异常 → out 锁也必须释放，否则重试被自己的残留锁拒。
+
+        cwd 必须是胶囊内：档案写回按 cwd 向上定位 capsule.yaml，胶囊外走不到真实写档路径。
+        """
+        cap = self._capsule()
+        self.write_config({"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}})
+        self.ok_body.write_text(proposal_doc(), encoding="utf-8")
+        out = cap / "02_方案.md"
+        lock = dr._out_lock_dir(out)
+
+        with mock.patch.object(dr.ManifestStore, "update", side_effect=OSError("audit archive write failure")):
+            with self.assertRaises(OSError):
+                dr.run_direct_result(cap, "Architecture", prompt=str(out), out=out,
+                                     owner="t", capsule=cap)
+        self.assertFalse(lock.exists(),
+                         "档案写失败同样要释放自己的 out 锁；残留锁会让重试退出码 4")
+        # 锁已释放 → 同一 --out 可再次 claim（重试不会被自己拒绝）
+        self.assertIsNone(dr._claim_out(out, "a" * 32, cap))
+        dr._release_out(out, "a" * 32)
+
+    def test_stamp_failure_releases_out_lock(self) -> None:
+        """IM-3：盖章（档案写入之前的第一步）抛异常 → out 锁也释放。"""
+        cap = self._capsule()
+        self.write_config({"architecture-primary": {"argv": [self.ok, "{PROMPT}"], "timeout_s": 30}})
+        self.ok_body.write_text(proposal_doc(), encoding="utf-8")
+        out = cap / "02_方案.md"
+        lock = dr._out_lock_dir(out)
+
+        with mock.patch.object(dr, "stamp_carrier", side_effect=OSError("carrier stamp failure")):
+            with self.assertRaises(OSError):
+                dr.run_direct_result(cap, "Architecture", prompt=str(out), out=out,
+                                     owner="t", capsule=cap)
+        self.assertFalse(lock.exists(), "盖章失败同样要释放自己的 out 锁")
+
     def test_lock_suffix_not_read_by_live_dispatch_items(self) -> None:
         """(e) 锁目录后缀是 .lock，collect_agent_perf.live_dispatch_items 不读它。"""
         lock = self._preset_lock(pid=os.getpid())
