@@ -77,6 +77,12 @@ class StaticAssetTests(unittest.TestCase):
         """原型文件留在 data/ 下作过程证据，迁移不移动它。"""
         prototype = (SYSTEM_ROOT / "data" / "docs"
                      / "20261029_Entropaxis团队协作工作台" / "prototypes" / "workbench.html")
+        if not prototype.is_file():
+            # O-1（干净检出）：原型在实例面 `data/docs/`，`.gitignore` 锚定 `/data/`，
+            # `git archive` 干净检出里不存在。依赖缺失即跳过，不判失败（同源事实见
+            # Tech-176 侧 RunFileCapsuleFieldTests 的 O-1 处置）。
+            self.skipTest(f"实例面原型文件不在检出内（{prototype}），"
+                          "干净检出不含 data/，跳过原型原位断言")
         self.assertTrue(prototype.is_file(), f"原型文件应保持原位: {prototype}")
 
 

@@ -96,8 +96,14 @@ class ExecutorsRouteTests(_Case):
     def test_roles_carry_preference_chain_and_hard_lock(self) -> None:
         """偏好链（序号·profile·agent/model·超时）与硬门禁锁来自 roles.yaml 只读展示。"""
         payload = self._get("/api/executors")
+        if not payload["present"]:
+            # O-1（干净检出）：`data/templates/roles.yaml` 是实例面人工真源，
+            # `.gitignore` 锚定 `/data/`，`git archive` 干净检出里不存在。依赖缺失即
+            # 跳过，不把「环境没有实例配置」判成断言失败（同源事实见 Tech-176 侧
+            # RunFileCapsuleFieldTests 的 O-1 处置）。
+            self.skipTest(f"缺少实例面 roles.yaml（{payload['roles_config']}），"
+                          "干净检出不含 data/，跳过实例偏好链断言")
         roles = {row["role"]: row for row in payload["roles"]}
-        self.assertTrue(payload["present"], payload)
         for role in ("Architecture", "Researcher", "Designer", "Builder",
                      "Reviewer", "Maintainer", "Reporter"):
             self.assertIn(role, roles)
