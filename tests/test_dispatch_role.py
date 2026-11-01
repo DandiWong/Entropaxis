@@ -2327,14 +2327,10 @@ class RunFileCapsuleFieldTests(DispatchRoleTestBase):
     def test_live_dispatch_items_keys_unchanged(self) -> None:
         """AC-12：采集器 live_dispatch_items 输出与改造前逐键一致（新增键不进入）。"""
         import importlib.util
-        # 采集器在 dashboard Skill 的 scripts/ 下：按目录名后缀发现，不在测试里硬编码
-        # 工作区专属 Skill 名（零系统绑定铁律，检查项 13）。
-        scripts_dirs = sorted((SYSTEM_ROOT / "skills").glob("*-dashboard/scripts"))
-        self.assertTrue(scripts_dirs, "未找到 dashboard Skill 的 scripts 目录")
-        scripts_dir = next((d for d in scripts_dirs
-                            if (d / "collect_agent_perf.py").is_file()), None)
-        self.assertIsNotNone(scripts_dir, "dashboard Skill 下未找到 collect_agent_perf.py")
-        sys.path.insert(0, str(scripts_dir))  # 采集器按脚本目录 import perf_state
+        scripts_dir = self._dashboard_scripts_dir()
+        if scripts_dir is None:
+            self.skipTest("缺少工作区专属 dashboard Skill（collect_agent_perf.py），"
+                          "干净检出不含该目录，跳过采集器断言")
         collector_path = scripts_dir / "collect_agent_perf.py"
         spec = importlib.util.spec_from_file_location("collect_agent_perf", collector_path)
         collector = importlib.util.module_from_spec(spec)
@@ -2369,11 +2365,17 @@ class RunFileCapsuleFieldTests(DispatchRoleTestBase):
         """
         import importlib.util
         scripts_dir = self._dashboard_scripts_dir()
+        if scripts_dir is None:
+            self.skipTest("缺少工作区专属 dashboard Skill（collect_agent_perf.py），"
+                          "干净检出不含该目录，跳过 live key 采集器断言")
         spec = importlib.util.spec_from_file_location(
             "collect_agent_perf", scripts_dir / "collect_agent_perf.py")
         collector = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(collector)
         api = self._server_agent_perf()
+        if api is None:
+            self.skipTest("缺少工作区专属 dashboard/multiuser/agent_perf.py，"
+                          "干净检出不含该服务端验证器，跳过服务端契约断言")
 
         # RUN_DIR 改成采集器的真实布局 `<data>/logs/run`，让生产链路逐环对上
         data_dir = self.ws / "data"
@@ -2425,20 +2427,27 @@ class RunFileCapsuleFieldTests(DispatchRoleTestBase):
         self.assertEqual(ctx.exception.status, 400)
         self.assertEqual(ctx.exception.field, "$.items[0].key")
 
-    def _dashboard_scripts_dir(self) -> Path:
+    def _dashboard_scripts_dir(self) -> Path | None:
+        """采集器脚本目录（`<skills>/*-dashboard/scripts/collect_agent_perf.py`）。
+
+        返回 None = 依赖缺失：dashboard Skill 被 `.gitignore` 排除，干净检出
+        （`git archive`）里不存在。依赖缺失时调用方 skip，不判失败（验收 O-1）。
+        """
         scripts_dirs = sorted((SYSTEM_ROOT / "skills").glob("*-dashboard/scripts"))
         scripts_dir = next((d for d in scripts_dirs
                             if (d / "collect_agent_perf.py").is_file()), None)
-        self.assertIsNotNone(scripts_dir, "dashboard Skill 下未找到 collect_agent_perf.py")
-        assert scripts_dir is not None
-        sys.path.insert(0, str(scripts_dir))
+        if scripts_dir is not None:
+            sys.path.insert(0, str(scripts_dir))  # 采集器按脚本目录 import perf_state
         return scripts_dir
 
     def _server_agent_perf(self):
-        """真实服务端验证器：dashboard 在工作区根（相对控制面的兄弟目录），按包导入。"""
+        """真实服务端验证器：dashboard 在工作区根（相对控制面的兄弟目录），按包导入。
+
+        返回 None = 部署缺失（干净检出不含 dashboard/），调用方 skip。
+        """
         server = SYSTEM_ROOT.parent / "dashboard" / "multiuser" / "agent_perf.py"
         if not server.is_file():
-            self.skipTest("未找到 dashboard/multiuser/agent_perf.py（非本机部署）")
+            return None
         pkg_root = SYSTEM_ROOT.parent
         if str(pkg_root) not in sys.path:
             sys.path.insert(0, str(pkg_root))
@@ -2516,6 +2525,10 @@ class OutLockTests(DispatchRoleTestBase):
         self.assertIn(str(self.ws / "cap"), reject, "报出 owner.json.capsule")
         for step in ("暂停", "确认", "--unmeasure-segment", "删除", "重试"):
             self.assertIn(step, reject, f"报文须含处置步骤「{step}」")
+        # O-2：处置步骤须点名同 dispatch_id 的运行态文件，否则看板实时项显示残留运行
+        self.assertIn("运行态文件", reject, "处置步骤须含删除 run 文件")
+        self.assertIn("RUN_DIR/<旧 dispatch_id>.json", reject,
+                      "处置步骤须点名 run 文件路径形态")
         self.assertEqual((lock / "owner.json").read_bytes(),
                          json.dumps({"dispatch_id": "d" * 32, "pid": 999999, "out": str(out),
                                      "capsule": str(self.ws / "cap"),
@@ -2573,6 +2586,7 @@ class OutLockTests(DispatchRoleTestBase):
         self.assertIn("d" * 32, err)
         self.assertIn("--unmeasure-segment", err)
         self.assertIn("暂停", err)
+        self.assertIn("运行态文件", err, "处置步骤须含删除同 dispatch_id 的 run 文件")
         self.assertEqual((cap / "capsule.yaml").read_bytes(), before_capsule, "不开段、不写 attempt")
         self.assertEqual((lock / "owner.json").read_bytes(), owner_before, "锁字节不变")
 

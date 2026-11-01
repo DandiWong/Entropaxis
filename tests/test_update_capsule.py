@@ -799,6 +799,16 @@ class ManagerEndSegmentTests(unittest.TestCase):
         self.assertEqual(res["worklog_refs"], [])
         self.assertNotEqual((self.cap / "capsule.yaml").read_bytes(), before, "作废须落盘")
 
+    def test_missing_evidence_note_has_no_leading_space(self) -> None:
+        """O-3：note 不以空格开头（作废文案首字符即正文）。"""
+        self._start()
+        res = uc.end_task(self.cap)
+        note = res["segment"]["note"]
+        self.assertTrue(note)
+        self.assertFalse(note.startswith(" "), f"note 不得以空格开头: {note!r}")
+        self.assertEqual(note, note.strip())
+        self.assertTrue(note.startswith("未带 --evidence"), f"note 开头异常: {note!r}")
+
     def test_unchanged_evidence_unmeasured(self) -> None:
         """(b) 证据文件指纹与 baseline 相同 → unmeasured。"""
         self._start()

@@ -572,6 +572,11 @@ def _refuse_role_segment(entry: str, seg: dict) -> ToolError:
     )
 
 
+def _append_note(existing: str | None, reason: str) -> str:
+    """段 note 追加：原 note 为空时不以空格开头（验收 O-3），非空时用单空格分隔。"""
+    return f"{existing or ''} {reason}".strip()
+
+
 def _mark_unmeasured_without_settling(data: dict[str, Any], seg: dict, trigger: str,
                                       reason: str) -> None:
     """4.4.1：不绕过证据门槛的入口把 actor 段转 unmeasured，不写 worklog（D-14）。"""
@@ -579,7 +584,7 @@ def _mark_unmeasured_without_settling(data: dict[str, Any], seg: dict, trigger: 
     seg["trigger"] = trigger
     seg["endAt"] = seg.get("endAt") or _now_iso()
     seg["lastActivityAt"] = seg["endAt"]
-    seg["note"] = (seg.get("note") or "") + f" {reason}".rstrip()
+    seg["note"] = _append_note(seg.get("note"), reason)
 
 
 def _touch_open_segment(data: dict[str, Any], at: str | None = None) -> None:
@@ -664,10 +669,10 @@ def _settle_segment(data: dict[str, Any], seg: dict, seconds: int,
         return entry
     if seconds <= APPROVAL_LIMIT_S:
         seg["state"] = "pending_approval"
-        seg["note"] = (seg.get("note") or "") + f" 超过 8h（{fmt_hms(seconds)}）"
+        seg["note"] = _append_note(seg.get("note"), f"超过 8h（{fmt_hms(seconds)}）")
         return None
     seg["state"] = "pending_approval"
-    seg["note"] = (seg.get("note") or "") + f" 超过 24h，须拆段（{fmt_hms(seconds)}）"
+    seg["note"] = _append_note(seg.get("note"), f"超过 24h，须拆段（{fmt_hms(seconds)}）")
     return None
 
 
@@ -767,7 +772,7 @@ def update_capsule(capsule_dir: str, *, delivered: str | None = None, dry_run: b
         for s in data.get("task_segments") or []:
             if isinstance(s, dict) and s.get("state") in ("open", "pending_approval"):
                 s["state"] = "unmeasured"
-                s["note"] = (s.get("note") or "") + " 随 archived-unmeasured 不计量"
+                s["note"] = _append_note(s.get("note"), "随 archived-unmeasured 不计量")
                 mutated = True
 
     if target != current:
@@ -1121,7 +1126,7 @@ def _end_manager_task(capsule: Path, data: dict[str, Any], text: str, seg: dict,
     def finish(state: str, *, reason: str, seconds: int | None = None) -> dict:
         seg["state"] = state
         seg["trigger"] = trigger
-        seg["note"] = (seg.get("note") or "") + f" {reason}".rstrip()
+        seg["note"] = _append_note(seg.get("note"), reason)
         if evidence_rel:
             seg["evidence"] = evidence_rel
         if sha:
@@ -1873,7 +1878,7 @@ def _end_dispatch_segment_locked(cdir: Path, dispatch_id: str, succeeded: bool,
     if not succeeded:
         seg["machine_seconds"] = machine
         seg["state"] = "failed"
-        seg["note"] = (seg.get("note") or "") + f" 调度失败: {failure_code or 'unknown'}".rstrip()
+        seg["note"] = _append_note(seg.get("note"), f"调度失败: {failure_code or 'unknown'}")
         _check_invariants(data)
         _save_capsule_yaml(cdir, data, text)
         return {"capsule": str(cdir), "status": "failed", "segment": seg,

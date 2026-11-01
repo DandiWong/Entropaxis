@@ -777,7 +777,8 @@ _OUT_CLEANUP_STEPS = (
     "（无法确认就保留锁，不清理）；③ 重新读取 owner.json，若与上面报告的旧 dispatch_id "
     "不同则停止本次清理；④ 按 owner.json 的 capsule 找到同 dispatch_id 的 open 段，执行 "
     "update_capsule.py <capsule> --unmeasure-segment <段 id> --reason \"调度进程中断\"；"
-    "⑤ 删除已确认的残留锁目录；⑥ 重试调度。"
+    "⑤ 删除同 dispatch_id 的运行态文件（RUN_DIR/<旧 dispatch_id>.json，即占用者那一份），"
+    "否则看板实时项会把它显示为残留运行；⑥ 删除已确认的残留锁目录；⑦ 重试调度。"
 )
 _OUT_CLEANUP_NO_OWNER = (
     "① 暂停同一 --out 的新调度；② 确认可能持有该锁的调度及其执行链均已结束"
