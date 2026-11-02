@@ -67,6 +67,16 @@ def _raw_capsule_yaml(cid: str, topic: str, body: dict) -> str:
     return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
 
 
+def _at(day: int, hour: int = 10) -> str:
+    """本周第 day 天（0=周一）+08:00 的时刻：fixture 相对当前周生成，不写死日期（IA-1）。"""
+    import datetime as dt
+    import workbench_view
+    monday = dt.date.fromisoformat(workbench_view.week_since())
+    moment = dt.datetime.combine(monday + dt.timedelta(days=day), dt.time(hour, 0),
+                                 tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    return moment.isoformat()
+
+
 class _SmokeWorkspace(unittest.TestCase):
     """M1-11 冒烟工作区：自带骨架、真实感数据、两份胶囊 + 一位本机身份。
 
@@ -105,24 +115,24 @@ class _SmokeWorkspace(unittest.TestCase):
                     {"assignment_id": "Architecture-1", "role": "Architecture",
                      "status": "succeeded", "deliverable": "02_方案.md",
                      "attempts": [{"preference_number": 1, "usage": "unknown",
-                                   "started_at": "2026-10-28T10:00:00+08:00",
-                                   "ended_at": "2026-10-28T11:00:00+08:00", "exit_code": 0}]},
+                                   "started_at": _at(0),
+                                   "ended_at": _at(0, 11), "exit_code": 0}]},
                     {"assignment_id": "Builder-1", "role": "Builder", "status": "running",
                      "deliverable": "04_Spec_Tech-9.md",
                      "attempts": [{"preference_number": 1,
                                    "usage": {"models": {"step-5-preview": {
                                        "in": 100, "out": 20,
                                        "cache_read": 0, "cache_write": 0}}},
-                                   "started_at": "2026-10-28T12:00:00+08:00",
+                                   "started_at": _at(0, 12),
                                    "ended_at": None, "exit_code": None}]},
                 ]},
                 "task_segments": [
                     {"id": "T-1#1", "actor": "role", "role": "Builder", "state": "open",
                      "dispatch_id": "8bddd08f949e451d9ee76bc220d3581e",
-                     "startAt": "2026-10-28T12:00:00+08:00", "endAt": None},
+                     "startAt": _at(0, 12), "endAt": None},
                 ],
                 "worklogs": [{"seq": 1, "spent": "1.5h", "operator": "王丹迪",
-                              "date": "2026-10-28", "stage": "04_Spec",
+                              "date": _at(0)[:10], "stage": "04_Spec",
                               "summary": "写 Spec"}],
             }), encoding="utf-8")
         # 系统胶囊（_root，AC-20）

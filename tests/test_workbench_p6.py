@@ -40,6 +40,24 @@ def _capsule_yaml(cid: str, topic: str, extra: dict | None = None) -> str:
     return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
 
 
+def _week_bounds() -> tuple[str, str]:
+    """本周 [+08:00 周一, 周日]：fixture 相对当前周生成，不写死日期（IA-1）。"""
+    import datetime as dt
+    import workbench_view
+    monday = dt.date.fromisoformat(workbench_view.week_since())
+    return monday.isoformat(), (monday + dt.timedelta(days=6)).isoformat()
+
+
+def _at(day: int, hour: int = 10) -> str:
+    """本周第 day 天（0=周一）+08:00 的时刻，供 attempt / 会话行使用。"""
+    import datetime as dt
+    import workbench_view
+    monday = dt.date.fromisoformat(workbench_view.week_since())
+    moment = dt.datetime.combine(monday + dt.timedelta(days=day), dt.time(hour, 0),
+                                 tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    return moment.isoformat()
+
+
 def _attempt(started: str, usage: object, preference: int = 1) -> dict:
     return {"preference_number": preference, "profile": f"builder-{preference}",
             "started_at": started, "ended_at": "2026-11-01T11:00:00+08:00",
@@ -114,13 +132,13 @@ class P6TokenSubtotalTests(_P6Case):
     def test_role_manager_total_and_unknown_count(self) -> None:
         """样本：角色 100 / Manager 40 / unknown 1 → 100、40、140、「缺用量 1 次」。"""
         self._write_capsule([
-            _attempt("2026-11-01T10:00:00+08:00",
+            _attempt(_at(0),
                      {"models": {"omp/step": {"in": 100, "out": 20, "cache_read": 5,
                                               "cache_write": 0}}}),
-            _attempt("2026-11-01T12:00:00+08:00", "unknown", preference=2),
+            _attempt(_at(0, 12), "unknown", preference=2),
         ])
         (self.sessions / "sessions.jsonl").write_text(
-            _sessions_line("s1", 1, "2026-11-01T14:00:00+08:00",
+            _sessions_line("s1", 1, _at(0, 14),
                            {"models": {"omp/step": {"in": 40, "out": 8, "cache_read": 0,
                                                     "cache_write": 0}}}) + "\n",
             encoding="utf-8")
@@ -141,11 +159,11 @@ class P6TokenSubtotalTests(_P6Case):
     def test_duplicate_session_turn_counted_once(self) -> None:
         """同一 `(session_id, turn_seq)` 重复两行只计一次（6.4 / AC-6）。"""
         self._write_capsule([
-            _attempt("2026-11-01T10:00:00+08:00",
+            _attempt(_at(0),
                      {"models": {"omp/step": {"in": 10, "out": 2, "cache_read": 0,
                                               "cache_write": 0}}}),
         ])
-        turn = _sessions_line("s1", 1, "2026-11-01T14:00:00+08:00",
+        turn = _sessions_line("s1", 1, _at(0, 14),
                               {"models": {"omp/step": {"in": 40, "out": 8, "cache_read": 0,
                                                        "cache_write": 0}}})
         (self.sessions / "sessions.jsonl").write_text(
@@ -159,7 +177,7 @@ class P6TokenSubtotalTests(_P6Case):
     def test_actor_four_columns_equal_by_actor(self) -> None:
         """AC-6：actor 四列与 `aggregate_worklog.py --json` 的 `by_actor` 逐项相等。"""
         self._write_capsule([
-            _attempt("2026-11-01T10:00:00+08:00",
+            _attempt(_at(0),
                      {"models": {"omp/step": {"in": 1, "out": 0, "cache_read": 0,
                                               "cache_write": 0}}}),
         ])
@@ -168,10 +186,10 @@ class P6TokenSubtotalTests(_P6Case):
             _capsule_yaml("Tech-9", "某主题", {
                 "owner": "wang.dandi",
                 "worklogs": [
-                    {"date": "2026-11-01", "spent": 0.5, "stage": "04_Spec",
+                    {"date": _at(0)[:10], "spent": 0.5, "stage": "04_Spec",
                      "summary": "Manager 会话", "operator": "Dandi Wong", "actor": "manager",
                      "seconds": 1800},
-                    {"date": "2026-11-01", "spent": 0.25, "stage": "04_Spec",
+                    {"date": _at(0)[:10], "spent": 0.25, "stage": "04_Spec",
                      "summary": "人工登记", "operator": "Dandi Wong", "seconds": 900},
                 ]}), encoding="utf-8")
         self.start_server()
@@ -188,7 +206,7 @@ class P6TokenSubtotalTests(_P6Case):
     def test_system_capsule_grouped_under_root(self) -> None:
         """AC-20：系统胶囊归 `_root`，只在本机视角显示。"""
         self._write_capsule([
-            _attempt("2026-11-01T10:00:00+08:00",
+            _attempt(_at(0),
                      {"models": {"omp/step": {"in": 100, "out": 0, "cache_read": 0,
                                               "cache_write": 0}}}),
         ])
@@ -200,7 +218,7 @@ class P6TokenSubtotalTests(_P6Case):
                 "roles_manifest": {"assignments": [{
                     "assignment_id": "Builder-1", "role": "Builder", "status": "succeeded",
                     "deliverable": "01_根系统治理.md",
-                    "attempts": [_attempt("2026-11-01T10:00:00+08:00",
+                    "attempts": [_attempt(_at(0),
                                           {"models": {"omp/step": {"in": 7, "out": 0,
                                                                    "cache_read": 0,
                                                                    "cache_write": 0}}})]}]}}),
@@ -221,18 +239,31 @@ class P6TokenSubtotalTests(_P6Case):
             _attempt("2026-10-20T10:00:00+08:00",
                      {"models": {"omp/step": {"in": 999, "out": 0, "cache_read": 0,
                                               "cache_write": 0}}}),
-            _attempt("2026-11-01T10:00:00+08:00",
+            _attempt(_at(0),
                      {"models": {"omp/step": {"in": 100, "out": 0, "cache_read": 0,
                                               "cache_write": 0}}}),
         ])
         self.start_server()
+        # 缺省窗口 = week_since()，本周内的 attempt 计入、上周的排除（IA-1：窗口显式断言）。
         default = self._get("/api/worklog-usage")
         self.assertEqual(default["since"], __import__("workbench_view", fromlist=["x"])
                          .week_since())
         self.assertEqual(default["totals"]["role"]["in"], 100)
-        wide = self._get("/api/worklog-usage?since=2026-10-01")
-        self.assertEqual(wide["since"], "2026-10-01")
+        # 显式宽窗（两端都写死）：两条 attempt 都在窗内 → 999 + 100。
+        wide = self._get("/api/worklog-usage?since=2000-01-01&until=2099-12-31")
+        self.assertEqual(wide["since"], "2000-01-01")
+        self.assertEqual(wide["until"], "2099-12-31")
         self.assertEqual(wide["totals"]["role"]["in"], 1099)
+        # 显式窗口只含本周：与缺省窗同结果；下周一窗口则全空（attempt 落在本周）。
+        since, until = _week_bounds()
+        this_week = self._get(f"/api/worklog-usage?since={since}&until={until}")
+        self.assertEqual((this_week["since"], this_week["until"]), (since, until))
+        self.assertEqual(this_week["totals"]["role"]["in"], 100)
+        import datetime as dt
+        next_monday = (dt.date.fromisoformat(since) + dt.timedelta(days=7)).isoformat()
+        next_week = self._get(f"/api/worklog-usage?since={next_monday}")
+        self.assertEqual(next_week["since"], next_monday)
+        self.assertEqual(next_week["totals"]["role"]["in"], 0)
 
     def test_usage_route_requires_token(self) -> None:
         """AC-18 / M1-1 边界：无令牌一律 401。"""

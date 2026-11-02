@@ -34,6 +34,16 @@ def _capsule_yaml(cid: str, topic: str, extra: dict | None = None) -> str:
     return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
 
 
+def _at(day: int, hour: int = 10) -> str:
+    """本周第 day 天（0=周一）+08:00 的时刻：fixture 相对当前周生成，不写死日期（IA-1）。"""
+    import datetime as dt
+    import workbench_view
+    monday = dt.date.fromisoformat(workbench_view.week_since())
+    moment = dt.datetime.combine(monday + dt.timedelta(days=day), dt.time(hour, 0),
+                                 tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    return moment.isoformat()
+
+
 class _WorkspaceCase(unittest.TestCase):
     """带临时工作区的测试基类：自带 .entropaxis 骨架与一份胶囊。"""
 
@@ -289,14 +299,14 @@ class P2UsageSubtotalTests(_WorkspaceCase):
             "deliverable": "03_设计.md",
             "attempts": [{
                 "preference_number": 1, "profile": "designer-1",
-                "started_at": "2026-11-01T10:00:00+08:00",
-                "ended_at": "2026-11-01T11:00:00+08:00", "exit_code": 0,
+                "started_at": _at(0),
+                "ended_at": _at(0, 11), "exit_code": 0,
                 "usage": {"models": {"claude/opus": {"in": 100, "out": 20,
                                                      "cache_read": 5, "cache_write": 0}}},
             }, {
                 "preference_number": 2, "profile": "designer-2",
-                "started_at": "2026-11-01T12:00:00+08:00",
-                "ended_at": "2026-11-01T13:00:00+08:00", "exit_code": 0,
+                "started_at": _at(0, 12),
+                "ended_at": _at(0, 13), "exit_code": 0,
                 "usage": "unknown",
             }],
         }
@@ -308,7 +318,7 @@ class P2UsageSubtotalTests(_WorkspaceCase):
         sessions.mkdir(parents=True, exist_ok=True)
         (sessions / "sessions.jsonl").write_text(
             json.dumps({"session_id": "s1", "turn_seq": 1, "capsule_id": "Tech-9",
-                        "ended_at": "2026-11-01T14:00:00+08:00",
+                        "ended_at": _at(0, 14),
                         "usage": {"models": {"claude/opus": {"in": 40, "out": 8,
                                                              "cache_read": 0,
                                                              "cache_write": 0}}}},
@@ -328,8 +338,8 @@ class P2UsageSubtotalTests(_WorkspaceCase):
             "deliverable": "03_设计.md",
             "attempts": [{
                 "preference_number": 1, "profile": "designer-1",
-                "started_at": "2026-11-01T10:00:00+08:00",
-                "ended_at": "2026-11-01T11:00:00+08:00", "exit_code": 0,
+                "started_at": _at(0),
+                "ended_at": _at(0, 11), "exit_code": 0,
                 "usage": {"models": {"claude/opus": {"in": 10, "out": 2,
                                                      "cache_read": 0, "cache_write": 0}}},
             }],
@@ -341,12 +351,12 @@ class P2UsageSubtotalTests(_WorkspaceCase):
         sessions = self.root / ".entropaxis" / "data" / "workbench"
         sessions.mkdir(parents=True, exist_ok=True)
         turn = {"session_id": "s1", "turn_seq": 1, "capsule_id": "Tech-9",
-                "ended_at": "2026-11-01T14:00:00+08:00",
+                "ended_at": _at(0, 14),
                 "usage": {"models": {"claude/opus": {"in": 40, "out": 8,
                                                      "cache_read": 0, "cache_write": 0}}}}
         (sessions / "sessions.jsonl").write_text(
             json.dumps(turn, ensure_ascii=False) + "\n"
-            + json.dumps({**turn, "ended_at": "2026-11-01T14:30:00+08:00"},
+            + json.dumps({**turn, "ended_at": _at(0, 14)},
                          ensure_ascii=False) + "\n",
             encoding="utf-8")
         status, payload = self._get(self.base + "/api/capsules", self.token)
