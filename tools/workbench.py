@@ -20,6 +20,7 @@ import contextlib
 import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import threading
@@ -775,12 +776,63 @@ def build_server(root: Path, port: int = 0, me: str | None = None) -> tuple[Thre
     return server, server.state.token  # type: ignore[attr-defined]
 
 
+def _token_path(root: Path) -> Path:
+    """启动令牌落盘路径：`data/workbench/token`（Spec 1.2，IA-4）。"""
+    return root / paths.SYSTEM_DIRNAME / "data" / "workbench" / "token"
+
+
+def _write_token_file(root: Path, token: str) -> bool:
+    """把启动令牌写入 `data/workbench/token`，权限 0600；写失败不阻断服务启动。"""
+    path = _token_path(root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # 先写后改权限：创建时就是 0600，避免令牌短暂以默认权限暴露。
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token)
+    except OSError as error:
+        print(f"⚠️ 令牌文件写入失败（不影响本次启动）: {error}", file=sys.stderr, flush=True)
+        return False
+    return True
+
+
+def _remove_token_file(root: Path) -> None:
+    """服务退出即删令牌文件：不在磁盘上留下过期凭据。"""
+    try:
+        _token_path(root).unlink(missing_ok=True)
+    except OSError:  # pragma: no cover - 退出清理失败不影响退出码
+        pass
+
+
+def _install_sigterm_cleanup(root: Path) -> None:
+    """SIGTERM：同步删令牌文件后退出（IA-4）。
+
+    在 `main()` 入口就注册（服务起来前）：启动早期收到 SIGTERM 时缺省动作会直接杀进程，
+    令牌文件残留在磁盘上。清理不依赖异常传播（`serve_forever` 可能长时间阻塞在
+    `select`，`SystemExit` 要等它返回才展开），因此 handler 里同步删文件再退出。
+    仅主线程可注册；非主线程（被 import 的服务场景）静默跳过。
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return
+
+    def _on_sigterm(*_: object) -> None:
+        _remove_token_file(root)
+        # 直接退出：不依赖 `serve_forever` 的 poll 周期，也不在 handler 里调 `shutdown()`
+        # （它会等服务循环自行退出，等的是主线程手里的 select）。
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
+
 def serve(root: Path, port: int, me: str | None, open_browser: bool = True) -> int:
     server, token = build_server(root, port, me)
     host, actual_port = server.server_address[:2]
     # 启动信息只走 stderr：stdout 留给工具语义输出；首行是令牌，前端据此带头发起请求。
     print(f"token {token}", file=sys.stderr, flush=True)
     print(f"listening http://{host}:{actual_port}/", file=sys.stderr, flush=True)
+    _write_token_file(root, token)
+    # SIGTERM 清理已在 main() 入口注册；这里只需装好退出路径（serve() 也可被直接调用）。
+    _install_sigterm_cleanup(root)
     if open_browser:
         # 打开动作统一走 open_file.py（《文件交付》4.4）：平台命令只允许出现在该文件内。
         subprocess.run([sys.executable, str(TOOLS_DIR / "open_file.py"),
@@ -792,6 +844,7 @@ def serve(root: Path, port: int, me: str | None, open_browser: bool = True) -> i
         pass
     finally:
         server.server_close()
+        _remove_token_file(root)
     return 0
 
 
@@ -816,6 +869,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"❌ 工作区定位失败: {root} 下没有 {paths.SYSTEM_DIRNAME}/\n"
               "👉 修复建议: 用 --root 指向含 .entropaxis 的工作区根。", file=sys.stderr)
         return 1
+    # 令牌文件可能在 serve() 里写出：启动早期就装好 SIGTERM 清理，避免该窗口内被杀留下令牌。
+    _install_sigterm_cleanup(root)
     try:
         return serve(root, args.port, args.me or _read_me(root), open_browser=not args.no_open)
     except OSError as error:

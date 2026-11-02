@@ -393,5 +393,26 @@ class WriteRouteTests(_WorkspaceCase):
         self.assertIn("无法打开", str(payload))
 
 
+class TokenFileTests(_WorkspaceCase):
+    """IA-4（Spec 1.2）：启动令牌写入 `data/workbench/token`，0600，退出即删。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.proc, self.base, self.token = self.start_server()
+        self.token_path = self.root / ".entropaxis" / "data" / "workbench" / "token"
+
+    def test_token_file_matches_stderr_first_line_and_is_owner_only(self) -> None:
+        """令牌文件内容 = stderr 首行令牌，权限 0600（不同机其它用户不可读）。"""
+        self.assertTrue(self.token_path.is_file(), "服务启动必须写 data/workbench/token")
+        self.assertEqual(self.token_path.read_text(encoding="utf-8"), self.token)
+        self.assertEqual(self.token_path.stat().st_mode & 0o777, 0o600)
+
+    def test_token_file_removed_after_service_exits(self) -> None:
+        """服务退出即删令牌文件：磁盘上不留下过期凭据。"""
+        self.assertTrue(self.token_path.is_file())
+        self._stop(self.proc)
+        self.assertFalse(self.token_path.exists(), "服务退出后令牌文件必须删除")
+
+
 if __name__ == "__main__":
     unittest.main()
