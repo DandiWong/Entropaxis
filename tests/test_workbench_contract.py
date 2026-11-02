@@ -282,6 +282,100 @@ projects: {}
         self.assertEqual(created, [])
 
 
+class CapsuleIndexWindowBucketTests(unittest.TestCase):
+    """IA-3：窗口判定先按 +08:00 换算再取日期（方案 6.5.1、Q-11、AC-19 第 2/3 例）。"""
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.root = Path(self._td.name)
+        self.ws = self.root / "ws"
+        (self.ws / ".entropaxis" / "data" / "templates").mkdir(parents=True)
+        (self.ws / ".entropaxis" / "data" / "workbench").mkdir(parents=True)
+        (self.ws / ".entropaxis" / "data" / "templates" / "registry.yaml").write_text(
+            "exclude: []\nprojects: []\n", encoding="utf-8")
+        self.cap = self.ws / "docs" / "20261030_某主题"
+        self.cap.mkdir(parents=True)
+
+    def _attempt(self, started_at: str, in_tokens: int) -> dict:
+        return {"preference_number": 1, "profile": "builder", "started_at": started_at,
+                "ended_at": "2026-11-02T12:00:00+08:00", "exit_code": 0,
+                "usage": {"models": {"m": {"in": in_tokens, "out": 0,
+                                           "cache_read": 0, "cache_write": 0}}}}
+
+    def _capsule(self, attempts: list[dict]) -> None:
+        import yaml
+        assignment = {"assignment_id": "Builder-1", "role": "Builder", "status": "succeeded",
+                      "deliverable": "04_Spec_Tech-9.md", "attempts": attempts}
+        (self.cap / "capsule.yaml").write_text(yaml.safe_dump(
+            {"id": "Tech-9", "topic": "某主题", "mode": "full", "lifecycle": "active",
+             "seq_next": 1, "task_segments": [], "worklogs": [],
+             "roles_manifest": {"assignments": [assignment]}},
+            allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    def _sessions(self, rows: list[dict]) -> None:
+        (self.ws / ".entropaxis" / "data" / "workbench" / "sessions.jsonl").write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+
+    def test_utc_monday_early_hours_count_in_this_week(self) -> None:
+        """AC-19 第 2/3 例：周一 00:00–08:00（+08:00）的 attempt 计入本周，不是上周。"""
+        self._capsule([
+            self._attempt("2026-11-01T16:30:00+00:00", 100),   # 第 3 例：+08:00 周一 00:30
+            self._attempt("2026-11-01T16:00:00+00:00", 10),    # 第 2 例：+08:00 周一 00:00
+        ])
+        [row] = AW.capsule_index(self.ws.resolve(), "2026-11-02", "2026-11-08")
+        self.assertEqual(row["usage"]["role"]["in"], 110)
+        self.assertEqual(row["usage"]["unknown_count"], 0)
+        # 上周窗口不含这两条：相邻两周合计可对账，不多计也不丢
+        [last] = AW.capsule_index(self.ws.resolve(), "2026-10-26", "2026-11-01")
+        self.assertEqual(last["usage"]["role"]["in"], 0)
+
+    def test_utc_sunday_evening_stays_in_last_week(self) -> None:
+        """AC-19 第 1 例：周日 23:59:59+08:00 计入上周，换算后不滑进本周。"""
+        self._capsule([self._attempt("2026-11-01T15:59:59+00:00", 1)])
+        [row] = AW.capsule_index(self.ws.resolve(), "2026-10-26", "2026-11-01")
+        self.assertEqual(row["usage"]["role"]["in"], 1)
+        [this] = AW.capsule_index(self.ws.resolve(), "2026-11-02", "2026-11-08")
+        self.assertEqual(this["usage"]["role"]["in"], 0)
+
+    def test_naive_started_at_treated_as_cst(self) -> None:
+        """无时区后缀的 started_at 视作 +08:00（Q-11），不按本机时区漂移。"""
+        self._capsule([self._attempt("2026-11-02T02:00:00", 7)])
+        [row] = AW.capsule_index(self.ws.resolve(), "2026-11-02", "2026-11-08")
+        self.assertEqual(row["usage"]["role"]["in"], 7)
+
+    def test_manager_session_turn_bucketed_in_cst(self) -> None:
+        """Manager 会话轮次同样按 +08:00 换算 `ended_at` 后再判窗口（同根因）。"""
+        self._capsule([])
+        self._sessions([
+            {"session_id": "s1", "turn_seq": 1, "capsule_id": "Tech-9",
+             "ended_at": "2026-11-01T16:30:00+00:00",
+             "usage": {"models": {"m": {"in": 40, "out": 8, "cache_read": 0, "cache_write": 0}}}},
+        ])
+        [row] = AW.capsule_index(self.ws.resolve(), "2026-11-02", "2026-11-08")
+        self.assertEqual(row["usage"]["manager"]["in"], 40)
+        [last] = AW.capsule_index(self.ws.resolve(), "2026-10-26", "2026-11-01")
+        self.assertEqual(last["usage"]["manager"]["in"], 0)
+
+    def test_segment_machine_seconds_bucketed_in_cst(self) -> None:
+        """机时分桶同根因（IA-6）：段 startAt 换算 +08:00 后再判窗口。"""
+        import yaml
+        self._capsule([])
+        data = yaml.safe_load((self.cap / "capsule.yaml").read_text(encoding="utf-8"))
+        data["task_segments"] = [
+            {"seq": 1, "seg_id": "Tech-9#1", "name": "Builder→04_Spec",
+             "state": "logged", "actor": "role", "role": "Builder",
+             "startAt": "2026-11-01T16:30:00+00:00", "endAt": "2026-11-01T17:30:00+00:00",
+             "machine_seconds": 3600},
+        ]
+        (self.cap / "capsule.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        [row] = AW.capsule_index(self.ws.resolve(), "2026-11-02", "2026-11-08")
+        self.assertEqual(row["machine_seconds"], 3600)
+        [last] = AW.capsule_index(self.ws.resolve(), "2026-10-26", "2026-11-01")
+        self.assertEqual(last["machine_seconds"], 0)
+
+
 class TodoMergeTests(unittest.TestCase):
     """方案 6.3「TODO 合并」：tasks/capsule/dispatch 三类线索 + 到期日期，按来源分组。"""
 

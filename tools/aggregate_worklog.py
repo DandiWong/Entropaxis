@@ -51,10 +51,31 @@ def _find_workspace_root(cwd: Path) -> Path:
 
 
 def _default_since() -> str:
-    today = dt.date.today()
-    # 缺省为本周一（ISO 周一）
-    monday = today - dt.timedelta(days=today.weekday())
-    return monday.isoformat()
+    """缺省本周一：固定 +08:00 的 ISO 周一（Q-11 / D-16），不取本机时区日期。"""
+    today = dt.datetime.now(CST).date()
+    return (today - dt.timedelta(days=today.weekday())).isoformat()
+
+
+CST = dt.timezone(dt.timedelta(hours=8))  # 与 update_capsule.TZ_CST / workbench_view.CST 同值（Q-11）
+
+
+def _cst_day(value: Any) -> str | None:
+    """时间戳 → +08:00 当地日期（Q-11）：先换算时区再取日期。
+
+    无时区后缀视作 +08:00（同 `workbench_view._ts` 口径）；无法解析返回 None。
+    唯一一份时区换算实现：所有按日分桶的窗口判定（attempts / 会话轮次 / 段机时）都走它，
+    不得在别处复制 `[:10]` 或 `.date()`。
+    """
+    if isinstance(value, dt.datetime):
+        parsed = value
+    else:
+        try:
+            parsed = dt.datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=CST)
+    return parsed.astimezone(CST).date().isoformat()
 
 
 def _parse_hours(val: Any) -> float:
@@ -102,9 +123,8 @@ def _segment_machine_seconds(seg: dict[str, Any], since: str | None = None,
         return None
     start, end = seg.get("startAt"), seg.get("endAt")
     if since or until:
-        try:
-            day = dt.datetime.fromisoformat(str(start)).date().isoformat()
-        except (TypeError, ValueError):
+        day = _cst_day(start)
+        if day is None:
             return None
         if since and day < since:
             return None
@@ -545,7 +565,8 @@ def capsule_index(root: Path, since: str, until: str, me: str | None = None,
                 if not isinstance(attempt, dict):
                     continue
                 started = str(attempt.get("started_at") or "")
-                if not (since <= started[:10] <= until):
+                day = _cst_day(started)
+                if day is None or not (since <= day <= until):
                     continue
                 usage = attempt.get("usage")
                 if usage == "unknown" or usage is None:
@@ -617,7 +638,8 @@ def _manager_session_usage(root: Path, since: str, until: str) -> dict[str, dict
         if not isinstance(row, dict):
             continue
         ended_at = str(row.get("ended_at") or "")
-        if not (since <= ended_at[:10] <= until):
+        day = _cst_day(ended_at)
+        if day is None or not (since <= day <= until):
             continue
         capsule_id = row.get("capsule_id")
         if not capsule_id:
@@ -784,7 +806,8 @@ def main() -> int:
                             help="TODO 合并（Tech-175 M0）：Tasks.md Active、未结角色段、待办指派、到期提醒，按来源分组")
     todo_p.add_argument("--me", help="本机人员 id；给出时只返回「我的」胶囊来源")
     parser.add_argument("--since", default=_default_since(), help="统计起始日期 YYYY-MM-DD（缺省本周一）")
-    parser.add_argument("--until", default=dt.date.today().isoformat(), help="统计截止日期 YYYY-MM-DD（缺省今天）")
+    parser.add_argument("--until", default=dt.datetime.now(CST).date().isoformat(),
+                        help="统计截止日期 YYYY-MM-DD（缺省今天，+08:00）")
     # `--project` 只在子命令上注册（capsule-index）：主解析器不再有同名参数。
     # argparse 子解析器与主解析器共享命名空间，子命令缺省值 None 会覆盖主解析器取值，
     # 放在子命令前的 `--project X` 会被静默忽略（IA-5）；删掉后该位置直接报错，不静默。
