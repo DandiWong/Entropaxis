@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.parse
@@ -394,24 +395,66 @@ class WriteRouteTests(_WorkspaceCase):
 
 
 class TokenFileTests(_WorkspaceCase):
-    """IA-4（Spec 1.2）：启动令牌写入 `data/workbench/token`，0600，退出即删。"""
+    """IA-4（Spec 1.2）：启动令牌写入 `data/workbench/`，0600，退出即删。
+
+    文件名带实例标识（IA-1 附带排查结论）：同一工作区并发起多个服务时，固定路径
+    `token` 会被后启动者覆盖、被先退出者删掉，只剩读者会间歇失败。
+    """
 
     def setUp(self) -> None:
         super().setUp()
         self.proc, self.base, self.token = self.start_server()
-        self.token_path = self.root / ".entropaxis" / "data" / "workbench" / "token"
+        self.token_dir = self.root / ".entropaxis" / "data" / "workbench"
+        # 令牌文件在 `listening` 之后写：等它落稳（写完是原子替换，中途只会见 `.writing` 临时副本）。
+        for _ in range(200):
+            if any(p.name.startswith("token.") and not p.name.endswith(".writing")
+                   for p in self.token_dir.glob("token*")):
+                break
+            time.sleep(0.02)
+
+    def _token_files(self) -> list[Path]:
+        """本工作区现有的令牌文件（含写入中的临时副本都不算：写完即原子替换）。"""
+        return sorted(p for p in self.token_dir.glob("token*")
+                      if p.is_file() and not p.name.endswith(".writing"))
 
     def test_token_file_matches_stderr_first_line_and_is_owner_only(self) -> None:
         """令牌文件内容 = stderr 首行令牌，权限 0600（不同机其它用户不可读）。"""
-        self.assertTrue(self.token_path.is_file(), "服务启动必须写 data/workbench/token")
-        self.assertEqual(self.token_path.read_text(encoding="utf-8"), self.token)
-        self.assertEqual(self.token_path.stat().st_mode & 0o777, 0o600)
+        files = self._token_files()
+        self.assertEqual(len(files), 1, f"应只有本实例一份令牌文件: {files}")
+        self.assertEqual(files[0].read_text(encoding="utf-8"), self.token)
+        self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
 
     def test_token_file_removed_after_service_exits(self) -> None:
-        """服务退出即删令牌文件：磁盘上不留下过期凭据。"""
-        self.assertTrue(self.token_path.is_file())
+        """服务退出即删自己那一份：磁盘上不留下过期凭据。"""
+        self.assertEqual(len(self._token_files()), 1)
         self._stop(self.proc)
-        self.assertFalse(self.token_path.exists(), "服务退出后令牌文件必须删除")
+        self.assertEqual(self._token_files(), [], "服务退出后令牌文件必须删除")
+
+    def _wait_token_files(self, count: int) -> list[Path]:
+        """等令牌文件数达到 count（写入是原子替换，中途只见 `.writing` 临时副本）。"""
+        for _ in range(250):
+            files = self._token_files()
+            if len(files) >= count:
+                return files
+            time.sleep(0.02)
+        return self._token_files()
+
+    def test_concurrent_instances_do_not_interfere(self) -> None:
+        """并发两个服务：各自写各自令牌，先退出者不删对方的，两者都可用。"""
+        second, second_base, second_token = self.start_server()
+        files = self._wait_token_files(2)
+        self.assertEqual(len(files), 2, f"两个实例应各有一份令牌文件: {files}")
+        contents = {p.read_text(encoding="utf-8") for p in files}
+        self.assertEqual(contents, {self.token, second_token})
+        # 先停后启动的那个：先启动实例的令牌文件必须还在
+        self._stop(second)
+        remaining = self._token_files()
+        self.assertEqual(len(remaining), 1, f"只应删掉退出实例那一份: {remaining}")
+        self.assertEqual(remaining[0].read_text(encoding="utf-8"), self.token)
+        # 先启动的实例仍可正常服务（令牌读内存，与文件互不影响）
+        status, payload, _ = self._get(self.base + "/api/capsules", self.token)
+        self.assertEqual(status, 200, payload)
+        self.assertTrue(payload, payload)
 
 
 if __name__ == "__main__":
