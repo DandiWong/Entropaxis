@@ -363,6 +363,33 @@ class CapsuleIndexCliTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(json.loads(proc.stdout), [])
 
+    def test_project_before_subcommand_errors_instead_of_silently_ignored(self) -> None:
+        """IA-5：`--project` 放在子命令前必须报错，不静默忽略。
+
+        主解析器与子解析器曾各注册一个 `--project`，子命令缺省值 None 覆盖主解析器取值，
+        导致 `--project X --json capsule-index` 返回全量且退出码 0。主解析器的 `--project`
+        已删除，该位置现在由 argparse 直接报错（退出码 2，无 stdout 输出）。
+        """
+        proc = _run([str(AGGREGATE), "--root", str(self.ws), "--project", "alpha",
+                     "--json", "capsule-index"])
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertEqual(proc.stdout, "", "报错路径不得输出任何数据")
+        self.assertIn("invalid choice", proc.stderr)
+
+    def test_project_after_subcommand_filters(self) -> None:
+        """IA-5：`--project` 放在子命令后仍按文档形式生效（Spec 1.4）。"""
+        proc = _run([str(AGGREGATE), "--root", str(self.ws), "--json", "capsule-index",
+                     "--project", "_root"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual([r["id"] for r in payload], ["Tech-9"])
+
+    def test_default_path_has_no_project_option(self) -> None:
+        """IA-5：缺省聚合路径不再接受 `--project`（该路径只有 `--operator` 过滤）。"""
+        proc = _run([str(AGGREGATE), "--root", str(self.ws), "--project", "alpha"])
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("invalid choice", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

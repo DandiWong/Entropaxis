@@ -785,7 +785,9 @@ def main() -> int:
     todo_p.add_argument("--me", help="本机人员 id；给出时只返回「我的」胶囊来源")
     parser.add_argument("--since", default=_default_since(), help="统计起始日期 YYYY-MM-DD（缺省本周一）")
     parser.add_argument("--until", default=dt.date.today().isoformat(), help="统计截止日期 YYYY-MM-DD（缺省今天）")
-    parser.add_argument("--project", help="指定项目 ID 过滤")
+    # `--project` 只在子命令上注册（capsule-index）：主解析器不再有同名参数。
+    # argparse 子解析器与主解析器共享命名空间，子命令缺省值 None 会覆盖主解析器取值，
+    # 放在子命令前的 `--project X` 会被静默忽略（IA-5）；删掉后该位置直接报错，不静默。
     parser.add_argument("--operator", help="指定登记人过滤")
     parser.add_argument("--by", choices=["project", "task", "day", "stage"], default="project", help="聚合维度")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="工作区根目录")
@@ -808,7 +810,9 @@ def main() -> int:
         root=root,
         since=args.since,
         until=args.until,
-        project_filter=args.project,
+        # 缺省聚合路径的 `--project` 已随 IA-5 一并移除：该路径改用 `--operator` 过滤，
+        # 项目过滤只存在于 `capsule-index` 子命令（子命令后的位置）。
+        project_filter=None,
         operator_filter=args.operator,
     )
 
