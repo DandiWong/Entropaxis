@@ -66,6 +66,7 @@
     }
   },
   "stage_rules": {
-    "^03_设计": "Design"
+    "^03_设计": "Design",
+    "^01_需求清单": "Report"
   }
 }

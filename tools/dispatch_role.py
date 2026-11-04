@@ -455,7 +455,7 @@ FENCE_TEMPLATE = (
 #            曾只有 {form, schema}，交一份结构合规的 Proposal 即判通过，硬门禁角色实
 #            质仍无专属判据（复核 M-03）。绑定产出类型把这一类整体关掉，不止 Maintainer。
 ROLE_CRITERIA: dict[str, dict[str, Any]] = {
-    "Researcher":   {"form": "doc", "schema": True, "doc_type": "Research"},
+    "Researcher":   {"form": "doc", "schema": True, "doc_type": ("Research", "Report")},
     "Architecture": {"form": "doc", "schema": True, "doc_type": "Proposal"},
     "Designer":     {"form": "any", "schema": True, "fence": STATE_FENCE, "doc_type": "Proposal", "structure": "Design"},
     "Builder":      {"form": "code", "schema": True, "doc_type": "Spec"},
@@ -553,24 +553,24 @@ def _within(path: Path, root: Path) -> bool:
         return False
 
 
-def _doc_type_issues(path: Path, role: str, expected: str) -> list[str]:
+def _doc_type_issues(path: Path, role: str, expected: str | tuple[str, ...]) -> list[str]:
     """角色的产出类型必须对得上：验收报告不能是一份方案，审计报告不能是一份调研。"""
     try:
         from . import validate_schema as vs  # type: ignore # noqa: PLC0415
     except ImportError:
         sys.path.insert(0, str(SYSTEM_ROOT / "tools"))
         import validate_schema as vs  # noqa: PLC0415
-    # 目录型交付物的主文档与围栏承载文件是同一个（README.md，否则首个 .md）。此前只认
-    # README.md，无 README 的目录直接返回空——交一个 type: Proposal 的 note.md 配有效
-    # 围栏即通过 Reporter 判据，doc_type 对整个目录型形态形同虚设（复核 M-03）。
     doc = path if path.is_file() else _fence_carrier_file(path)
     if doc is None or not doc.is_file() or doc.suffix != ".md":
         return []  # 目录内无任何 Markdown：无处判定类型，由围栏/form 判据拦
     fm = vs.parse_front_matter(doc.read_text(encoding="utf-8", errors="replace"))
     if fm is None:
         return [f"{doc.name} 缺 Front Matter，无法判定产出类型"]
-    if fm.get("type") != expected:
-        return [f"{role} 的产出类型须为 {expected}，实得 {fm.get('type')!r}（{doc.name}）"]
+    actual = fm.get("type")
+    allowed = expected if isinstance(expected, tuple) else (expected,)
+    if actual not in allowed:
+        exp_str = " 或 ".join(allowed)
+        return [f"{role} 的产出类型须为 {exp_str}，实得 {actual!r}（{doc.name}）"]
     return []
 
 
