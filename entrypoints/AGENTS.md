@@ -36,7 +36,7 @@
 - 改动 `.entropaxis/`：`.entropaxis/rules/01_根系统治理.md`；设计新规则/工具/Skill 另读 `.entropaxis/rules/系统演进准则.md`；布局见 `.entropaxis/rules/控制面布局.md`
 - 调研→方案→原型→实施→审计→验收→汇报的角色调度与审修闭环：`.entropaxis/rules/角色协作.md`
 - 自然语言指令解析与追问边界：`.entropaxis/rules/指令解析.md`
-- 日常业务动作（事务/调研/同步/任务/沉淀/案例/复盘/初始化/自定义角色/报销）：`.entropaxis/rules/工作流指令.md`
+- 日常业务动作（事务/调研/提取需求/同步/任务/沉淀/案例/复盘/初始化/自定义角色/报销）：`.entropaxis/rules/工作流指令.md`
 - 调研质量门禁与交付结构：`.entropaxis/rules/方案调研.md`
 - 审计/修正、系统自检/自检补全、系统演进（规则/工具/Skill 增删改与形态判定）、Skill 分发：`.entropaxis/rules/治理指令.md`
 - 把端到端/长时验证移到夜间无人值守（nightly 回归编排）：`.entropaxis/rules/治理指令.md`「Nightly 回归」
