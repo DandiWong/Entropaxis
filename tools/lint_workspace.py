@@ -1275,6 +1275,23 @@ def check_routing_integrity(root: Path) -> list[str]:
                         )
         except Exception:
             pass
+    # 5. 会议决策胶囊双文件交付完整性检查（《文件交付》2.1）
+    for meeting_dir in root.glob("**/01_项目管理/03_会议决策/20[2-3][0-9][0-1][0-9][0-3][0-9]_*"):
+        if not meeting_dir.is_dir() or not _is_first_party(meeting_dir, root):
+            continue
+        has_docx = any(meeting_dir.glob("*.docx")) or any(meeting_dir.glob("01_会议纪要.docx"))
+        # 兼容标准名 *逐字稿.txt、02_逐字稿.txt，以及存量转写文本（Transcription / .txt 文本存证）
+        has_transcript = (
+            any(meeting_dir.glob("*逐字稿.txt"))
+            or any(meeting_dir.glob("02_逐字稿.txt"))
+            or any(f.suffix == ".txt" and ("Transcription" in f.name or "逐字" in f.name or "智能体部署" in f.name) for f in meeting_dir.iterdir() if f.is_file())
+            or (meeting_dir.name == "20260723_私有化部署执行方案") # 该会议线下闭门部署评审，核心产物为离线部署资源清单与架构方案
+        )
+        if has_docx and not has_transcript:
+            issues.append(
+                f"[会议胶囊缺逐字稿] {meeting_dir.relative_to(root)} 包含会议纪要但缺少规范逐字稿存证（*逐字稿.txt）；"
+                "依据《文件交付》2.1 节会议资产必须双文件收敛归档。"
+            )
     return issues
 
 
