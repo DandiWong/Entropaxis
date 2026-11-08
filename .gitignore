@@ -15,3 +15,6 @@ skills/*.zip
 
 # 本地演示页含环境路径与实例口径，只留本机，不进 clone / archive。
 /demos/
+
+# 衍生子项目 OpenDandi：素材沉淀与网站/书籍工程（暂不入库）
+/opendandi/
