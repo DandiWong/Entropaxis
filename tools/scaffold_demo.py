@@ -16,12 +16,12 @@ scaffold_demo.py - 单文件可交互 HTML Demo 脚手架生成与规范体检�
 """
 
 import argparse
+import json
 import os
 from pathlib import Path
 import re
 import sys
 import tempfile
-
 DEFAULT_STAGES = [
     "资料导入解析",
     "规则生成证据",
@@ -582,6 +582,7 @@ def main():
     parser = argparse.ArgumentParser(description="单文件 HTML 交互原型脚手架生成与规范体检工具")
     parser.add_argument("--title", default="业务全流程交互Demo", help="Demo 页面标题")
     parser.add_argument("--stages", help="阶段列表，逗号分隔（例如：资料导入解析,规则生成证据,查漏排错基线,太美规格导出,执行闭环）")
+    parser.add_argument("--from-reqs", help="从已提取的需求清单 JSON 文件自动读取阶段生成骨架")
     parser.add_argument("--out", help="生成的 HTML 输出文件路径")
     parser.add_argument("--lint", help="对指定的 HTML Demo 文件实施设计规范与体验门禁体检")
 
@@ -597,17 +598,37 @@ def main():
             print(f"❌ Demo 规范体检发现 {len(issues)} 项不合规问题: {target}")
             for iss in issues:
                 print(f"  • {iss}")
-            print("👉 修复建议: 参照《工作流指令》「原型设计 / 需求出 Demo」与 req-to-demo Skill 优化布局与文案。")
+            print("👉 修复建议: 参照《工作流指令》「出 Demo / 交互原型」与 produce-demo Skill 优化布局与文案。")
             sys.exit(1)
 
     if not args.out:
         print("❌ 缺少必要参数: 必须指定 --out <path.html> 或使用 --lint <path.html>")
-        print("👉 修复建议: 执行 python3 .entropaxis/tools/scaffold_demo.py --out demo.html [--title <标题>] [--stages <阶段1,阶段2...>]")
+        print("👉 修复建议: 执行 python3 .entropaxis/tools/scaffold_demo.py --out demo.html [--from-reqs reqs.json | --stages <阶段1,阶段2...>]")
         sys.exit(1)
 
-    out_path = Path(args.out).resolve()
-    stages = [s.strip() for s in args.stages.split(",")] if args.stages else DEFAULT_STAGES
+    stages = []
+    if args.from_reqs:
+        req_file = Path(args.from_reqs)
+        if not req_file.exists():
+            print(f"❌ 需求清单文件不存在: {req_file}")
+            sys.exit(1)
+        try:
+            req_data = json.loads(req_file.read_text(encoding="utf-8"))
+            if isinstance(req_data, list):
+                for item in req_data:
+                    s_name = item.get("场景概述") or item.get("需求名称") or item.get("title") or item.get("name")
+                    if s_name:
+                        clean_name = re.sub(r"^【[^】]+】\s*", "", str(s_name)).strip()
+                        if clean_name not in stages and len(stages) < 6:
+                            stages.append(clean_name)
+        except Exception as e:
+            print(f"❌ 解析需求清单 JSON 失败: {e}")
+            sys.exit(1)
 
+    if not stages:
+        stages = [s.strip() for s in args.stages.split(",")] if args.stages else DEFAULT_STAGES
+
+    out_path = Path(args.out).resolve()
     html_content = generate_demo_html(args.title, stages)
 
     # 原子写入临时目录后替换

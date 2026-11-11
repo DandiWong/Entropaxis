@@ -88,6 +88,21 @@ class TestScaffoldDemo(unittest.TestCase):
             self.assertEqual(res_lint.returncode, 0, res_lint.stderr)
             self.assertIn("Demo 规范体检全绿通过", res_lint.stdout)
 
-
+            # 3. From Reqs JSON
+            reqs_file = Path(tmpdir) / "reqs.json"
+            reqs_file.write_text('[{"场景概述": "【一期】样本导入"}, {"场景概述": "【一期】智能计算"}]', encoding="utf-8")
+            out_reqs_demo = Path(tmpdir) / "reqs_demo.html"
+            cmd_reqs = [
+                sys.executable,
+                str(Path(__file__).resolve().parent.parent / "tools" / "scaffold_demo.py"),
+                "--from-reqs", str(reqs_file),
+                "--out", str(out_reqs_demo)
+            ]
+            res_reqs = subprocess.run(cmd_reqs, capture_output=True, text=True)
+            self.assertEqual(res_reqs.returncode, 0, res_reqs.stderr)
+            self.assertTrue(out_reqs_demo.exists())
+            content = out_reqs_demo.read_text(encoding="utf-8")
+            self.assertIn("样本导入", content)
+            self.assertIn("智能计算", content)
 if __name__ == "__main__":
     unittest.main()
