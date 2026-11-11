@@ -5,6 +5,10 @@ All notable changes to the `tool-crafter` skill will be documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.3] - 2026-11-11
+### Changed
+- 精简优化演进交付输出格式：会话内回复严格按「精简四段式」（①操作目标/对象、②改动 Diff (Before/After)、③改动效果 (Before/After)、④交付验证）结构化呈现，禁止大段过程流水账推演。
+
 ## [2.1.2] - 2026-10-22
 ### Changed
 - Tool 契约改为「按读者定输出」：有程序读者才加 `--json`；模板默认不再带 `--json`。

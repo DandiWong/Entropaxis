@@ -1,9 +1,9 @@
 ---
 name: system-evolve
-description: "v2.1.2. 控制面演进入口：对规则、工具、Skill 做设计级增删改或盘点时，读现场、问答补齐，判定落成 Rule/Tool/Skill 或组合，确认后实现、测试、体检、交付。触发词：新增/修改规则、删掉工具、该做成什么、系统演进、工具化、做成 skill、toolify。错字链接类修正不触发。"
+description: "v2.1.3. 控制面演进入口：对规则、工具、Skill 做设计级增删改或盘点时，读现场、问答补齐，判定落成 Rule/Tool/Skill 或组合，确认后实现、测试、体检、交付。触发词：新增/修改规则、删掉工具、该做成什么、系统演进、工具化、做成 skill、toolify。错字链接类修正不触发。"
 metadata:
   scope: control-plane
-  version: "2.1.2"
+  version: "2.1.3"
 ---
 
 # System Evolve — 判形态 → 落地 → 体检
@@ -139,4 +139,10 @@ python3 -m unittest discover -s .entropaxis/tests -t .entropaxis
 python3 .entropaxis/tools/lint_workspace.py
 ```
 
-回复写明检查对象、证据、结论（通过/阻断/未验证）、未覆盖范围；精确 `git add` 本次文件后提交，不推送。
+会话内回复严格遵循《治理指令》「精简四段式」呈现核心事实，禁止大段过程推演：
+1. **操作目标/对象**：改动主体、路径与演进定位（Rule / Tool / Skill）；
+2. **改动 Diff (Before / After)**：核心代码、规则或配置的关键变动对照；
+3. **改动效果 (Before / After)**：演进前后可观测行为、缺陷阻断或能力收益对比；
+4. **交付验证**：按《软件工程》标准输出检查对象、证据、结论（通过/阻断/未验证）与未覆盖范围。
+
+精确 `git add` 本次文件后提交，不推送。
