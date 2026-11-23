@@ -120,6 +120,21 @@ class ResumeContextTests(unittest.TestCase):
         self.assertEqual(bad.returncode, 1)
         self.assertIn("👉", bad.stderr)
 
+    def test_cli_trace_flag_isolates_dispatch_source(self) -> None:
+        """--trace 只改 dispatch 来源，缺省仍是真实轨迹；CLI 与进程内调用可共用同一份轨迹。"""
+        _jsonl(self.trace, [
+            {"ts": "2026-10-06T00:00:00", "event": "start", "dispatch_id": "x",
+             "pid": os.getpid(), "role": "Reviewer", "cwd": str(self.ws / "proj")},
+        ])
+        proc = subprocess.run(
+            [sys.executable, str(TOOL), "--root", str(self.ws), "--trace", str(self.trace), "--json"],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual([d["state"] for d in payload["signals"]["dispatch"]], ["running"])
+        self.assertEqual(payload["verdict"],
+                         self.run_rc()["verdict"])
+
 
 if __name__ == "__main__":
     unittest.main()

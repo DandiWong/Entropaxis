@@ -75,13 +75,18 @@ class ToolJsonFlagTests(unittest.TestCase):
         ws = self._workspace()
         (ws / "项目" / "docs" / "Tasks.md").write_text(
             "## Active\n- 写 Spec\n", encoding="utf-8")
-        text = _run([str(RESUME), "--root", str(ws)])
+        # CLI 与进程内对照调用共用同一份隔离轨迹：真实轨迹里的调度落在开发者本机项目，
+        # 会让 CLI 判 multiple、对照调用判 unique，测试随开发者数据漂移。
+        trace = self.root / "empty-trace.jsonl"
+        trace.write_text("", encoding="utf-8")
+        text = _run([str(RESUME), "--root", str(ws), "--trace", str(trace)])
         self.assertEqual(text.returncode, 0, text.stderr)
-        as_json = _run([str(RESUME), "--root", str(ws), "--json"])
+        as_json = _run([str(RESUME), "--root", str(ws), "--trace", str(trace), "--json"])
         self.assertEqual(as_json.returncode, 0, as_json.stderr)
         payload = json.loads(as_json.stdout)
         self.assertEqual(payload["verdict"], RC.resume_context(
-            ws.resolve(), workspace=ws.resolve())["verdict"])
+            ws.resolve(), workspace=ws.resolve(), trace=trace)["verdict"])
+        self.assertEqual(payload["verdict"], "unique")
         self.assertEqual(payload["signals"]["tasks"][0]["active"], ["写 Spec"])
         # render() 是人读层：JSON 是同一 dict，键集合一致
         self.assertEqual(set(payload), {"verdict", "projects", "signals"})

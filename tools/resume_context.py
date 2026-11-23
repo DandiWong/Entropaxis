@@ -317,6 +317,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="续接线索收集：列出工作区内可接续的断点线索（只读）")
     parser.add_argument("--root", default=str(default_root(Path.cwd())),
                         help="扫描根目录，默认当前所在项目；在工作区根调用时为整个工作区")
+    parser.add_argument("--trace", default=str(TRACE_LOG),
+                        help="调度轨迹文件路径，默认 data/logs/dispatch-trace.jsonl")
     parser.add_argument("--days", type=int, default=7, help="只看最近 N 天的线索，默认 7")
     parser.add_argument("--limit", type=int, default=3, help="每类线索最多条数，默认 3")
     parser.add_argument("--exclude-session",
@@ -332,7 +334,7 @@ def main() -> int:
     if args.days < 1 or args.limit < 1:
         print("❌ --days 与 --limit 必须为正整数\n👉 修复建议: 例如 --days 7 --limit 3。", file=sys.stderr)
         return 1
-    res = resume_context(root, args.days, args.limit, args.exclude_session)
+    res = resume_context(root, args.days, args.limit, args.exclude_session, Path(args.trace).expanduser())
     if args.json:
         print(json.dumps(res, ensure_ascii=False, indent=2, default=str))
     else:
