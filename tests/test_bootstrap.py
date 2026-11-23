@@ -28,7 +28,7 @@ class BootstrapSyncTests(TestCase):
     def test_sync_is_idempotent(self) -> None:
         self.assertTrue(sync_entrypoints(verbose=False))
         self.assertTrue(sync_entrypoints(verbose=False))
-        for filename in ("AGENTS.md", "CLAUDE.md"):
+        for filename in ("AGENTS.md",):
             source = SYSTEM_ROOT / "entrypoints" / filename
             target = SYSTEM_ROOT.parent / filename
             self.assertEqual(target.read_text(encoding="utf-8"), source.read_text(encoding="utf-8"))

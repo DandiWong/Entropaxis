@@ -78,7 +78,6 @@ class InitProjectTests(TestCase):
             self.assertFalse((target / "_知识库" / "项目资料").exists())
             # 2. 契约文件与暂存投递箱仍预建
             self.assertTrue((target / "AGENTS.md").is_file())
-            self.assertTrue((target / "CLAUDE.md").is_file())
             self.assertTrue((target / "README.md").is_file())
             self.assertTrue((target / "01_项目管理" / "DECISIONS.md").is_file())
             self.assertFalse((target / "DECISIONS.md").exists())
@@ -104,10 +103,7 @@ class InitProjectTests(TestCase):
             agent_rules = (target / "AGENTS.md").read_text(encoding="utf-8")
             self.assertIn("本文件只记录项目特殊规则", agent_rules)
             self.assertIn("工作区根 `AGENTS.md`", agent_rules)
-            self.assertEqual(
-                (target / "CLAUDE.md").read_text(encoding="utf-8"),
-                "# 示例项目 · Claude Code 入口\n\n@AGENTS.md\n",
-            )
+            self.assertFalse((target / "CLAUDE.md").exists())
 
     @staticmethod
     def _write_registry(workspace: Path) -> Path:

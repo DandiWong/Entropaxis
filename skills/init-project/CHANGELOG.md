@@ -1,5 +1,9 @@
 # Changelog - init-project Skill
 
+## [1.4.2] - 2026-11-23
+### Removed
+- 项目与应用初始化不再生成 `CLAUDE.md`；`--entry-only` 只补 `AGENTS.md`。
+
 ## [1.4.1] - 2026-10-16
 ### Changed
 - 压缩 description 至 ≤250 字符，只保留能力一句与触发词，降低常驻元数据开销。

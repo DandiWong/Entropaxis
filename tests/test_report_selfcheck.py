@@ -18,7 +18,7 @@ SYSTEM_ROOT = Path(__file__).resolve().parent.parent
 
 GREEN_TESTS = {"tests": 393, "seconds": 35.8, "ok": True, "failures": 0, "errors": 0, "exit_code": 0}
 GREEN_LINT = {"total_checks": 24, "blocking_count": 0, "advisory_count": 1, "passed": True,
-              "fixed_claude_md": [], "checks": [
+              "checks": [
                   {"title": "17. 规则文件行数预算检查", "blocking": False, "issues": ["[规则超预算] 某文件超线"]}]}
 GREEN_DIST = {"status": "pass", "blocking": [], "advisory": ["[新环境体检建议] 4 类建议项"]}
 LINT_TREE = ast.parse((SYSTEM_ROOT / "tools/lint_workspace.py").read_text(encoding="utf-8"))
@@ -230,7 +230,7 @@ class ExecutionTests(unittest.TestCase):
         payload = json.dumps({
             "passed": False, "total_checks": 30, "blocking_count": 1, "advisory_count": 1,
             "checks": [{"title": "7. 路由完整性与胶囊容器检查", "blocking": True, "issues": ["回链无效"]}],
-            "passed_checks": [], "fixed_claude_md": [],
+            "passed_checks": [],
         }, ensure_ascii=False)
         parsed = rs._json_result(subprocess.CompletedProcess([], 1, payload, ""))
         self.assertNotIn("error", parsed)
@@ -240,14 +240,14 @@ class ExecutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             with mock.patch.object(rs, "_run", return_value=subprocess.CompletedProcess([], 0, "{}", "")) as run:
-                rs.run_lint(root, fix_claude_md=False)
+                rs.run_lint(root)
                 rs.run_distribution(root)
             for call in run.call_args_list:
                 self.assertTrue(Path(call.args[0][1]).is_relative_to(root))
 
-    def test_readonly_option_omits_rewrite(self):
+    def test_lint_never_passes_rewrite_flags(self):
         with mock.patch.object(rs, "_run", return_value=subprocess.CompletedProcess([], 0, "{}", "")) as run:
-            rs.run_lint(SYSTEM_ROOT.parent, fix_claude_md=False)
+            rs.run_lint(SYSTEM_ROOT.parent)
         self.assertNotIn("--fix-claude-md", run.call_args.args[0])
 
 

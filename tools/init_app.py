@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """安全初始化软件工程应用代码仓库（专用于 03_工程研发/<app>/ 或独立代码仓库）。
 
-已有代码的仓库用 --entry-only 只补 AGENTS.md / CLAUDE.md，已存在的文件跳过不动。
+已有代码的仓库用 --entry-only 只补 AGENTS.md，已存在的文件跳过不动。
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ class AppInitError(Exception):
 
 
 APP_AGENTS_TEMPLATE = "AppAGENTS.template.md"
-CLAUDE_TEMPLATE = "CLAUDE.template.md"
 DOCS_INDEX_TEMPLATE = "DocsIndex.template.md"
 PRODUCT_TEMPLATE = "Product.template.md"
 TASKS_TEMPLATE = "Tasks.template.md"
@@ -196,7 +195,7 @@ def init_app(
         notes.append("目标不在工作区内，AGENTS.md 的根入口路径留待补充")
 
     if entry_only:
-        for template, filename in ((APP_AGENTS_TEMPLATE, "AGENTS.md"), (CLAUDE_TEMPLATE, "CLAUDE.md")):
+        for template, filename in ((APP_AGENTS_TEMPLATE, "AGENTS.md"),):
             target = app_path / filename
             if target.exists():
                 notes.append(f"{filename} 已存在，跳过不动")
@@ -218,9 +217,6 @@ def init_app(
         (staging / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
         (staging / "AGENTS.md").write_text(
             _render(templates / APP_AGENTS_TEMPLATE, values), encoding="utf-8"
-        )
-        (staging / "CLAUDE.md").write_text(
-            _render(templates / CLAUDE_TEMPLATE, values), encoding="utf-8"
         )
         (staging / "docs" / "README.md").write_text(
             _render(templates / DOCS_INDEX_TEMPLATE, values), encoding="utf-8"
@@ -270,7 +266,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--purpose", default="待补充", help="产品定位与核心价值")
     parser.add_argument("--users", default="企业内部研发与业务人员", help="用户与使用场景")
     parser.add_argument("--start", help="开始日期 YYYYMMDD")
-    parser.add_argument("--entry-only", action="store_true", help="已有代码仓库：只补 AGENTS.md / CLAUDE.md，已存在的跳过")
+    parser.add_argument("--entry-only", action="store_true", help="已有代码仓库：只补 AGENTS.md，已存在的跳过")
     parser.add_argument("--no-git", action="store_true", help="新建时不执行 git init")
     parser.add_argument("--parent", type=Path, help="上级业务项目目录：在其 README 时间线登记本仓库")
     return parser

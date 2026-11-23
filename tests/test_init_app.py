@@ -31,10 +31,8 @@ class InitAppTests(TestCase):
 
             # 根目录文件验证
             agents_md = app_path / "AGENTS.md"
-            claude_md = app_path / "CLAUDE.md"
             product_md = app_path / "PRODUCT.md"
             self.assertTrue(agents_md.exists())
-            self.assertTrue(claude_md.exists())
             self.assertTrue(product_md.exists())
 
             agents_text = agents_md.read_text(encoding="utf-8")
@@ -42,9 +40,7 @@ class InitAppTests(TestCase):
             self.assertIn("## 按需入口", agents_text)
             self.assertIn("## 项目硬约束", agents_text)
             self.assertIn("## 本项目特有增补", agents_text)
-
-            claude_text = claude_md.read_text(encoding="utf-8")
-            self.assertEqual(claude_text.strip(), "# MyAwesomeService · Claude Code 入口\n\n@AGENTS.md")
+            self.assertFalse((app_path / "CLAUDE.md").exists())
 
             # docs 目录工作流文件验证
             docs_dir = app_path / "docs"
@@ -78,18 +74,15 @@ class InitAppEntryAndDetectionTests(TestCase):
             repo = Path(temporary) / "LegacyRepo"
             (repo / "tests").mkdir(parents=True)
             (repo / "tests" / "test_core.py").write_text("", encoding="utf-8")
-            (repo / "CLAUDE.md").write_text("原有内容\n", encoding="utf-8")
+            (repo / "AGENTS.md").write_text("原有内容\n", encoding="utf-8")
             notes: list[str] = []
             init_app("LegacyRepo", target_dir=Path(temporary), templates=TEMPLATES, entry_only=True, notes=notes)
 
-            self.assertEqual((repo / "CLAUDE.md").read_text(encoding="utf-8"), "原有内容\n")
-            agents = (repo / "AGENTS.md").read_text(encoding="utf-8")
-            self.assertIn("`python3 -m pytest <相关测试文件>`（探测候选，待确认）", agents)
-            self.assertIn("`python3 -m pytest`（探测候选，待确认）", agents)
-            self.assertNotIn("{{", agents)
+            self.assertEqual((repo / "AGENTS.md").read_text(encoding="utf-8"), "原有内容\n")
+            self.assertFalse((repo / "CLAUDE.md").exists())  # 不再生成薄壳入口
             self.assertFalse((repo / "docs").exists())  # 只补入口，不铺骨架
-            self.assertIn("CLAUDE.md 已存在，跳过不动", notes)
-            self.assertTrue(any(n.startswith("AGENTS.md 第 ") for n in notes))
+            self.assertIn("AGENTS.md 已存在，跳过不动", notes)
+            self.assertTrue(any("目标不在工作区内" in n for n in notes))
 
     def test_entry_only_requires_existing_directory(self) -> None:
         with TemporaryDirectory() as temporary:

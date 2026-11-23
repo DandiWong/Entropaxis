@@ -51,13 +51,13 @@
    - 宿主工具的会话/聊天目录（形如 `chats/<日期>/<会话名>`、会话 ID 目录）；
    - 临时目录（`/tmp`、`%TEMP%` 等）；
    - 系统/配置目录（`.config`、`Library`、`AppData` 等）。
-   安装完成后验证：`.entropaxis/` 与同步出的根 `AGENTS.md`/`CLAUDE.md` 必须落在用户能看到、能打开文件的工作区根目录，用 `ls` 回读确认；判定不了就向用户要路径，不许猜。
+   安装完成后验证：`.entropaxis/` 与同步出的根 `AGENTS.md` 必须落在用户能看到、能打开文件的工作区根目录，用 `ls` 回读确认；判定不了就向用户要路径，不许猜。
 1. **仓库挂载与初始化**  
    将本仓库作为 `.entropaxis/` 目录置于工作区根目录下，并首先执行入口配置同步工具：
    ```bash
    python3 .entropaxis/tools/bootstrap.py
    ```
-   该工具会自动将 `.entropaxis/entrypoints/` 下的 `AGENTS.md` 与 `CLAUDE.md` 物理同步至工作区根目录，建立全局统一的规则控制面（纯文件复制，杜绝云同步网盘跨平台软链冲突）；并把 `.entropaxis/skills/` 以软链接挂进根目录 `.claude/skills/` 与 `.agents/skills/`，供 Agent 按 Skill 描述自动发现。
+   该工具会自动将 `.entropaxis/entrypoints/` 下的 `AGENTS.md` 物理同步至工作区根目录，建立全局统一的规则控制面（纯文件复制，杜绝云同步网盘跨平台软链冲突）；并把 `.entropaxis/skills/` 以软链接挂进根目录 `.claude/skills/` 与 `.agents/skills/`，供 Agent 按 Skill 描述自动发现。
 
    Bootstrap 在首次渲染 `roles.yaml` 后显示角色外置 profile 的**本地候选**：只检查可执行文件是否存在，不启动 CLI，不加载扩展，也不据此判断无交互能力或模型权限。调度总从 `preferences` 第 1 个起依次降级，全部失败即中止并反馈；Bootstrap 与检测命令都不写 `roles.yaml`，也不隐式授权模型调用。旧实例（含 `profile` 字段或旧式 fallback 链）须显式运行 `--migrate-preferences` 迁移。
 

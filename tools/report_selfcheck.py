@@ -16,7 +16,7 @@
      「不用分数代替证据」要消除的形态。
   2. **只报不判**：本机体检建议原样进入可优化项。新克隆第 13、15c、22 项的合法初始态
      留痕完整写入验证结论，不升格为待整改项——那是「还没开始用」，不是缺陷。
-  3. **报告不落盘**：默认允许体检修正 CLAUDE.md；只读检查使用 --no-fix-claude-md。
+  3. **报告不落盘**：本工具只读执行三门禁，不修改工作区任何文件。
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ def split_distribution_notes(notes: list[str]) -> tuple[list[str], list[str]]:
 AXIOM_COVERAGE = {
     "1. 一个事实，一个归属": ["10", "18"],
     "2. 分层覆盖与就近优先": ["33"],
-    "3. 薄入口，按需读取与 Token 经济性": ["8", "12", "17", "24"],
+    "3. 薄入口，按需读取与 Token 经济性": ["8", "17", "24"],
     "4. 事实与物理实现优先": ["19b", "21"],
     "5. 最小作用量与克制": ["34", "35", "38"],
     "6. 尊重边界与物理动作闭环": ["31"],
@@ -146,10 +146,8 @@ def _gate_failure_line(name: str, result: dict) -> str | None:
     return f"[{name}] {detail or '检查未通过，请查看该项证据与明细。'}"
 
 
-def run_lint(root: Path, fix_claude_md: bool = True) -> dict:
+def run_lint(root: Path) -> dict:
     argv = [sys.executable, str(root / paths.SYSTEM_DIRNAME / "tools/lint_workspace.py"), "--json"]
-    if fix_claude_md:
-        argv.append("--fix-claude-md")
     return _json_result(_run(argv, root, LINT_TIMEOUT))
 
 
@@ -173,9 +171,9 @@ def _dist_counts(dist: dict) -> tuple[int | None, int | None, list[str]]:
     return blocking, advisory, [str(n) for n in (notes if isinstance(notes, list) else [])]
 
 
-def assemble(root: Path, fix_claude_md: bool = True) -> dict:
+def assemble(root: Path) -> dict:
     tests = run_unittest(root)
-    lint = run_lint(root, fix_claude_md=fix_claude_md)
+    lint = run_lint(root)
     dist = run_distribution(root)
 
     executed = {title.split(".", 1)[0] for title in lint.get("passed_checks", [])}
@@ -220,12 +218,6 @@ def assemble(root: Path, fix_claude_md: bool = True) -> dict:
                 + "、".join(a.split('.', 1)[0] for a in uncovered) + " 条无机械检查器"
             ),
             "结论": "阻断" if coverage_gaps else ("未验证" if uncovered else "通过"),
-        },
-        {
-            "对象": "CLAUDE.md 薄壳纯净度自动改写",
-            "证据": (f"--fix-claude-md 改写 {len(lint.get('fixed_claude_md', []))} 个文件"
-                     if fix_claude_md else "本轮未执行 --fix-claude-md"),
-            "结论": "通过" if (fix_claude_md and lint_ok) else "未验证",
         },
     ]
 
@@ -309,10 +301,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="系统自检三遍检查执行与报告装配（《治理指令》系统自检）")
     parser.add_argument("--root", type=Path, default=paths.WORKSPACE_ROOT, help="工作区根")
-    parser.add_argument("--no-fix-claude-md", action="store_true", help="跳过 CLAUDE.md 自动改写")
     args = parser.parse_args()
 
-    report = assemble(args.root.expanduser().resolve(), fix_claude_md=not args.no_fix_claude_md)
+    report = assemble(args.root.expanduser().resolve())
     print(render_markdown(report))
     return 0 if report["passed"] else 1
 

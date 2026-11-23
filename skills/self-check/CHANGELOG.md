@@ -1,5 +1,9 @@
 # Changelog - self-check Skill
 
+## [1.2.3] - 2026-11-23
+### Removed
+- CLAUDE.md 薄壳自动改写（体检第 12 项、`--fix-claude-md`、`--no-fix-claude-md`）随全链路移除 CLAUDE.md 一并删除；自检改为纯只读三遍门禁。
+
 ## [1.2.2] - 2026-10-22
 ### Changed
 - 第 36 项扩为「跨平台回退与命令缺失检查」，报告边界同步。

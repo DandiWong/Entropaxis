@@ -24,7 +24,6 @@ class ProjectInitError(Exception):
 
 TEMPLATE_FILES = {
     "AGENTS.template.md": "AGENTS.md",
-    "CLAUDE.template.md": "CLAUDE.md",
     "README.template.md": "README.md",
     "DECISIONS.template.md": "01_项目管理/DECISIONS.md",
     "知识库索引.template.md": "_知识库/index.md",

@@ -1,9 +1,9 @@
 ---
 name: init-project
-description: "v1.4.1. 访谈后安全初始化业务/综合项目（4 域 + 2 契约 + RawInput），或在 03_工程研发/<app>/ 初始化软件应用脚手架；已有仓库可只补 AGENTS.md/CLAUDE.md。用户要新建、初始化、init 项目或应用时使用；不覆盖已有目录。"
+description: "v1.4.2. 访谈后安全初始化业务/综合项目（4 域 + 2 契约 + RawInput），或在 03_工程研发/<app>/ 初始化软件应用脚手架；已有仓库可只补 AGENTS.md。用户要新建、初始化、init 项目或应用时使用；不覆盖已有目录。"
 metadata:
   scope: control-plane
-  version: "1.4.1"
+  version: "1.4.2"
 ---
 
 # 初始化项目
@@ -45,7 +45,7 @@ python3 tools/init_project.py "<项目名>" \
   --dashboard-project-id "<主看板返回或确认的项目ID>"
 ```
 
-该命令创建标准的通用项目分层结构（`RawInput/`、四个顶层域 `01_项目管理/`、`02_产品设计/`、`03_工程研发/`、`04_运营增长/`，以及 `README.md`、`01_项目管理/DECISIONS.md`、`AGENTS.md`、`CLAUDE.md`、`_知识库/index.md`；二级目录有材料时再建，完整导航口径见 README 目录树），并把该项目**自动追加**进 `.entropaxis/data/templates/registry.yaml` 的 `projects`（append-only，重复立项不产生第二项）——**不要再手工补写**；别名、代码真源等由人工在该项下补充。注册表不存在时会保留目录并提示先运行 `bootstrap.py` 再补登记。
+该命令创建标准的通用项目分层结构（`RawInput/`、四个顶层域 `01_项目管理/`、`02_产品设计/`、`03_工程研发/`、`04_运营增长/`，以及 `README.md`、`01_项目管理/DECISIONS.md`、`AGENTS.md`、`_知识库/index.md`；二级目录有材料时再建，完整导航口径见 README 目录树），并把该项目**自动追加**进 `.entropaxis/data/templates/registry.yaml` 的 `projects`（append-only，重复立项不产生第二项）——**不要再手工补写**；别名、代码真源等由人工在该项下补充。注册表不存在时会保留目录并提示先运行 `bootstrap.py` 再补登记。
 
 当项目需要在 `03_工程研发/<app>/` 下初始化独立软件工程代码仓库时，调用软件工程脚手架：
 
@@ -53,6 +53,6 @@ python3 tools/init_project.py "<项目名>" \
 python3 tools/init_app.py "<app-name>" --target-dir "<项目路径>/03_工程研发" --purpose "<定位与价值>" --parent "<项目路径>"
 ```
 
-该命令独立创建代码工程骨架（`PRODUCT.md`、`.gitignore`、`src/`、`test/`、`docs/Tasks.md`、`docs/Changelog.md`、`docs/Benchmark.md`、`docs/ReleaseNote.md`；工程事项按 `docs/YYYYMMDD_主题/` 容器落盘），执行 `git init` 但不提交（`--no-git` 跳过），`--parent` 在上级项目 README 时间线登记一条。已有代码的仓库加 `--entry-only`：只补缺失的 `AGENTS.md` / `CLAUDE.md`，已存在的跳过不动。分层测试命令按仓库已有文件给出「探测候选」，工具结束时列出待确认的行号，逐条向用户确认后改成实际命令。
+该命令独立创建代码工程骨架（`PRODUCT.md`、`.gitignore`、`src/`、`test/`、`docs/Tasks.md`、`docs/Changelog.md`、`docs/Benchmark.md`、`docs/ReleaseNote.md`；工程事项按 `docs/YYYYMMDD_主题/` 容器落盘），执行 `git init` 但不提交（`--no-git` 跳过），`--parent` 在上级项目 README 时间线登记一条。已有代码的仓库加 `--entry-only`：只补缺失的 `AGENTS.md`，已存在的跳过不动。分层测试命令按仓库已有文件给出「探测候选」，工具结束时列出待确认的行号，逐条向用户确认后改成实际命令。
 
 完成后核对 `docs/.board.json` 中记录的项目 ID 与主看板 Provider CLI 的 `project get <id>` 返回一致，再报告绝对路径、创建内容和关联结果。目标已存在时停止，不覆盖、不合并、不自动换名（唯一例外是用户要求给已有代码仓库补入口时的 `--entry-only`，它只补缺失文件）。

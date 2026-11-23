@@ -59,7 +59,6 @@ SYSTEM_REQUIRED_FILES = (
     "AGENTS.md",
     "README.md",
     "entrypoints/AGENTS.md",
-    "entrypoints/CLAUDE.md",
     "tools/bootstrap.py",
     "tools/init_project.py",
     "tools/init_app.py",
@@ -535,67 +534,6 @@ def _excluded_by_name(path: Path, root: Path, patterns: tuple[str, ...]) -> bool
     return any(ex in part for part in parts for ex in patterns)
 
 
-def check_claude_md_thin_shell(root: Path) -> list[str]:
-    """所有 CLAUDE.md 必须是纯薄壳：一行标题 + 唯一一行 @AGENTS.md，无其他 import 或正文。
-    例外：若 CLAUDE.md 是指向同目录 AGENTS.md 的符号链接（open-slide 等框架约定），视为等价薄壳；
-    嵌套独立 git 仓库（见 `_is_nested_git_repo_path`）视为上游内容，不纳入检查。"""
-    issues = []
-    for cm in root.glob("**/CLAUDE.md"):
-        if _excluded_by_name(cm, root, ("Archive", "repoes", "node_modules")):
-            continue
-        if _is_nested_git_repo_path(cm, root):
-            continue
-        try:
-            # 框架约定例外：CLAUDE.md → AGENTS.md 符号链接 = 等价薄壳
-            if cm.is_symlink():
-                target = os.readlink(str(cm))
-                if target in ("AGENTS.md", "./AGENTS.md"):
-                    continue  # ponytail: 等价薄壳，不强制改格式
-            text = cm.read_text(encoding="utf-8")
-            lines = [l for l in text.splitlines() if l.strip()]
-            if len(lines) != 2 or not lines[0].startswith("#") or lines[1].strip() != "@AGENTS.md":
-                issues.append(
-                    f"[薄壳违规] {cm.relative_to(root)} 不是纯薄壳（应为：一行标题 + @AGENTS.md，无其他内容）。"
-                )
-        except Exception:
-            pass
-    return issues
-
-
-def fix_claude_md_thin_shell(root: Path) -> list[str]:
-    """将 check_claude_md_thin_shell 判定为违规的项目 CLAUDE.md 原地改写为标准薄壳
-    （一行标题 + @AGENTS.md）。排除名单、符号链接例外与嵌套独立 git 仓库排除均与检测
-    函数保持一致（单一真源见 `_is_nested_git_repo_path`），只改写真正判定为违规的文件；
-    已合规文件不动。"""
-    fixed = []
-    for cm in root.glob("**/CLAUDE.md"):
-        if _excluded_by_name(cm, root, ("Archive", "repoes", "node_modules")):
-            continue
-        if _is_nested_git_repo_path(cm, root):
-            continue
-        try:
-            if cm.is_symlink():
-                target = os.readlink(str(cm))
-                if target in ("AGENTS.md", "./AGENTS.md"):
-                    continue
-            text = cm.read_text(encoding="utf-8")
-            lines = [l for l in text.splitlines() if l.strip()]
-            if len(lines) == 2 and lines[0].startswith("#") and lines[1].strip() == "@AGENTS.md":
-                continue
-            title = (
-                lines[0].strip()
-                if lines and lines[0].strip().startswith("#")
-                else f"# {cm.parent.name} · Claude Code 入口"
-            )
-            cm.write_text(f"{title}\n@AGENTS.md\n", encoding="utf-8")
-            # 全仓统一用 posix 分隔符：relative_to 在 Windows 上默认给反斜杠，
-            # 与规则文本、测试断言和其余体检输出的路径写法不一致。
-            fixed.append(cm.relative_to(root).as_posix())
-        except Exception:
-            pass
-    return fixed
-
-
 def _tracked_files(system: Path) -> set[Path] | None:
     """返回版本库跟踪文件集合；非 git 环境返回 None（退化为全文件扫描）。
     业务私有 Skill 等由 .gitignore 声明豁免，不参与零绑定检查。
@@ -711,7 +649,7 @@ def check_system_entry_sync(root: Path) -> list[str]:
     """检查根入口是否与 .entropaxis/entrypoints 的唯一真源一致。"""
     system = root / paths.SYSTEM_DIRNAME
     issues = []
-    for filename in ("AGENTS.md", "CLAUDE.md"):
+    for filename in ("AGENTS.md",):
         source = system / "entrypoints" / filename
         target = root / filename
         if not source.is_file() or not target.is_file():
@@ -842,7 +780,6 @@ def check_system_templates(root: Path) -> list[str]:
     issues = []
     required = (
         "AGENTS.template.md",
-        "CLAUDE.template.md",
         "README.template.md",
         "DECISIONS.template.md",
         "Changelog.template.md",
@@ -1737,18 +1674,6 @@ def main() -> int:
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
     # --json 的程序读者：report_selfcheck.py、check_distribution.py（《工具设计》3.3 按读者定输出）
     as_json = "--json" in sys.argv
-    fixed_claude_md = []
-    if "--fix-claude-md" in sys.argv:
-        fixed_claude_md = [str(p.relative_to(ROOT)) for p in fix_claude_md_thin_shell(ROOT)]
-        if as_json:
-            pass
-        elif fixed_claude_md:
-            print("已自动将以下项目的 CLAUDE.md 改写为标准薄壳（一行标题 + @AGENTS.md）：")
-            for p in fixed_claude_md:
-                print(f"  • {p}")
-        elif verbose:
-            print("✅ 未发现需要改写的 CLAUDE.md。")
-
     checks = [
         ("1. .entropaxis 结构完整性检查", check_system_layout, True),
         ("2. 根入口真源同步检查", check_system_entry_sync, True),
@@ -1760,7 +1685,6 @@ def main() -> int:
         ("8. 常驻层 Token 预算检查", check_resident_budget, False),
         ("9. 契约状态文件历史堆积检查", check_current_state_bloat, False),
         ("10. 规则单一真源去重检查", check_rule_deduplication, False),
-        ("12. CLAUDE.md 薄壳纯净度检查", check_claude_md_thin_shell, False),
         ("13. rules/ 零系统绑定检查", check_rules_zero_system_binding, False),
         ("15c. 项目注册表登记进度检查", check_registry_population, False),
         ("15d. Skill 根系统独立性检查", check_skill_system_independence, True),
@@ -1817,7 +1741,6 @@ def main() -> int:
             "blocking_count": len(blocking_issues),
             "advisory_count": len(all_issues) - len(blocking_issues),
             "passed": not blocking_issues,
-            "fixed_claude_md": fixed_claude_md,
             "checks": [
                 {"title": t, "blocking": b, "issues": i}
                 for t, i, b in failed_checks

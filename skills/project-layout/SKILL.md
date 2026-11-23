@@ -1,9 +1,9 @@
 ---
 name: project-layout
-description: "v1.1.2. 项目目录分层规范与 RawInput 收件箱整理。用户说「整理」「整理 RawInput」「归档收件箱」，或要查 4 域分层、代码工程 docs/ 布局、事务胶囊目录树、README 总纲规范时使用。"
+description: "v1.1.3. 项目目录分层规范与 RawInput 收件箱整理。用户说「整理」「整理 RawInput」「归档收件箱」，或要查 4 域分层、代码工程 docs/ 布局、事务胶囊目录树、README 总纲规范时使用。"
 metadata:
   scope: control-plane
-  version: "1.1.2"
+  version: "1.1.3"
 ---
 
 # 项目结构与整理执行套件 (Project Layout)
@@ -43,7 +43,6 @@ YYYYMMDD_主题/
 │   └── <领域名称>/                    # 按学科/业务域组织
 │
 <项目根目录>/
-├── CLAUDE.md                          # [Claude Code 入口] 导入 @AGENTS.md
 ├── AGENTS.md                          # [Agent 控制面] 本项目路由、硬约束与 RawInput 整理规则
 ├── README.md                          # [总纲] 项目定位、目标、里程碑与目录全景导航（只导航，不存正文）
 ├── RawInput/                          # [暂存投递箱] 随手丢入的原始文件（触发"整理"后自动归位并清空）

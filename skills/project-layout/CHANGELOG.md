@@ -2,6 +2,10 @@
 
 本文件记录 `project-layout` Skill 的所有显著变更，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.3] - 2026-11-23
+### Removed
+- 项目分层清单移除 `CLAUDE.md` 条目（全链路不再维护该薄壳入口）。
+
 ## [1.1.2] - 2026-10-19
 ### Changed
 - 胶囊目录树的审计报告拆为 `03_方案审计报告.md` 与 `05_实施审计报告.md`。

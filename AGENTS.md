@@ -13,7 +13,7 @@
 - `templates/`：`instance/` 渲染到 `data/templates/`，`project/` 为项目脚手架
 - `tools/`：治理、自愈、脚手架与体检脚本
 - `skills/`：自包含 Agent 能力真源（`SKILL.md` + 触发元数据）
-- `entrypoints/`：根入口唯一物理源（`AGENTS.md`、`CLAUDE.md`）
+- `entrypoints/`：根入口唯一物理源（`AGENTS.md`）
 - `data/`：实例数据与凭据（不入库），布局见 `rules/控制面布局.md`
 
 在本目录下运行测试：`python3 -m unittest discover -s tests -t .`（单个模块：`python3 -m unittest tests.test_<名>`）；体检：`python3 tools/lint_workspace.py`。

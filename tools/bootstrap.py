@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 工作区根入口与系统配置初始化工具 (Bootstrap)
-用于一键同步工作区根目录的 AGENTS.md / CLAUDE.md 入口文件，把 .entropaxis/skills 挂进 Agent 的 Skill 发现目录，自动检测宿主机安装的应用程序，
+用于一键同步工作区根目录的 AGENTS.md 入口文件，把 .entropaxis/skills 挂进 Agent 的 Skill 发现目录，自动检测宿主机安装的应用程序，
 生成/维护各类文件格式的默认打开器关联配置 (.entropaxis/data/templates/file-opener.json)，并在不调用模型、不选择 profile 的前提下报告角色本地候选。
 """
 import os
@@ -208,7 +208,7 @@ def sync_entrypoints(verbose: bool = True) -> bool:
         return False
 
     success = True
-    for filename in ["AGENTS.md", "CLAUDE.md"]:
+    for filename in ["AGENTS.md"]:
         src = entrypoints / filename
         dst = ws_root / filename
 

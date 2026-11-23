@@ -27,7 +27,7 @@ class LintJsonContractTests(unittest.TestCase):
 
     def test_exposes_counts_and_verdict(self):
         for key in ("root", "total_checks", "blocking_count", "advisory_count",
-                    "passed", "checks", "passed_checks", "fixed_claude_md"):
+                    "passed", "checks", "passed_checks"):
             self.assertIn(key, self.payload)
         self.assertIsInstance(self.payload["blocking_count"], int)
         self.assertIsInstance(self.payload["advisory_count"], int)
