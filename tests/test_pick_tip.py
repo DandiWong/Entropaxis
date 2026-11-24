@@ -1,8 +1,10 @@
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from tools.pick_tip import pick_tip
+from tools.pick_tip import format_tip, pick_tip
 
 
 class PickTipTests(unittest.TestCase):
@@ -32,6 +34,37 @@ class PickTipTests(unittest.TestCase):
             src = Path(td) / "tips.md"
             src.write_text("# 工作空间 Tips\n> 尚未登记任何条目\n", encoding="utf-8")
             self.assertIsNone(pick_tip(src))
+
+    def test_format_tip_block(self) -> None:
+        raw_full = "- TIP：这是全角冒号提示"
+        formatted_full = format_tip(raw_full)
+        self.assertEqual(formatted_full, "---\n> 💡 **Tip**：这是全角冒号提示")
+
+        raw_half = "- TIP:这是半角冒号提示"
+        formatted_half = format_tip(raw_half)
+        self.assertEqual(formatted_half, "---\n> 💡 **Tip**：这是半角冒号提示")
+
+    def test_cli_outputs_formatted_by_default_and_raw_with_flag(self) -> None:
+        script = Path(__file__).resolve().parent.parent / "tools" / "pick_tip.py"
+        proc_default = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if proc_default.stdout.strip():
+            self.assertTrue(proc_default.stdout.startswith("---\n> 💡 **Tip**："))
+
+        proc_raw = subprocess.run(
+            [sys.executable, str(script), "--raw"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        if proc_raw.stdout.strip():
+            self.assertTrue(
+                proc_raw.stdout.startswith("- TIP：") or proc_raw.stdout.startswith("- TIP:")
+            )
 
 
 if __name__ == "__main__":
